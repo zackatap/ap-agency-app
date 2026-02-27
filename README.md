@@ -1,36 +1,72 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Automated Practice – AP Agency App
 
-## Getting Started
+A GoHighLevel (GHL) embedded app for **Automated Practice**. It provides pipeline conversion metrics at the location level using OAuth.
 
-First, run the development server:
+## Setup
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+### 1. GHL Marketplace App
+
+1. Create an app in [Developer Marketplace](https://marketplace.gohighlevel.com/)
+2. In **Auth** settings, add your app's scopes (include **opportunities.readonly**)
+3. Add redirect URL: `https://ap-agency-app.vercel.app/api/auth/callback/ghl`
+4. Create a Client Key and copy **Client ID** and **Client Secret**
+
+### 2. Neon Database
+
+1. In Vercel: **Project → Storage → Connect Database → Neon**
+2. Create a new database (or connect existing) – `DATABASE_URL` is added automatically
+
+### 3. Environment
+
+Set these in Vercel (Neon adds `DATABASE_URL` when you connect it):
+
+```
+GHL_CLIENT_ID=your-client-id
+GHL_CLIENT_SECRET=your-client-secret
+GHL_REDIRECT_URI=https://ap-agency-app.vercel.app/api/auth/callback/ghl
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### 4. Embed in GHL
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+1. In GoHighLevel, go to **Settings → Custom Menu** (or your location’s menu).
+2. Add a custom menu link that opens at the **location** level.
+3. Use this URL pattern:
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+   ```
+   https://app.automatedpractice.com/v2/location/{{location.id}}/dashboard
+   ```
 
-## Learn More
+   GHL will replace `{{location.id}}` with the current location ID when the link is opened (works on the Location sidebar when inside an account).
 
-To learn more about Next.js, take a look at the following resources:
+## Features
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+### Conversions Dashboard
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+- **Pipeline matching**: Finds pipelines whose name contains `"pain"` (e.g. "Pain Patients", "🩺 Pain Patients", "Pain").
+- **Conversion metric**: `(Success / Showed Up) × 100`
+  - **Showed Up** = opportunities in the "Showed Up" stage
+  - **Success** = opportunities in the "Success" stage
+- **Total counts**: Counts all opportunities in each stage, including those marked **won** (which may be hidden on the board when filtered to "open" only).
 
-## Deploy on Vercel
+## Routes
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+| Path | Description |
+|------|-------------|
+| `/` | Home |
+| `/v2/location/[locationId]/dashboard` | Conversions Dashboard for a location |
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Development
+
+```bash
+npm install
+npm run dev
+```
+
+Then visit:
+
+- http://localhost:3000
+- http://localhost:3000/v2/location/Yl8c8Rmoh5TsTfVN5q5F/dashboard
+
+## API
+
+- **GET /api/conversions/[locationId]** – Returns conversion metrics for the Pain Patients pipeline at the given location.
