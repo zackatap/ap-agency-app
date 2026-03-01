@@ -110,6 +110,8 @@ export default function ConversionsDashboard() {
             </p>
             <a
               href={`/api/auth/ghl/authorize?locationId=${encodeURIComponent(locationId)}`}
+              target="_top"
+              rel="noopener noreferrer"
               className="mt-6 inline-block rounded-xl bg-indigo-600 px-6 py-3 font-medium text-white transition-colors hover:bg-indigo-500"
             >
               Connect with GoHighLevel →
