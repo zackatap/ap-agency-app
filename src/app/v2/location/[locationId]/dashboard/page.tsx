@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
 
 interface ConversionMetrics {
   shown: number;
@@ -18,7 +18,10 @@ interface ConversionData {
 
 export default function ConversionsDashboard() {
   const params = useParams();
+  const searchParams = useSearchParams();
   const locationId = params?.locationId as string | undefined;
+  const connectSource = searchParams?.get("source");
+  const connectCount = searchParams?.get("count");
   const [data, setData] = useState<ConversionData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -73,6 +76,11 @@ export default function ConversionsDashboard() {
               {locationId}
             </code>
           </p>
+          {connectSource && connectCount && (
+            <p className="mt-1 text-sm text-slate-500">
+              Connected: {connectCount} locations from {connectSource}
+            </p>
+          )}
         </header>
 
         {/* Content */}

@@ -73,6 +73,8 @@ export async function getPipelines(
 
 /**
  * Fetch all opportunities for a pipeline, including won.
+ * Uses GET /opportunities/search with query params per GHL official SDK.
+ * Params: location_id, pipeline_id, page, limit (snake_case, no pipelineId/skip in body).
  */
 export async function getOpportunityCountsByStage(
   locationId: string,
@@ -81,46 +83,33 @@ export async function getOpportunityCountsByStage(
 ): Promise<Record<string, number>> {
   const counts: Record<string, number> = {};
   const stageIdToName = buildStageIdToName(pipeline.stages);
-  let skip = 0;
+  let page = 1;
   const limit = 100;
   let hasMore = true;
 
   while (hasMore) {
-    const searchRes = await fetch(`${GHL_BASE}/opportunities/search`, {
-      method: "POST",
+    const searchUrl = new URL(`${GHL_BASE}/opportunities/search`);
+    searchUrl.searchParams.set("location_id", locationId);
+    searchUrl.searchParams.set("pipeline_id", pipeline.id);
+    searchUrl.searchParams.set("limit", String(limit));
+    searchUrl.searchParams.set("page", String(page));
+
+    const searchRes = await fetch(searchUrl.toString(), {
+      method: "GET",
       headers: authHeaders(accessToken),
-      body: JSON.stringify({
-        locationId,
-        pipelineId: pipeline.id,
-        limit,
-        skip,
-      }),
     });
 
     let opportunities: GHLOpportunity[] = [];
     let total = 0;
 
-    if (searchRes.ok) {
-      const data = await searchRes.json();
-      opportunities = data.opportunities ?? data.data ?? [];
-      total = data.total ?? data.totalCount ?? opportunities.length;
-    } else {
-      const listUrl = new URL("/opportunities/", GHL_BASE);
-      listUrl.searchParams.set("locationId", locationId);
-      listUrl.searchParams.set("pipelineId", pipeline.id);
-      listUrl.searchParams.set("limit", String(limit));
-      listUrl.searchParams.set("skip", String(skip));
-      const listRes = await fetch(listUrl.toString(), {
-        headers: authHeaders(accessToken),
-      });
-      if (!listRes.ok) {
-        const err = await searchRes.text();
-        throw new Error(`GHL getOpportunities failed: ${searchRes.status} ${err}`);
-      }
-      const data = await listRes.json();
-      opportunities = data.opportunities ?? data.data ?? [];
-      total = data.total ?? opportunities.length;
+    if (!searchRes.ok) {
+      const err = await searchRes.text();
+      throw new Error(`GHL getOpportunities failed: ${searchRes.status} ${err}`);
     }
+
+    const data = await searchRes.json();
+    opportunities = data.opportunities ?? data.data ?? [];
+    total = data.total ?? data.totalCount ?? opportunities.length;
 
     for (const opp of opportunities) {
       const stageName =
@@ -133,8 +122,8 @@ export async function getOpportunityCountsByStage(
       counts[stageName] = (counts[stageName] ?? 0) + 1;
     }
 
-    skip += opportunities.length;
-    hasMore = opportunities.length === limit && skip < (total || Infinity);
+    page += 1;
+    hasMore = opportunities.length === limit && page * limit < (total || Infinity);
   }
 
   return counts;

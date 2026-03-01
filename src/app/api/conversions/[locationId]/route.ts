@@ -24,7 +24,13 @@ export async function GET(
     if (!stored) {
       return NextResponse.json(
         { error: "Not connected", needsAuth: true },
-        { status: 401 }
+        {
+          status: 401,
+          headers: {
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            Pragma: "no-cache",
+          },
+        }
       );
     }
 
