@@ -4,20 +4,42 @@ import { useEffect, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import {
   DATE_RANGE_LABELS,
+  getTodayLocal,
   type DateRangePreset,
 } from "@/lib/date-ranges";
 
-interface ConversionMetrics {
-  shown: number;
+interface FunnelMetrics {
+  leads: number;
+  requested: number;
+  confirmed: number;
+  totalAppts: number;
+  showed: number;
   success: number;
-  conversionPercent: number | null;
-  stageCounts?: Record<string, number>;
+  total: number;
+  bookingRate: number | null;
+  confirmationRate: number | null;
+  showRate: number | null;
+  showedConversionRate: number | null;
+  totalValue: number;
+  showedValue: number;
+  successValue: number;
+  requestedValue: number;
+  confirmedValue: number;
+}
+
+interface ConversionMetrics extends FunnelMetrics {}
+
+interface PipelineStage {
+  id: string;
+  name: string;
+  position?: number;
 }
 
 interface ConversionData {
-  pipeline: { id: string; name: string } | null;
+  pipeline: { id: string; name: string; stages?: PipelineStage[] } | null;
   pipelines?: { id: string; name: string }[];
   metrics: ConversionMetrics | null;
+  stageCounts?: Record<string, number>;
   dateRange?: { startDate: string; endDate: string };
   message?: string;
 }
@@ -46,6 +68,7 @@ export default function ConversionsDashboard() {
 
     const params = new URLSearchParams();
     params.set("dateRange", "last_30");
+    params.set("clientDate", getTodayLocal());
     const apiUrl = `/api/conversions/${locationId}?${params.toString()}`;
     setLoading(true);
     setError(null);
@@ -85,6 +108,7 @@ export default function ConversionsDashboard() {
 
     const params = new URLSearchParams();
     params.set("dateRange", dateRangePreset);
+    params.set("clientDate", getTodayLocal());
     if (id) params.set("pipelineId", id);
     if (dateRangePreset === "custom" && customDateFrom && customDateTo) {
       params.set("dateFrom", customDateFrom);
@@ -110,6 +134,7 @@ export default function ConversionsDashboard() {
 
     const urlParams = new URLSearchParams();
     urlParams.set("dateRange", preset);
+    urlParams.set("clientDate", getTodayLocal());
     if (selectedPipelineId) urlParams.set("pipelineId", selectedPipelineId);
 
     const apiUrl = `/api/conversions/${locationId}?${urlParams.toString()}`;
@@ -130,6 +155,7 @@ export default function ConversionsDashboard() {
     params.set("dateRange", "custom");
     params.set("dateFrom", customDateFrom);
     params.set("dateTo", customDateTo);
+    params.set("clientDate", getTodayLocal());
     if (selectedPipelineId) params.set("pipelineId", selectedPipelineId);
 
     const apiUrl = `/api/conversions/${locationId}?${params.toString()}`;
@@ -296,57 +322,127 @@ export default function ConversionsDashboard() {
           <div className="space-y-8">
             {data.pipeline && data.metrics ? (
               <>
-                {/* Pipeline card */}
-                <div className="rounded-2xl border border-white/10 bg-white/5 p-6 backdrop-blur-sm">
-                  <h2 className="text-sm font-medium uppercase tracking-wider text-slate-400">
-                    Pipeline
-                  </h2>
-                  <p className="mt-1 text-2xl font-semibold text-white">
-                    {data.pipeline.name}
-                  </p>
-                  {data.dateRange && (
-                    <p className="mt-2 text-sm text-slate-500">
-                      Showing data from {formatDate(data.dateRange.startDate)} to{" "}
-                      {formatDate(data.dateRange.endDate)}
+                {/* Compact header */}
+                <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-white/10 bg-white/5 px-5 py-4">
+                  <div>
+                    <p className="text-sm text-slate-400">{data.pipeline.name}</p>
+                    {data.dateRange && (
+                      <p className="text-xs text-slate-500">
+                        {formatDate(data.dateRange.startDate)} – {formatDate(data.dateRange.endDate)}
+                      </p>
+                    )}
+                  </div>
+                  {data.metrics.totalValue > 0 && (
+                    <p className="text-xl font-semibold tabular-nums text-indigo-300">
+                      ${formatCurrency(data.metrics.totalValue)} pipeline value
                     </p>
                   )}
                 </div>
 
-                {/* Main conversion metric */}
-                <div className="grid gap-6 md:grid-cols-3">
-                  <MetricCard
-                    label="Showed Up"
-                    value={data.metrics.shown}
-                    subtitle="opportunities"
-                  />
-                  <MetricCard
-                    label="Success"
-                    value={data.metrics.success}
-                    subtitle="converted"
-                  />
-                  <MetricCard
-                    label="Conversion Rate"
-                    value={
-                      data.metrics.conversionPercent != null
-                        ? `${data.metrics.conversionPercent}%`
-                        : "—"
+                {/* Funnel metrics - compact grid */}
+                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                  <FunnelMetricCard
+                    label="Booking rate"
+                    rate={data.metrics.bookingRate}
+                    subtitle={
+                      <>
+                        {data.metrics.totalAppts} of{" "}
+                        {data.metrics.leads + data.metrics.totalAppts} booked{" "}
+                        <span className="text-slate-500">
+                          ({data.metrics.requested} requested + {data.metrics.confirmed} confirmed)
+                        </span>
+                      </>
                     }
-                    subtitle="Showed Up → Success"
+                    value={data.metrics.requestedValue + data.metrics.confirmedValue}
+                  />
+                  <FunnelMetricCard
+                    label="Confirmation rate"
+                    rate={data.metrics.confirmationRate}
+                    subtitle={
+                      <>
+                        {data.metrics.confirmed} confirmed of {data.metrics.totalAppts} appts
+                      </>
+                    }
+                    value={data.metrics.confirmedValue}
+                  />
+                  <FunnelMetricCard
+                    label="Show rate"
+                    rate={data.metrics.showRate}
+                    subtitle={
+                      <>
+                        {data.metrics.showed} showed of {data.metrics.totalAppts} appts
+                      </>
+                    }
+                    value={data.metrics.showedValue}
+                  />
+                  <FunnelMetricCard
+                    label="Showed conversions"
+                    rate={data.metrics.showedConversionRate}
+                    subtitle={
+                      <>
+                        {data.metrics.success} converted of {data.metrics.showed} showed
+                      </>
+                    }
+                    value={data.metrics.successValue}
                     accent
                   />
                 </div>
 
-                {/* Raw stage counts (collapsible for debugging) */}
-                {data.metrics.stageCounts &&
-                  Object.keys(data.metrics.stageCounts).length > 0 && (
-                    <details className="rounded-2xl border border-white/10 bg-white/5">
-                      <summary className="cursor-pointer px-6 py-4 text-sm text-slate-400 hover:text-slate-300">
-                        All stage counts
-                      </summary>
-                      <div className="border-t border-white/10 px-6 py-4">
-                        <div className="flex flex-wrap gap-3">
-                          {Object.entries(data.metrics.stageCounts).map(
-                            ([stage, count]) => (
+                {/* Value breakdown when we have values */}
+                {(data.metrics.showedValue > 0 || data.metrics.successValue > 0) && (
+                  <div className="rounded-xl border border-white/10 bg-white/5 px-5 py-4">
+                    <p className="text-sm font-medium text-slate-400">Value by stage</p>
+                    <div className="mt-2 flex flex-wrap gap-4">
+                      {data.metrics.showedValue > 0 && (
+                        <span className="text-sm">
+                          <span className="text-slate-500">Showed:</span>{" "}
+                          <span className="font-medium text-white">
+                            ${formatCurrency(data.metrics.showedValue)}
+                          </span>
+                        </span>
+                      )}
+                      {data.metrics.successValue > 0 && (
+                        <span className="text-sm">
+                          <span className="text-slate-500">Success:</span>{" "}
+                          <span className="font-medium text-indigo-300">
+                            ${formatCurrency(data.metrics.successValue)}
+                          </span>
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* All pipeline stages with counts (for debugging) */}
+                {((data.pipeline?.stages?.length ?? 0) > 0 ||
+                  (data.stageCounts && Object.keys(data.stageCounts).length > 0)) && (
+                  <details className="rounded-xl border border-white/10 bg-white/5">
+                    <summary className="cursor-pointer px-5 py-4 text-sm text-slate-400 hover:text-slate-300">
+                      All stage counts
+                    </summary>
+                    <div className="border-t border-white/10 px-5 py-4">
+                      <div className="flex flex-wrap gap-3">
+                        {(data.pipeline?.stages?.length ?? 0) > 0
+                          ? [...(data.pipeline!.stages ?? [])]
+                              .sort((a, b) => (a.position ?? 0) - (b.position ?? 0))
+                              .map((stage) => {
+                                const count = data.stageCounts?.[stage.name] ?? 0;
+                                const hasMatch = stage.name in (data.stageCounts ?? {});
+                                return (
+                                  <span
+                                    key={stage.id}
+                                    className={`rounded-lg px-3 py-1.5 text-sm ${
+                                      hasMatch
+                                        ? "bg-white/10"
+                                        : "bg-white/5 text-slate-500"
+                                    }`}
+                                  >
+                                    <span className="text-slate-400">{stage.name}:</span>{" "}
+                                    <span className="font-medium">{count}</span>
+                                  </span>
+                                );
+                              })
+                          : Object.entries(data.stageCounts ?? {}).map(([stage, count]) => (
                               <span
                                 key={stage}
                                 className="rounded-lg bg-white/10 px-3 py-1.5 text-sm"
@@ -354,12 +450,11 @@ export default function ConversionsDashboard() {
                                 <span className="text-slate-400">{stage}:</span>{" "}
                                 <span className="font-medium">{count}</span>
                               </span>
-                            )
-                          )}
-                        </div>
+                            ))}
                       </div>
-                    </details>
-                  )}
+                    </div>
+                  </details>
+                )}
               </>
             ) : (
               <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 px-8 py-6">
@@ -406,45 +501,57 @@ export default function ConversionsDashboard() {
   );
 }
 
+/** Parse YYYY-MM-DD as local date (avoid UTC midnight shifting dates) */
 function formatDate(iso: string): string {
-  const d = new Date(iso);
-  return d.toLocaleDateString("en-US", {
+  const [y, m, d] = iso.split("-").map(Number);
+  const date = new Date(y, m - 1, d);
+  return date.toLocaleDateString("en-US", {
     month: "short",
     day: "numeric",
     year: "numeric",
   });
 }
 
-function MetricCard({
+function formatCurrency(n: number): string {
+  if (n >= 1000000) return (n / 1000000).toFixed(1) + "M";
+  if (n >= 1000) return (n / 1000).toFixed(1) + "K";
+  return Math.round(n).toLocaleString();
+}
+
+function FunnelMetricCard({
   label,
-  value,
+  rate,
   subtitle,
+  value,
   accent,
 }: {
   label: string;
-  value: string | number;
-  subtitle: string;
+  rate: number | null;
+  subtitle: React.ReactNode;
+  value?: number;
   accent?: boolean;
 }) {
   return (
     <div
-      className={`rounded-2xl border p-6 backdrop-blur-sm ${
-        accent
-          ? "border-indigo-500/50 bg-indigo-500/15"
-          : "border-white/10 bg-white/5"
+      className={`rounded-xl border p-4 backdrop-blur-sm ${
+        accent ? "border-indigo-500/50 bg-indigo-500/10" : "border-white/10 bg-white/5"
       }`}
     >
-      <p className="text-sm font-medium uppercase tracking-wider text-slate-400">
-        {label}
-      </p>
+      <p className="text-xs font-medium uppercase tracking-wider text-slate-400">{label}</p>
       <p
-        className={`mt-2 text-4xl font-bold tabular-nums ${
+        className={`mt-1 text-2xl font-bold tabular-nums ${
           accent ? "text-indigo-300" : "text-white"
         }`}
       >
-        {value}
+        {rate != null ? `${rate}%` : "—"}
       </p>
       <p className="mt-1 text-sm text-slate-500">{subtitle}</p>
+      {value !== undefined && value > 0 && (
+        <p className="mt-1 text-sm font-medium text-slate-400">
+          ${formatCurrency(value)} value
+        </p>
+      )}
     </div>
   );
 }
+

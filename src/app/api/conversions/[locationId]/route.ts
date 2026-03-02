@@ -1,11 +1,8 @@
 import { NextResponse } from "next/server";
 import { getToken } from "@/lib/oauth-tokens";
 import { getPipelines, getOpportunityCountsByStage } from "@/lib/ghl-oauth";
-import {
-  findMatchingPipeline,
-  calculateConversion,
-  PAIN_PATIENTS_CONFIG,
-} from "@/lib/pipeline-matching";
+import { findMatchingPipeline, PAIN_PATIENTS_CONFIG } from "@/lib/pipeline-matching";
+import { calculateFunnelMetrics } from "@/lib/funnel-metrics";
 import {
   getDateRangeForPreset,
   type DateRangePreset,
@@ -43,6 +40,7 @@ export async function GET(
     const dateRangePreset = (searchParams.get("dateRange") ?? "last_30") as DateRangePreset;
     const dateFrom = searchParams.get("dateFrom") ?? undefined;
     const dateTo = searchParams.get("dateTo") ?? undefined;
+    const clientDate = searchParams.get("clientDate") ?? undefined; // YYYY-MM-DD from user's timezone
 
     const pipelines = await getPipelines(locationId, stored.access_token);
     const pipeline = pipelineId
@@ -63,28 +61,31 @@ export async function GET(
     const dateRange = getDateRangeForPreset(
       dateRangePreset,
       dateFrom,
-      dateTo
+      dateTo,
+      clientDate
     );
 
-    const stageCounts = await getOpportunityCountsByStage(
-      locationId,
-      pipeline,
-      stored.access_token,
-      dateRange
+    const { counts: stageCounts, values: stageValues } =
+      await getOpportunityCountsByStage(
+        locationId,
+        pipeline,
+        stored.access_token,
+        dateRange
+      );
+    const funnel = calculateFunnelMetrics(
+      stageCounts,
+      stageValues,
+      pipeline.stages ?? undefined
     );
-    const conversion = calculateConversion(stageCounts, PAIN_PATIENTS_CONFIG);
 
     return NextResponse.json({
       pipeline: {
         id: pipeline.id,
         name: pipeline.name,
+        stages: pipeline.stages ?? [],
       },
-      metrics: {
-        shown: conversion.shown,
-        success: conversion.success,
-        conversionPercent: conversion.conversionPercent,
-        stageCounts,
-      },
+      metrics: funnel,
+      stageCounts,
       dateRange,
       pipelines: pipelines.map((p) => ({ id: p.id, name: p.name })),
     });

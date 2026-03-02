@@ -1,0 +1,22 @@
+---
+description: Always check official API documentation before implementing or debugging API integrations
+alwaysApply: true
+---
+
+# Check API Documentation First
+
+When working with **any external API** (especially GoHighLevel / GHL), always:
+
+1. **Look up the official docs** before writing integration code or fixing API errors
+2. **Use exact parameter names** from the docs (e.g., GHL uses `date` + `endDate`, not `startDate`)
+3. **Verify request format** (GET query params vs POST body, snake_case vs camelCase)
+
+## GHL Opportunities Search
+
+- Endpoint: `GET /opportunities/search`
+- Docs: https://marketplace.gohighlevel.com/docs/ghl/opportunities/search-opportunity
+- Date params: `date` (start) and `endDate` (end)
+
+## General Rule
+
+Don't guess or assume API parameters. Fetch the documentation and match the spec exactly.

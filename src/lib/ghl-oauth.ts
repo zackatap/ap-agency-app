@@ -25,9 +25,15 @@ export interface GHLOpportunity {
   stageName?: string;
   status?: string;
   locationId?: string;
-  dateCreated?: string; // ISO date string
+  dateCreated?: string;
   dateUpdated?: string;
+  monetaryValue?: number; // GHL opportunity value in dollars
   [key: string]: unknown;
+}
+
+export interface StageMetrics {
+  counts: Record<string, number>;
+  values: Record<string, number>; // sum of monetaryValue per stage
 }
 
 export interface DateRangeFilter {
@@ -89,8 +95,9 @@ export async function getOpportunityCountsByStage(
   pipeline: GHLPipeline,
   accessToken: string,
   dateRange?: DateRangeFilter
-): Promise<Record<string, number>> {
+): Promise<StageMetrics> {
   const counts: Record<string, number> = {};
+  const values: Record<string, number> = {};
   const stageIdToName = buildStageIdToName(pipeline.stages);
   let page = 1;
   const limit = 100;
@@ -103,7 +110,8 @@ export async function getOpportunityCountsByStage(
     searchUrl.searchParams.set("limit", String(limit));
     searchUrl.searchParams.set("page", String(page));
 
-    // GHL opportunities/search does NOT support startDate/endDate — we filter by dateCreated client-side below
+    // GHL opportunities/search rejects date/endDate params (400 "start date field is invalid").
+    // We filter by dateCreated client-side below instead.
 
     const searchRes = await fetch(searchUrl.toString(), {
       method: "GET",
@@ -145,11 +153,18 @@ export async function getOpportunityCountsByStage(
         (opp.pipelineStageId as string) ??
         "Unknown";
       counts[stageName] = (counts[stageName] ?? 0) + 1;
+      const val =
+        typeof opp.monetaryValue === "number"
+          ? opp.monetaryValue
+          : typeof (opp as Record<string, unknown>).monetary_value === "number"
+            ? ((opp as Record<string, unknown>).monetary_value as number)
+            : 0;
+      values[stageName] = (values[stageName] ?? 0) + val;
     }
 
     page += 1;
     hasMore = opportunities.length === limit && page * limit < (total || Infinity);
   }
 
-  return counts;
+  return { counts, values };
 }
