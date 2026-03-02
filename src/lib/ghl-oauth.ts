@@ -25,7 +25,14 @@ export interface GHLOpportunity {
   stageName?: string;
   status?: string;
   locationId?: string;
+  dateCreated?: string; // ISO date string
+  dateUpdated?: string;
   [key: string]: unknown;
+}
+
+export interface DateRangeFilter {
+  startDate: string; // ISO date YYYY-MM-DD
+  endDate: string;
 }
 
 function authHeaders(token: string): HeadersInit {
@@ -74,12 +81,14 @@ export async function getPipelines(
 /**
  * Fetch all opportunities for a pipeline, including won.
  * Uses GET /opportunities/search with query params per GHL official SDK.
- * Params: location_id, pipeline_id, page, limit (snake_case, no pipelineId/skip in body).
+ * Supports optional date range filtering; uses API params when available,
+ * otherwise filters by dateCreated client-side.
  */
 export async function getOpportunityCountsByStage(
   locationId: string,
   pipeline: GHLPipeline,
-  accessToken: string
+  accessToken: string,
+  dateRange?: DateRangeFilter
 ): Promise<Record<string, number>> {
   const counts: Record<string, number> = {};
   const stageIdToName = buildStageIdToName(pipeline.stages);
@@ -93,6 +102,12 @@ export async function getOpportunityCountsByStage(
     searchUrl.searchParams.set("pipeline_id", pipeline.id);
     searchUrl.searchParams.set("limit", String(limit));
     searchUrl.searchParams.set("page", String(page));
+
+    // GHL API may support startDate/endDate for date filtering
+    if (dateRange) {
+      searchUrl.searchParams.set("startDate", dateRange.startDate);
+      searchUrl.searchParams.set("endDate", dateRange.endDate);
+    }
 
     const searchRes = await fetch(searchUrl.toString(), {
       method: "GET",
@@ -112,6 +127,20 @@ export async function getOpportunityCountsByStage(
     total = data.total ?? data.totalCount ?? opportunities.length;
 
     for (const opp of opportunities) {
+      // Client-side date filter fallback (API may not honor date params)
+      if (dateRange) {
+        const created =
+          (opp.dateCreated as string) ??
+          (opp.date_created as string) ??
+          (opp.createdAt as string);
+        if (created) {
+          const dateStr = created.split("T")[0];
+          if (dateStr < dateRange.startDate || dateStr > dateRange.endDate) {
+            continue;
+          }
+        }
+      }
+
       const stageName =
         opp.stageName ??
         (opp.pipelineStageId

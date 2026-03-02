@@ -42,11 +42,15 @@ GHL_REDIRECT_URI=https://ap-agency-app.vercel.app/api/auth/callback/ghl
 
 ### Conversions Dashboard
 
-- **Pipeline matching**: Finds pipelines whose name contains `"pain"` (e.g. "Pain Patients", "🩺 Pain Patients", "Pain").
+- **Pipeline selection**: Choose any pipeline from a dropdown. Defaults to the first pipeline matching `"pain"` in the name.
+- **Date range filtering**: Filter metrics by preset ranges or custom dates:
+  - This month, Last month
+  - Last 30, 60, or 90 days
+  - Custom date range
 - **Conversion metric**: `(Success / Showed Up) × 100`
   - **Showed Up** = opportunities in the "Showed Up" stage
   - **Success** = opportunities in the "Success" stage
-- **Total counts**: Counts all opportunities in each stage, including those marked **won** (which may be hidden on the board when filtered to "open" only).
+- **Total counts**: Counts opportunities in each stage (including **won**), filtered by the selected date range.
 
 ## Routes
 
@@ -69,4 +73,8 @@ Then visit:
 
 ## API
 
-- **GET /api/conversions/[locationId]** – Returns conversion metrics for the Pain Patients pipeline at the given location.
+- **GET /api/conversions/[locationId]** – Returns conversion metrics. Query params:
+  - `pipelineId` – Pipeline to use (default: first pipeline matching "pain")
+  - `dateRange` – `this_month` | `last_month` | `last_30` | `last_60` | `last_90` | `custom`
+  - `dateFrom`, `dateTo` – Required when `dateRange=custom` (YYYY-MM-DD)
+- **GET /api/pipelines/[locationId]** – Returns list of pipelines for the location.

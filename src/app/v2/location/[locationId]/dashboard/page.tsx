@@ -2,6 +2,10 @@
 
 import { useEffect, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
+import {
+  DATE_RANGE_LABELS,
+  type DateRangePreset,
+} from "@/lib/date-ranges";
 
 interface ConversionMetrics {
   shown: number;
@@ -12,7 +16,9 @@ interface ConversionMetrics {
 
 interface ConversionData {
   pipeline: { id: string; name: string } | null;
+  pipelines?: { id: string; name: string }[];
   metrics: ConversionMetrics | null;
+  dateRange?: { startDate: string; endDate: string };
   message?: string;
 }
 
@@ -27,13 +33,20 @@ export default function ConversionsDashboard() {
   const [error, setError] = useState<string | null>(null);
   const [debug, setDebug] = useState<{ url: string; status?: number; body?: string } | null>(null);
 
+  const [selectedPipelineId, setSelectedPipelineId] = useState<string>("");
+  const [dateRangePreset, setDateRangePreset] = useState<DateRangePreset>("last_30");
+  const [customDateFrom, setCustomDateFrom] = useState("");
+  const [customDateTo, setCustomDateTo] = useState("");
+
   useEffect(() => {
     if (!locationId) {
       setLoading(false);
       return;
     }
 
-    const apiUrl = `/api/conversions/${locationId}`;
+    const params = new URLSearchParams();
+    params.set("dateRange", "last_30");
+    const apiUrl = `/api/conversions/${locationId}?${params.toString()}`;
     setLoading(true);
     setError(null);
     setDebug({ url: apiUrl });
@@ -55,10 +68,81 @@ export default function ConversionsDashboard() {
         }
         return JSON.parse(body);
       })
-      .then((d) => { if (d !== undefined) setData(d); })
+      .then((d: ConversionData) => {
+        if (d !== undefined) {
+          setData(d);
+          if (d.pipeline) setSelectedPipelineId(d.pipeline.id);
+        }
+      })
       .catch((err) => setError(err?.message ?? String(err)))
       .finally(() => setLoading(false));
   }, [locationId]);
+
+  const handlePipelineChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const id = e.target.value;
+    setSelectedPipelineId(id);
+    if (!locationId) return;
+
+    const params = new URLSearchParams();
+    params.set("dateRange", dateRangePreset);
+    if (id) params.set("pipelineId", id);
+    if (dateRangePreset === "custom" && customDateFrom && customDateTo) {
+      params.set("dateFrom", customDateFrom);
+      params.set("dateTo", customDateTo);
+    }
+
+    const apiUrl = `/api/conversions/${locationId}?${params.toString()}`;
+    setLoading(true);
+    fetch(apiUrl)
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+        return res.json();
+      })
+      .then((d: ConversionData) => setData(d))
+      .catch((err) => setError(err?.message ?? String(err)))
+      .finally(() => setLoading(false));
+  };
+
+  const handleDateRangeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const preset = e.target.value as DateRangePreset;
+    setDateRangePreset(preset);
+    if (!locationId || preset === "custom") return; // Custom waits for Apply
+
+    const urlParams = new URLSearchParams();
+    urlParams.set("dateRange", preset);
+    if (selectedPipelineId) urlParams.set("pipelineId", selectedPipelineId);
+
+    const apiUrl = `/api/conversions/${locationId}?${urlParams.toString()}`;
+    setLoading(true);
+    fetch(apiUrl)
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+        return res.json();
+      })
+      .then((d: ConversionData) => setData(d))
+      .catch((err) => setError(err?.message ?? String(err)))
+      .finally(() => setLoading(false));
+  };
+
+  const handleCustomDateApply = () => {
+    if (!locationId || !customDateFrom || !customDateTo) return;
+    const params = new URLSearchParams();
+    params.set("dateRange", "custom");
+    params.set("dateFrom", customDateFrom);
+    params.set("dateTo", customDateTo);
+    if (selectedPipelineId) params.set("pipelineId", selectedPipelineId);
+
+    const apiUrl = `/api/conversions/${locationId}?${params.toString()}`;
+    setLoading(true);
+    fetch(apiUrl)
+      .then(async (res) => {
+        if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+        return res.json();
+      })
+      .then((d: ConversionData) => setData(d))
+      .catch((err) => setError(err?.message ?? String(err)))
+      .finally(() => setLoading(false));
+  };
 
   if (!locationId) return null;
 
@@ -82,6 +166,86 @@ export default function ConversionsDashboard() {
             </p>
           )}
         </header>
+
+        {/* Filters - pipeline & date range */}
+        {!error && (data?.pipelines?.length ?? 0) > 0 && (
+          <div className="mb-8 flex flex-wrap items-end gap-4">
+            <div className="min-w-[200px]">
+              <label className="mb-1.5 block text-sm font-medium text-slate-400">
+                Pipeline
+              </label>
+              <select
+                value={selectedPipelineId}
+                onChange={handlePipelineChange}
+                disabled={loading}
+                className="w-full rounded-xl border border-white/20 bg-white/5 px-4 py-2.5 text-white shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              >
+                {!selectedPipelineId && (
+                  <option value="" className="bg-slate-900 text-white">
+                    Select a pipeline…
+                  </option>
+                )}
+                {data?.pipelines?.map((p) => (
+                  <option key={p.id} value={p.id} className="bg-slate-900 text-white">
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="min-w-[180px]">
+              <label className="mb-1.5 block text-sm font-medium text-slate-400">
+                Date range
+              </label>
+              <select
+                value={dateRangePreset}
+                onChange={handleDateRangeChange}
+                disabled={loading}
+                className="w-full rounded-xl border border-white/20 bg-white/5 px-4 py-2.5 text-white shadow-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+              >
+                {(Object.entries(DATE_RANGE_LABELS) as [DateRangePreset, string][]).map(
+                  ([value, label]) => (
+                    <option key={value} value={value} className="bg-slate-900 text-white">
+                      {label}
+                    </option>
+                  )
+                )}
+              </select>
+            </div>
+            {dateRangePreset === "custom" && (
+              <div className="flex items-end gap-2">
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-slate-400">
+                    From
+                  </label>
+                  <input
+                    type="date"
+                    value={customDateFrom}
+                    onChange={(e) => setCustomDateFrom(e.target.value)}
+                    className="rounded-xl border border-white/20 bg-white/5 px-4 py-2.5 text-white focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1.5 block text-sm font-medium text-slate-400">
+                    To
+                  </label>
+                  <input
+                    type="date"
+                    value={customDateTo}
+                    onChange={(e) => setCustomDateTo(e.target.value)}
+                    className="rounded-xl border border-white/20 bg-white/5 px-4 py-2.5 text-white focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+                <button
+                  onClick={handleCustomDateApply}
+                  disabled={loading || !customDateFrom || !customDateTo}
+                  className="rounded-xl bg-indigo-600 px-4 py-2.5 font-medium text-white transition-colors hover:bg-indigo-500 disabled:opacity-50"
+                >
+                  Apply
+                </button>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Content */}
         {loading && (
@@ -140,6 +304,12 @@ export default function ConversionsDashboard() {
                   <p className="mt-1 text-2xl font-semibold text-white">
                     {data.pipeline.name}
                   </p>
+                  {data.dateRange && (
+                    <p className="mt-2 text-sm text-slate-500">
+                      Showing data from {formatDate(data.dateRange.startDate)} to{" "}
+                      {formatDate(data.dateRange.endDate)}
+                    </p>
+                  )}
                 </div>
 
                 {/* Main conversion metric */}
@@ -234,6 +404,15 @@ export default function ConversionsDashboard() {
       </div>
     </div>
   );
+}
+
+function formatDate(iso: string): string {
+  const d = new Date(iso);
+  return d.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
 }
 
 function MetricCard({
