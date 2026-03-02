@@ -103,11 +103,7 @@ export async function getOpportunityCountsByStage(
     searchUrl.searchParams.set("limit", String(limit));
     searchUrl.searchParams.set("page", String(page));
 
-    // GHL API may support startDate/endDate for date filtering
-    if (dateRange) {
-      searchUrl.searchParams.set("startDate", dateRange.startDate);
-      searchUrl.searchParams.set("endDate", dateRange.endDate);
-    }
+    // GHL opportunities/search does NOT support startDate/endDate — we filter by dateCreated client-side below
 
     const searchRes = await fetch(searchUrl.toString(), {
       method: "GET",
