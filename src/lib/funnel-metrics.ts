@@ -42,8 +42,11 @@ const CONFIRMED_STAGES = ["appointment confirmed", "appt confirmed"];
 /** Stage names for "showed up" */
 const SHOWED_STAGES = ["showed up", "showed"];
 
-/** Stage names for "success" */
-const SUCCESS_STAGES = ["success"];
+/** Stage names for "success" / closed */
+const SUCCESS_STAGES = ["success", "closed", "won"];
+
+/** Stage names for "no show" / cancelled */
+const NO_SHOW_STAGES = ["no show", "no-show", "cancelled", "canceled"];
 
 /** Stage names for "lead" - fallback when pipeline order unknown */
 const LEAD_STAGES = [
@@ -84,8 +87,11 @@ export interface FunnelMetrics {
   requested: number;
   confirmed: number;
   totalAppts: number; // requested + confirmed
+  totalApptsRaw?: number; // requested + confirmed + showed
   showed: number;
+  noShow: number;
   success: number;
+  closed: number; // same as success for now
   total: number;
   // Rates
   bookingRate: number | null; // totalAppts / leads (or total if no leads)
@@ -108,6 +114,7 @@ export function calculateFunnelMetrics(
   const requested = sumStages(counts, values, REQUESTED_STAGES);
   const confirmed = sumStages(counts, values, CONFIRMED_STAGES);
   const showed = sumStages(counts, values, SHOWED_STAGES);
+  const noShow = sumStages(counts, values, NO_SHOW_STAGES);
   const success = sumStages(counts, values, SUCCESS_STAGES);
 
   // Leads = all stages before first "Appointment Unconfirmed/Requested" (by pipeline order)
@@ -153,8 +160,11 @@ export function calculateFunnelMetrics(
     confirmed: confirmed.count,
     totalAppts,
     showed: showed.count,
+    noShow: noShow.count,
     success: success.count,
+    closed: success.count,
     total,
+    totalApptsRaw: requested.count + confirmed.count + showed.count,
     bookingRate,
     confirmationRate,
     showRate,
@@ -164,5 +174,47 @@ export function calculateFunnelMetrics(
     successValue: success.value,
     requestedValue: requested.value,
     confirmedValue: confirmed.value,
+  };
+}
+
+/**
+ * Apply rollup assumptions: people in later stages were once in earlier stages.
+ * Each metric = that stage + all stages after it (showed excludes noShow - they didn't show).
+ */
+export function applyRollup(metrics: FunnelMetrics): FunnelMetrics {
+  const l = metrics.leads;
+  const r = metrics.requested;
+  const c = metrics.confirmed;
+  const s = metrics.showed;
+  const n = metrics.noShow;
+  const cl = metrics.closed;
+
+  const leadsRollup = l + r + c + s + n + cl;
+  const requestedRollup = r + c + s + n + cl;
+  const confirmedRollup = c + s + n + cl;
+  const showedRollup = s + cl; // exclude noShow
+
+  const totalApptsRollup = r + c + s; // requested+confirmed+showed (for rate denominators)
+  const bookingRate =
+    leadsRollup > 0 ? Math.round((requestedRollup / leadsRollup) * 1000) / 10 : null;
+  const confirmationRate =
+    requestedRollup > 0 ? Math.round((confirmedRollup / requestedRollup) * 1000) / 10 : null;
+  const showRate =
+    requestedRollup > 0 ? Math.round((showedRollup / requestedRollup) * 1000) / 10 : null;
+  const showedConversionRate =
+    showedRollup > 0 ? Math.round((cl / showedRollup) * 1000) / 10 : null;
+
+  return {
+    ...metrics,
+    leads: leadsRollup,
+    requested: requestedRollup,
+    confirmed: confirmedRollup,
+    showed: showedRollup,
+    totalAppts: r + c,
+    totalApptsRaw: r + c + s,
+    bookingRate,
+    confirmationRate,
+    showRate,
+    showedConversionRate,
   };
 }

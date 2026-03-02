@@ -7,14 +7,18 @@ import {
   getTodayLocal,
   type DateRangePreset,
 } from "@/lib/date-ranges";
+import { applyRollup } from "@/lib/funnel-metrics";
 
 interface FunnelMetrics {
   leads: number;
   requested: number;
   confirmed: number;
   totalAppts: number;
+  totalApptsRaw?: number;
   showed: number;
+  noShow: number;
   success: number;
+  closed: number;
   total: number;
   bookingRate: number | null;
   confirmationRate: number | null;
@@ -25,6 +29,13 @@ interface FunnelMetrics {
   successValue: number;
   requestedValue: number;
   confirmedValue: number;
+}
+
+interface MonthlyData {
+  monthKey: string;
+  startDate: string;
+  endDate: string;
+  metrics: FunnelMetrics;
 }
 
 interface ConversionMetrics extends FunnelMetrics {}
@@ -59,6 +70,10 @@ export default function ConversionsDashboard() {
   const [dateRangePreset, setDateRangePreset] = useState<DateRangePreset>("last_30");
   const [customDateFrom, setCustomDateFrom] = useState("");
   const [customDateTo, setCustomDateTo] = useState("");
+  const [activeTab, setActiveTab] = useState<"funnel" | "monthly">("funnel");
+  const [monthlyData, setMonthlyData] = useState<MonthlyData[] | null>(null);
+  const [monthlyLoading, setMonthlyLoading] = useState(false);
+  const [rollupAssumptions, setRollupAssumptions] = useState(false);
 
   useEffect(() => {
     if (!locationId) {
@@ -100,6 +115,21 @@ export default function ConversionsDashboard() {
       .catch((err) => setError(err?.message ?? String(err)))
       .finally(() => setLoading(false));
   }, [locationId]);
+
+  useEffect(() => {
+    if (activeTab !== "monthly" || !locationId || !selectedPipelineId) return;
+    const params = new URLSearchParams();
+    params.set("pipelineId", selectedPipelineId);
+    params.set("months", "13");
+    params.set("clientDate", getTodayLocal());
+    const apiUrl = `/api/conversions/${locationId}/monthly?${params.toString()}`;
+    setMonthlyLoading(true);
+    fetch(apiUrl)
+      .then((res) => res.json())
+      .then((d: { months: MonthlyData[] }) => setMonthlyData(d.months ?? []))
+      .catch(() => setMonthlyData([]))
+      .finally(() => setMonthlyLoading(false));
+  }, [activeTab, locationId, selectedPipelineId]);
 
   const handlePipelineChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const id = e.target.value;
@@ -218,6 +248,7 @@ export default function ConversionsDashboard() {
                 ))}
               </select>
             </div>
+            {activeTab === "funnel" && (
             <div className="min-w-[180px]">
               <label className="mb-1.5 block text-sm font-medium text-slate-400">
                 Date range
@@ -237,7 +268,21 @@ export default function ConversionsDashboard() {
                 )}
               </select>
             </div>
-            {dateRangePreset === "custom" && (
+            )}
+            {activeTab === "monthly" && (
+            <div className="min-w-[160px]">
+              <label className="mb-1.5 block text-sm font-medium text-slate-400">
+                Campaign
+              </label>
+              <select
+                disabled
+                className="w-full rounded-xl border border-white/20 bg-white/5 px-4 py-2.5 text-slate-500"
+              >
+                <option className="bg-slate-900">—</option>
+              </select>
+            </div>
+            )}
+            {activeTab === "funnel" && dateRangePreset === "custom" && (
               <div className="flex items-end gap-2">
                 <div>
                   <label className="mb-1.5 block text-sm font-medium text-slate-400">
@@ -273,7 +318,69 @@ export default function ConversionsDashboard() {
           </div>
         )}
 
+        {/* Tabs + Rollup toggle */}
+        {!error && (data?.pipelines?.length ?? 0) > 0 && (
+          <div className="mb-6 flex flex-wrap items-center gap-4">
+            <div className="flex gap-2">
+            <button
+              onClick={() => setActiveTab("funnel")}
+              className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
+                activeTab === "funnel"
+                  ? "bg-indigo-600 text-white"
+                  : "bg-white/5 text-slate-400 hover:bg-white/10 hover:text-white"
+              }`}
+            >
+              Funnel
+            </button>
+            <button
+              onClick={() => setActiveTab("monthly")}
+              className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
+                activeTab === "monthly"
+                  ? "bg-indigo-600 text-white"
+                  : "bg-white/5 text-slate-400 hover:bg-white/10 hover:text-white"
+              }`}
+            >
+              Month to Month
+            </button>
+            </div>
+            <label className="flex cursor-pointer items-center gap-2">
+              <input
+                type="checkbox"
+                checked={rollupAssumptions}
+                onChange={(e) => setRollupAssumptions(e.target.checked)}
+                className="rounded border-white/20 bg-white/5"
+              />
+              <span className="text-sm text-slate-400">Rollup Assumptions</span>
+            </label>
+          </div>
+        )}
+
         {/* Content */}
+        {activeTab === "monthly" ? (
+          monthlyLoading ? (
+            <div className="flex items-center justify-center rounded-2xl border border-white/10 bg-white/5 px-12 py-24">
+              <div className="flex flex-col items-center gap-4">
+                <div className="h-10 w-10 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent" />
+                <p className="text-slate-400">Loading monthly metrics…</p>
+              </div>
+            </div>
+          ) : monthlyData && monthlyData.length > 0 ? (
+            <MonthToMonthTable
+              months={monthlyData}
+              locationId={locationId ?? ""}
+              pipelineId={selectedPipelineId}
+              rollupAssumptions={rollupAssumptions}
+            />
+          ) : (
+            <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 px-8 py-6">
+              <p className="font-medium text-amber-200">No monthly data</p>
+              <p className="mt-1 text-amber-200/90">
+                Select a pipeline and try again.
+              </p>
+            </div>
+          )
+        ) : (
+          <>
         {loading && (
           <div className="flex items-center justify-center rounded-2xl border border-white/10 bg-white/5 px-12 py-24">
             <div className="flex flex-col items-center gap-4">
@@ -322,6 +429,10 @@ export default function ConversionsDashboard() {
           <div className="space-y-8">
             {data.pipeline && data.metrics ? (
               <>
+                {(() => {
+                  const metrics = rollupAssumptions ? applyRollup(data.metrics) : data.metrics;
+                  return (
+              <>
                 {/* Compact header */}
                 <div className="flex flex-wrap items-center justify-between gap-4 rounded-xl border border-white/10 bg-white/5 px-5 py-4">
                   <div>
@@ -332,80 +443,100 @@ export default function ConversionsDashboard() {
                       </p>
                     )}
                   </div>
-                  {data.metrics.totalValue > 0 && (
+                  {metrics.totalValue > 0 && (
                     <p className="text-xl font-semibold tabular-nums text-indigo-300">
-                      ${formatCurrency(data.metrics.totalValue)} pipeline value
+                      ${formatCurrency(metrics.totalValue)} pipeline value
                     </p>
                   )}
                 </div>
+
+                {/* Total Appointments accordion - collapsed hides requested/confirmed/showed breakdown */}
+                <details className="rounded-xl border border-white/10 bg-white/5">
+                  <summary className="cursor-pointer px-5 py-4 text-sm text-slate-400 hover:text-slate-300">
+                    Total Appointments <span className="font-medium text-white">({(data.metrics.totalApptsRaw ?? data.metrics.requested + data.metrics.confirmed + data.metrics.showed)})</span>
+                  </summary>
+                  <div className="border-t border-white/10 px-5 py-4">
+                    <div className="flex flex-wrap gap-4 text-sm">
+                      <span><span className="text-slate-500">Requested:</span> {data.metrics.requested}</span>
+                      <span><span className="text-slate-500">Confirmed:</span> {data.metrics.confirmed}</span>
+                      <span><span className="text-slate-500">Showed:</span> {data.metrics.showed}</span>
+                    </div>
+                  </div>
+                </details>
 
                 {/* Funnel metrics - compact grid */}
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                   <FunnelMetricCard
                     label="Booking rate"
-                    rate={data.metrics.bookingRate}
+                    rate={metrics.bookingRate}
                     subtitle={
-                      <>
-                        {data.metrics.totalAppts} of{" "}
-                        {data.metrics.leads + data.metrics.totalAppts} booked{" "}
-                        <span className="text-slate-500">
-                          ({data.metrics.requested} requested + {data.metrics.confirmed} confirmed)
-                        </span>
-                      </>
+                      rollupAssumptions ? (
+                        <>
+                          {metrics.requested} of {metrics.leads} reached appointment
+                        </>
+                      ) : (
+                        <>
+                          {metrics.totalAppts} of{" "}
+                          {metrics.leads + metrics.totalAppts} booked{" "}
+                          <span className="text-slate-500">
+                            ({metrics.requested} requested + {metrics.confirmed} confirmed)
+                          </span>
+                        </>
+                      )
                     }
-                    value={data.metrics.requestedValue + data.metrics.confirmedValue}
+                    value={metrics.requestedValue + metrics.confirmedValue}
                   />
                   <FunnelMetricCard
                     label="Confirmation rate"
-                    rate={data.metrics.confirmationRate}
+                    rate={metrics.confirmationRate}
                     subtitle={
                       <>
-                        {data.metrics.confirmed} confirmed of {data.metrics.totalAppts} appts
+                        {metrics.confirmed} confirmed of {metrics.totalAppts} appts
                       </>
                     }
-                    value={data.metrics.confirmedValue}
+                    value={metrics.confirmedValue}
                   />
                   <FunnelMetricCard
                     label="Show rate"
-                    rate={data.metrics.showRate}
+                    rate={metrics.showRate}
                     subtitle={
                       <>
-                        {data.metrics.showed} showed of {data.metrics.totalAppts} appts
+                        {metrics.showed} showed of {metrics.totalAppts} appts
                       </>
                     }
-                    value={data.metrics.showedValue}
+                    value={metrics.showedValue}
                   />
                   <FunnelMetricCard
                     label="Showed conversions"
-                    rate={data.metrics.showedConversionRate}
+                    rate={metrics.showedConversionRate}
                     subtitle={
                       <>
-                        {data.metrics.success} converted of {data.metrics.showed} showed
+                        {metrics.success} converted of {metrics.showed} showed
                       </>
                     }
-                    value={data.metrics.successValue}
+                    value={metrics.successValue}
                     accent
                   />
                 </div>
 
                 {/* Value breakdown when we have values */}
-                {(data.metrics.showedValue > 0 || data.metrics.successValue > 0) && (
+                {(metrics.showedValue > 0 || metrics.successValue > 0) && (
                   <div className="rounded-xl border border-white/10 bg-white/5 px-5 py-4">
                     <p className="text-sm font-medium text-slate-400">Value by stage</p>
                     <div className="mt-2 flex flex-wrap gap-4">
-                      {data.metrics.showedValue > 0 && (
+                      {metrics.showedValue > 0 && (
                         <span className="text-sm">
                           <span className="text-slate-500">Showed:</span>{" "}
                           <span className="font-medium text-white">
-                            ${formatCurrency(data.metrics.showedValue)}
+                            ${formatCurrency(metrics.showedValue)}
                           </span>
                         </span>
                       )}
-                      {data.metrics.successValue > 0 && (
+                      {metrics.successValue > 0 && (
                         <span className="text-sm">
                           <span className="text-slate-500">Success:</span>{" "}
                           <span className="font-medium text-indigo-300">
-                            ${formatCurrency(data.metrics.successValue)}
+                            ${formatCurrency(metrics.successValue)}
                           </span>
                         </span>
                       )}
@@ -456,6 +587,9 @@ export default function ConversionsDashboard() {
                   </details>
                 )}
               </>
+                  );
+                })()}
+              </>
             ) : (
               <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 px-8 py-6">
                 <p className="font-medium text-amber-200">
@@ -471,7 +605,7 @@ export default function ConversionsDashboard() {
         )}
 
         {/* Debug panel - always visible when we have debug info */}
-        {debug && !loading && (
+        {debug && !loading && activeTab === "funnel" && (
           <details className="mt-12 rounded-2xl border border-white/10 bg-black/20">
             <summary className="cursor-pointer px-6 py-4 text-sm font-medium text-slate-400 hover:text-slate-300">
               🔧 Debug info
@@ -496,6 +630,8 @@ export default function ConversionsDashboard() {
             </div>
           </details>
         )}
+          </>
+        )}
       </div>
     </div>
   );
@@ -516,6 +652,223 @@ function formatCurrency(n: number): string {
   if (n >= 1000000) return (n / 1000000).toFixed(1) + "M";
   if (n >= 1000) return (n / 1000).toFixed(1) + "K";
   return Math.round(n).toLocaleString();
+}
+
+const AD_SPEND_KEY = "ap_adSpend";
+
+function getAdSpendKey(locationId: string, pipelineId: string, monthKey: string): string {
+  return `${AD_SPEND_KEY}_${locationId}_${pipelineId}_${monthKey}`;
+}
+
+function MonthToMonthTable({
+  months,
+  locationId,
+  pipelineId,
+  rollupAssumptions,
+}: {
+  months: MonthlyData[];
+  locationId: string;
+  pipelineId: string;
+  rollupAssumptions: boolean;
+}) {
+  const [adSpend, setAdSpend] = useState<Record<string, number>>({});
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const out: Record<string, number> = {};
+    for (const m of months) {
+      const k = getAdSpendKey(locationId, pipelineId, m.monthKey);
+      const v = localStorage.getItem(k);
+      if (v) out[m.monthKey] = parseFloat(v) || 0;
+    }
+    setAdSpend(out);
+  }, [months, locationId, pipelineId]);
+
+  const setSpend = (monthKey: string, value: number) => {
+    setAdSpend((prev) => ({ ...prev, [monthKey]: value }));
+    const k = getAdSpendKey(locationId, pipelineId, monthKey);
+    localStorage.setItem(k, String(value));
+  };
+
+  const monthLabel = (monthKey: string) => {
+    const [y, m] = monthKey.split("-").map(Number);
+    return `${m}/${1}/${y}`;
+  };
+
+  const getMetrics = (m: MonthlyData) =>
+    rollupAssumptions ? applyRollup(m.metrics) : m.metrics;
+
+  const [appointmentsExpanded, setAppointmentsExpanded] = useState(false);
+
+  return (
+    <div className="rounded-xl border border-white/10 bg-white/5 overflow-hidden">
+      <h2 className="px-5 py-4 text-lg font-semibold text-white">
+        Month to Month Overview
+      </h2>
+      <div className="overflow-x-auto">
+        <table className="w-full min-w-[600px]">
+          <thead>
+            <tr className="border-b border-white/10">
+              <th className="sticky left-0 z-10 min-w-[180px] bg-slate-900/95 px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-400">
+                Metric
+              </th>
+              {months.map((m) => (
+                <th
+                  key={m.monthKey}
+                  className="min-w-[90px] px-4 py-3 text-center text-xs font-medium text-slate-400"
+                >
+                  {monthLabel(m.monthKey)}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-white/5">
+            <tr>
+              <td className="sticky left-0 z-10 bg-slate-900/95 px-4 py-3 text-sm text-slate-300">
+                Total Amount Spent
+              </td>
+              {months.map((m) => (
+                <td key={m.monthKey} className="px-4 py-2 text-center">
+                  <input
+                    type="number"
+                    min={0}
+                    step={0.01}
+                    value={adSpend[m.monthKey] ?? ""}
+                    onChange={(e) => setSpend(m.monthKey, parseFloat(e.target.value) || 0)}
+                    onBlur={(e) => setSpend(m.monthKey, parseFloat((e.target as HTMLInputElement).value) || 0)}
+                    placeholder="0"
+                    className="w-20 rounded border border-white/20 bg-white/5 px-2 py-1 text-center text-sm text-white placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none"
+                  />
+                </td>
+              ))}
+            </tr>
+            <MetricRow label="Total Leads" values={months.map((m) => getMetrics(m).leads)} />
+            <MetricRow
+              label="Total CPL"
+              values={months.map((m) => {
+                const spend = adSpend[m.monthKey] ?? 0;
+                const leads = getMetrics(m).leads;
+                return leads > 0 && spend > 0 ? spend / leads : null;
+              })}
+              format="currency"
+            />
+            <MetricRow
+              label="Booking %"
+              values={months.map((m) => getMetrics(m).bookingRate)}
+              format="percent"
+            />
+            <TotalAppointmentsRow
+              months={months}
+              expanded={appointmentsExpanded}
+              onToggle={() => setAppointmentsExpanded((e) => !e)}
+            />
+            {appointmentsExpanded && (
+              <>
+                <MetricRow
+                  label="Total Appt Requested"
+                  values={months.map((m) => getMetrics(m).requested)}
+                />
+                <MetricRow
+                  label="Total Appt Confirmed"
+                  values={months.map((m) => getMetrics(m).confirmed)}
+                />
+                <MetricRow label="Total Show" values={months.map((m) => getMetrics(m).showed)} />
+              </>
+            )}
+            <MetricRow
+              label="Show %"
+              values={months.map((m) => getMetrics(m).showRate)}
+              format="percent"
+            />
+            <MetricRow label="Total No Show" values={months.map((m) => getMetrics(m).noShow)} />
+            <MetricRow label="Total Closed" values={months.map((m) => getMetrics(m).closed)} />
+            <MetricRow
+              label="Total CPS"
+              values={months.map((m) => {
+                const spend = adSpend[m.monthKey] ?? 0;
+                const closed = m.metrics.closed;
+                return closed > 0 && spend > 0 ? spend / closed : null;
+              })}
+              format="currency"
+            />
+            <MetricRow
+              label="Total CPC"
+              values={months.map((m) => {
+                const spend = adSpend[m.monthKey] ?? 0;
+                const confirmed = m.metrics.confirmed;
+                return confirmed > 0 && spend > 0 ? spend / confirmed : null;
+              })}
+              format="currency"
+            />
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function TotalAppointmentsRow({
+  months,
+  expanded,
+  onToggle,
+}: {
+  months: MonthlyData[];
+  expanded?: boolean;
+  onToggle?: () => void;
+}) {
+  // Always use raw counts (requested + confirmed + showed) - not rolled up
+  const values = months.map((m) => {
+    const { requested, confirmed, showed } = m.metrics;
+    return (m.metrics.totalApptsRaw ?? requested + confirmed + showed);
+  });
+  return (
+    <tr>
+      <td className="sticky left-0 z-10 bg-slate-900/95 px-4 py-2">
+        <button
+          type="button"
+          onClick={onToggle}
+          className="flex items-center gap-2 text-left text-sm text-slate-300 hover:text-white"
+        >
+          <span className="tabular-nums">{expanded ? "▼" : "▶"}</span>
+          Total Appointments
+        </button>
+      </td>
+      {values.map((v, i) => (
+        <td key={i} className="px-4 py-2 text-center text-sm tabular-nums text-white">
+          {v}
+        </td>
+      ))}
+    </tr>
+  );
+}
+
+function MetricRow({
+  label,
+  values,
+  format = "number",
+}: {
+  label: string;
+  values: (number | null)[];
+  format?: "number" | "percent" | "currency";
+}) {
+  const fmt = (v: number | null) => {
+    if (v == null) return "—";
+    if (format === "percent") return `${v}%`;
+    if (format === "currency") return `$${v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    return String(v);
+  };
+  return (
+    <tr>
+      <td className="sticky left-0 z-10 bg-slate-900/95 px-4 py-2 text-sm text-slate-300">
+        {label}
+      </td>
+      {values.map((v, i) => (
+        <td key={i} className="px-4 py-2 text-center text-sm tabular-nums text-white">
+          {fmt(v)}
+        </td>
+      ))}
+    </tr>
+  );
 }
 
 function FunnelMetricCard({

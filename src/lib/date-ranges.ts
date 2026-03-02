@@ -90,6 +90,40 @@ export function getDateRangeForPreset(
   }
 }
 
+export interface MonthRange {
+  monthKey: string; // "2026-02"
+  startDate: string;
+  endDate: string;
+}
+
+/** Get last N calendar months from today (or clientDate). Most recent first. */
+export function getMonthsBack(
+  n: number,
+  todayOverride?: string // YYYY-MM-DD from client
+): MonthRange[] {
+  const today = todayOverride
+    ? (() => {
+        const [y, m, d] = todayOverride.split("-").map(Number);
+        return new Date(y, m - 1, d);
+      })()
+    : new Date();
+
+  const result: MonthRange[] = [];
+  for (let i = 0; i < n; i++) {
+    const d = new Date(today.getFullYear(), today.getMonth() - i, 1);
+    const start = startOfMonth(d);
+    const end = endOfMonth(d);
+    const y = start.getFullYear();
+    const m = String(start.getMonth() + 1).padStart(2, "0");
+    result.push({
+      monthKey: `${y}-${m}`,
+      startDate: toLocalDate(start),
+      endDate: toLocalDate(end),
+    });
+  }
+  return result;
+}
+
 export const DATE_RANGE_LABELS: Record<DateRangePreset, string> = {
   this_month: "This month",
   last_month: "Last month",
