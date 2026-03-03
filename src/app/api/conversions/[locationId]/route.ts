@@ -2,11 +2,12 @@ import { NextResponse } from "next/server";
 import { getToken } from "@/lib/oauth-tokens";
 import { getPipelines, getOpportunityCountsByStage } from "@/lib/ghl-oauth";
 import { findMatchingPipeline, PAIN_PATIENTS_CONFIG } from "@/lib/pipeline-matching";
-import { calculateFunnelMetrics } from "@/lib/funnel-metrics";
+import { calculateFunnelMetrics, getUnmappedStages, getEffectiveMapping } from "@/lib/funnel-metrics";
 import {
   getDateRangeForPreset,
   type DateRangePreset,
 } from "@/lib/date-ranges";
+import { getLocationSettings } from "@/lib/location-settings";
 
 export async function GET(
   req: Request,
@@ -43,9 +44,13 @@ export async function GET(
     const clientDate = searchParams.get("clientDate") ?? undefined; // YYYY-MM-DD from user's timezone
 
     const pipelines = await getPipelines(locationId, stored.access_token);
-    const pipeline = pipelineId
-      ? pipelines.find((p) => p.id === pipelineId)
-      : findMatchingPipeline(pipelines, PAIN_PATIENTS_CONFIG);
+    const settings = await getLocationSettings(locationId);
+    const pipeline =
+      pipelineId
+        ? pipelines.find((p) => p.id === pipelineId)
+        : (settings?.defaultPipelineId
+            ? pipelines.find((p) => p.id === settings.defaultPipelineId)
+            : null) ?? findMatchingPipeline(pipelines, PAIN_PATIENTS_CONFIG);
 
     if (!pipeline) {
       return NextResponse.json({
@@ -72,11 +77,25 @@ export async function GET(
         stored.access_token,
         dateRange
       );
+    const customMappings = settings?.stageMappings?.[pipeline.id];
     const funnel = calculateFunnelMetrics(
       stageCounts,
       stageValues,
-      pipeline.stages ?? undefined
+      pipeline.stages ?? undefined,
+      customMappings
     );
+    const allStages = pipeline.stages ?? [];
+    const allStageNames = [
+      ...allStages.map((s) => s.name),
+      ...Object.keys(stageCounts),
+    ];
+    const uniqueStageNames = [...new Set(allStageNames)];
+    const unmappedNames = getUnmappedStages(uniqueStageNames, customMappings);
+    const allStageMappings = uniqueStageNames.map((name) => ({
+      name,
+      count: stageCounts[name] ?? 0,
+      mapping: getEffectiveMapping(name, customMappings),
+    }));
 
     return NextResponse.json({
       pipeline: {
@@ -88,6 +107,11 @@ export async function GET(
       stageCounts,
       dateRange,
       pipelines: pipelines.map((p) => ({ id: p.id, name: p.name })),
+      allStageMappings,
+      unmappedStages: unmappedNames.map((name) => ({
+        name,
+        count: stageCounts[name] ?? 0,
+      })),
     });
   } catch (err) {
     console.error("[conversions] Error:", err);

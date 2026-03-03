@@ -46,13 +46,37 @@ interface PipelineStage {
   position?: number;
 }
 
+interface UnmappedStage {
+  name: string;
+  count: number;
+}
+
+interface StageMappingInfo {
+  name: string;
+  count: number;
+  mapping: MappableStage | null;
+}
+
 interface ConversionData {
   pipeline: { id: string; name: string; stages?: PipelineStage[] } | null;
   pipelines?: { id: string; name: string }[];
   metrics: ConversionMetrics | null;
   stageCounts?: Record<string, number>;
   dateRange?: { startDate: string; endDate: string };
+  unmappedStages?: UnmappedStage[];
+  allStageMappings?: StageMappingInfo[];
   message?: string;
+}
+
+type FunnelStage = "requested" | "confirmed" | "showed" | "noShow" | "closed";
+type MappableStage = FunnelStage | "lead";
+
+interface LocationSettings {
+  locationId: string;
+  defaultPipelineId: string | null;
+  defaultCampaignId: string | null;
+  stageMappings: Record<string, Record<string, MappableStage>>;
+  adSpend: Record<string, Record<string, number>>;
 }
 
 export default function ConversionsDashboard() {
@@ -74,6 +98,17 @@ export default function ConversionsDashboard() {
   const [monthlyData, setMonthlyData] = useState<MonthlyData[] | null>(null);
   const [monthlyLoading, setMonthlyLoading] = useState(false);
   const [rollupAssumptions, setRollupAssumptions] = useState(false);
+  const [settings, setSettings] = useState<LocationSettings | null>(null);
+  const [unmappedStages, setUnmappedStages] = useState<UnmappedStage[]>([]);
+  const [allStageMappings, setAllStageMappings] = useState<StageMappingInfo[]>([]);
+
+  useEffect(() => {
+    if (!locationId) return;
+    fetch(`/api/location/${locationId}/settings`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((s) => (s ? setSettings(s) : null))
+      .catch(() => {});
+  }, [locationId]);
 
   useEffect(() => {
     if (!locationId) {
@@ -109,7 +144,11 @@ export default function ConversionsDashboard() {
       .then((d: ConversionData) => {
         if (d !== undefined) {
           setData(d);
-          if (d.pipeline) setSelectedPipelineId(d.pipeline.id);
+          if (d.pipeline) {
+            setSelectedPipelineId(d.pipeline.id);
+            setUnmappedStages(d.unmappedStages ?? []);
+            setAllStageMappings(d.allStageMappings ?? []);
+          }
         }
       })
       .catch((err) => setError(err?.message ?? String(err)))
@@ -126,7 +165,11 @@ export default function ConversionsDashboard() {
     setMonthlyLoading(true);
     fetch(apiUrl)
       .then((res) => res.json())
-      .then((d: { months: MonthlyData[] }) => setMonthlyData(d.months ?? []))
+      .then((d: { months: MonthlyData[]; unmappedStages?: UnmappedStage[]; allStageMappings?: StageMappingInfo[] }) => {
+        setMonthlyData(d.months ?? []);
+        if (d.unmappedStages) setUnmappedStages(d.unmappedStages);
+        if (d.allStageMappings) setAllStageMappings(d.allStageMappings);
+      })
       .catch(() => setMonthlyData([]))
       .finally(() => setMonthlyLoading(false));
   }, [activeTab, locationId, selectedPipelineId]);
@@ -135,6 +178,17 @@ export default function ConversionsDashboard() {
     const id = e.target.value;
     setSelectedPipelineId(id);
     if (!locationId) return;
+
+    if (id) {
+      fetch(`/api/location/${locationId}/settings`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ defaultPipelineId: id }),
+      })
+        .then((res) => res.ok ? res.json() : null)
+        .then((s) => s && setSettings((prev) => (prev ? { ...prev, defaultPipelineId: id } : s)))
+        .catch(() => {});
+    }
 
     const params = new URLSearchParams();
     params.set("dateRange", dateRangePreset);
@@ -177,6 +231,82 @@ export default function ConversionsDashboard() {
       .then((d: ConversionData) => setData(d))
       .catch((err) => setError(err?.message ?? String(err)))
       .finally(() => setLoading(false));
+  };
+
+  const refetchConversions = () => {
+    if (!locationId) return;
+    const params = new URLSearchParams();
+    params.set("dateRange", dateRangePreset);
+    params.set("clientDate", getTodayLocal());
+    if (selectedPipelineId) params.set("pipelineId", selectedPipelineId);
+    if (dateRangePreset === "custom" && customDateFrom && customDateTo) {
+      params.set("dateFrom", customDateFrom);
+      params.set("dateTo", customDateTo);
+    }
+    fetch(`/api/conversions/${locationId}?${params.toString()}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((d: ConversionData | null) => {
+        if (d) {
+          setData(d);
+          if (d.unmappedStages) setUnmappedStages(d.unmappedStages);
+          if (d.allStageMappings) setAllStageMappings(d.allStageMappings);
+        }
+      })
+      .catch(() => {});
+  };
+
+  const refetchMonthly = () => {
+    if (!locationId || !selectedPipelineId || activeTab !== "monthly") return;
+    const params = new URLSearchParams();
+    params.set("pipelineId", selectedPipelineId);
+    params.set("months", "13");
+    params.set("clientDate", getTodayLocal());
+    fetch(`/api/conversions/${locationId}/monthly?${params.toString()}`)
+      .then((res) => res.json())
+      .then((d: { months: MonthlyData[]; unmappedStages?: UnmappedStage[]; allStageMappings?: StageMappingInfo[] }) => {
+        setMonthlyData(d.months ?? []);
+        if (d.unmappedStages) setUnmappedStages(d.unmappedStages);
+        if (d.allStageMappings) setAllStageMappings(d.allStageMappings);
+      })
+      .catch(() => {});
+  };
+
+  const handleStageMappingChange = (stageName: string, mapTo: MappableStage | "") => {
+    if (!locationId || !data?.pipeline) return;
+    const pipelineId = data.pipeline.id;
+    fetch(`/api/location/${locationId}/settings`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        stageMapping: {
+          pipelineId,
+          stageName,
+          mapTo: mapTo || null,
+        },
+      }),
+    })
+      .then((res) => res.ok ? res.json() : null)
+      .then((s) => {
+        if (s) {
+          setSettings((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  stageMappings: {
+                    ...prev.stageMappings,
+                    [pipelineId]: {
+                      ...(prev.stageMappings[pipelineId] ?? {}),
+                      ...(mapTo ? { [stageName]: mapTo } : {}),
+                    },
+                  },
+                }
+              : prev
+          );
+          refetchConversions();
+          if (activeTab === "monthly") refetchMonthly();
+        }
+      })
+      .catch(() => {});
   };
 
   const handleCustomDateApply = () => {
@@ -370,6 +500,23 @@ export default function ConversionsDashboard() {
               locationId={locationId ?? ""}
               pipelineId={selectedPipelineId}
               rollupAssumptions={rollupAssumptions}
+              adSpend={settings?.adSpend?.[selectedPipelineId] ?? {}}
+              onAdSpendChange={(monthKey, value) => {
+                if (!locationId || !selectedPipelineId) return;
+                const next = {
+                  ...(settings?.adSpend ?? {}),
+                  [selectedPipelineId]: {
+                    ...(settings?.adSpend?.[selectedPipelineId] ?? {}),
+                    [monthKey]: value,
+                  },
+                };
+                setSettings((prev) => (prev ? { ...prev, adSpend: next } : prev));
+                fetch(`/api/location/${locationId}/settings`, {
+                  method: "PATCH",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ adSpend: next }),
+                }).catch(() => {});
+              }}
             />
           ) : (
             <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 px-8 py-6">
@@ -632,9 +779,85 @@ export default function ConversionsDashboard() {
         )}
           </>
         )}
+
+        {/* Pipeline Stage Mapping - accordion below data, open + orange when unmapped */}
+        {data?.pipeline && allStageMappings.length > 0 && (
+          <details
+            open={unmappedStages.length > 0}
+            className={`mt-8 rounded-xl border px-5 py-4 ${
+              unmappedStages.length > 0
+                ? "border-amber-500/30 bg-amber-500/5"
+                : "border-white/10 bg-white/5"
+            }`}
+          >
+            <summary className="cursor-pointer text-sm font-medium text-slate-300 hover:text-white">
+              Pipeline Stage Mapping
+              {unmappedStages.length > 0 && (
+                <span className="ml-2 text-amber-200">
+                  ({unmappedStages.length} unmapped)
+                </span>
+              )}
+            </summary>
+            <div className="mt-4 border-t border-white/10 pt-4">
+              <p className="mb-3 text-xs text-slate-400">
+                Map each pipeline stage to a funnel stage. Built-in rules apply first; use dropdowns to override.
+              </p>
+              <div className="flex flex-wrap gap-3">
+                {allStageMappings.map(({ name, count, mapping }) => {
+                  const pipelineId = data!.pipeline!.id;
+                  const customMapping = settings?.stageMappings?.[pipelineId]?.[name];
+                  const displayValue = customMapping ?? "";
+                  const isUnmapped = mapping === null;
+                  return (
+                    <div
+                      key={name}
+                      className={`flex items-center gap-2 rounded-lg px-3 py-2 ${
+                        isUnmapped ? "bg-amber-500/10" : "bg-white/5"
+                      }`}
+                    >
+                      <span className="text-sm text-slate-300">
+                        {name} <span className="text-slate-500">({count})</span>
+                      </span>
+                      <select
+                        value={displayValue}
+                        onChange={(e) => {
+                          const v = (e.target.value as MappableStage | "") || "";
+                          handleStageMappingChange(name, v);
+                        }}
+                        className="rounded border border-white/20 bg-slate-900 px-2 py-1 text-sm text-white focus:border-indigo-500 focus:outline-none"
+                      >
+                        <option value="" className="bg-slate-900">
+                          {mapping ? `Use default (${mappingLabel(mapping)})` : "Map to…"}
+                        </option>
+                        <option value="lead" className="bg-slate-900">Lead</option>
+                        <option value="requested" className="bg-slate-900">Requested</option>
+                        <option value="confirmed" className="bg-slate-900">Confirmed</option>
+                        <option value="showed" className="bg-slate-900">Showed</option>
+                        <option value="noShow" className="bg-slate-900">No Show</option>
+                        <option value="closed" className="bg-slate-900">Closed / Success</option>
+                      </select>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </details>
+        )}
       </div>
     </div>
   );
+}
+
+function mappingLabel(m: string): string {
+  const labels: Record<string, string> = {
+    lead: "Lead",
+    requested: "Requested",
+    confirmed: "Confirmed",
+    showed: "Showed",
+    noShow: "No Show",
+    closed: "Closed",
+  };
+  return labels[m] ?? m;
 }
 
 /** Parse YYYY-MM-DD as local date (avoid UTC midnight shifting dates) */
@@ -654,40 +877,23 @@ function formatCurrency(n: number): string {
   return Math.round(n).toLocaleString();
 }
 
-const AD_SPEND_KEY = "ap_adSpend";
-
-function getAdSpendKey(locationId: string, pipelineId: string, monthKey: string): string {
-  return `${AD_SPEND_KEY}_${locationId}_${pipelineId}_${monthKey}`;
-}
-
 function MonthToMonthTable({
   months,
   locationId,
   pipelineId,
   rollupAssumptions,
+  adSpend = {},
+  onAdSpendChange,
 }: {
   months: MonthlyData[];
   locationId: string;
   pipelineId: string;
   rollupAssumptions: boolean;
+  adSpend?: Record<string, number>;
+  onAdSpendChange?: (monthKey: string, value: number) => void;
 }) {
-  const [adSpend, setAdSpend] = useState<Record<string, number>>({});
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const out: Record<string, number> = {};
-    for (const m of months) {
-      const k = getAdSpendKey(locationId, pipelineId, m.monthKey);
-      const v = localStorage.getItem(k);
-      if (v) out[m.monthKey] = parseFloat(v) || 0;
-    }
-    setAdSpend(out);
-  }, [months, locationId, pipelineId]);
-
   const setSpend = (monthKey: string, value: number) => {
-    setAdSpend((prev) => ({ ...prev, [monthKey]: value }));
-    const k = getAdSpendKey(locationId, pipelineId, monthKey);
-    localStorage.setItem(k, String(value));
+    onAdSpendChange?.(monthKey, value);
   };
 
   const monthLabel = (monthKey: string) => {

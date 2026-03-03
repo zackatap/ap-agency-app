@@ -1,16 +1,45 @@
 /**
  * Funnel metrics calculation from stage counts/values.
  * Stage names are matched flexibly (case-insensitive, partial match).
+ * Supports custom stage mappings for GHL stages that don't match built-in patterns.
  */
+
+export type FunnelStage = "requested" | "confirmed" | "showed" | "noShow" | "closed";
+
+/** Custom mappings: GHL stage name (exact) -> our funnel stage or "lead" */
+export type CustomStageMappings = Record<string, FunnelStage | "lead">;
+
+function stageMatchesBuiltIn(stageName: string, stageNames: string[]): boolean {
+  const stageLower = stageName.toLowerCase().trim();
+  for (const target of stageNames) {
+    const targetLower = target.toLowerCase();
+    if (
+      stageLower === targetLower ||
+      stageLower.includes(targetLower) ||
+      targetLower.includes(stageLower)
+    )
+      return true;
+  }
+  return false;
+}
 
 function sumStages(
   counts: Record<string, number>,
   values: Record<string, number>,
-  stageNames: string[]
+  stageNames: string[],
+  customMappings?: CustomStageMappings,
+  targetStage?: FunnelStage
 ): { count: number; value: number } {
   let count = 0;
   let value = 0;
   for (const [stageName, c] of Object.entries(counts)) {
+    // Custom mapping takes precedence (exact stage name match)
+    if (customMappings && targetStage && customMappings[stageName] === targetStage) {
+      count += c;
+      value += values[stageName] ?? 0;
+      continue;
+    }
+    // Built-in matching
     const stageLower = stageName.toLowerCase().trim();
     for (const target of stageNames) {
       const targetLower = target.toLowerCase();
@@ -43,7 +72,7 @@ const CONFIRMED_STAGES = ["appointment confirmed", "appt confirmed"];
 const SHOWED_STAGES = ["showed up", "showed"];
 
 /** Stage names for "success" / closed */
-const SUCCESS_STAGES = ["success", "closed", "won"];
+const SUCCESS_STAGES = ["success", "closed", "won", "pay per visit"];
 
 /** Stage names for "no show" / cancelled */
 const NO_SHOW_STAGES = ["no show", "no-show", "cancelled", "canceled"];
@@ -56,6 +85,7 @@ const LEAD_STAGES = [
   "prospect",
   "new patient",
   "inquiry",
+  "connected",
 ];
 
 /** Stages that start the "appointment" phase - we count everything BEFORE these as leads */
@@ -106,31 +136,71 @@ export interface FunnelMetrics {
   confirmedValue: number;
 }
 
+/** Effective mapping = "lead" | FunnelStage. Lead stages use built-in order or name match. */
+export type EffectiveMapping = FunnelStage | "lead";
+
+/** Get the effective mapping for a stage (custom overrides built-in) */
+export function getEffectiveMapping(
+  stageName: string,
+  customMappings?: CustomStageMappings
+): EffectiveMapping | null {
+  if (customMappings?.[stageName]) return customMappings[stageName];
+  if (stageMatches(stageName, REQUESTED_STAGES)) return "requested";
+  if (stageMatches(stageName, CONFIRMED_STAGES)) return "confirmed";
+  if (stageMatches(stageName, SHOWED_STAGES)) return "showed";
+  if (stageMatches(stageName, NO_SHOW_STAGES)) return "noShow";
+  if (stageMatches(stageName, SUCCESS_STAGES)) return "closed";
+  if (stageMatches(stageName, LEAD_STAGES)) return "lead";
+  return null;
+}
+
+/** Get pipeline stage names that are not mapped (built-in or custom) */
+export function getUnmappedStages(
+  stageNames: string[],
+  customMappings?: CustomStageMappings
+): string[] {
+  return stageNames.filter((n) => getEffectiveMapping(n, customMappings) === null);
+}
+
 export function calculateFunnelMetrics(
   counts: Record<string, number>,
   values: Record<string, number>,
-  pipelineStages?: PipelineStageForOrder[]
+  pipelineStages?: PipelineStageForOrder[],
+  customMappings?: CustomStageMappings
 ): FunnelMetrics {
-  const requested = sumStages(counts, values, REQUESTED_STAGES);
-  const confirmed = sumStages(counts, values, CONFIRMED_STAGES);
-  const showed = sumStages(counts, values, SHOWED_STAGES);
-  const noShow = sumStages(counts, values, NO_SHOW_STAGES);
-  const success = sumStages(counts, values, SUCCESS_STAGES);
+  const requested = sumStages(counts, values, REQUESTED_STAGES, customMappings, "requested");
+  const confirmed = sumStages(counts, values, CONFIRMED_STAGES, customMappings, "confirmed");
+  const showed = sumStages(counts, values, SHOWED_STAGES, customMappings, "showed");
+  const noShow = sumStages(counts, values, NO_SHOW_STAGES, customMappings, "noShow");
+  const success = sumStages(counts, values, SUCCESS_STAGES, customMappings, "closed");
 
-  // Leads = all stages before first "Appointment Unconfirmed/Requested" (by pipeline order)
+  // Leads = pipeline order (before first appt, no custom) + custom "lead" mappings
   let leads: { count: number; value: number };
   if (pipelineStages?.length) {
     const sorted = [...pipelineStages].sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
     let count = 0;
     let value = 0;
     for (const stage of sorted) {
-      if (stageMatches(stage.name, FIRST_APPT_STAGES)) break; // stop at first appt stage
+      if (stageMatches(stage.name, FIRST_APPT_STAGES)) break;
+      if (customMappings?.[stage.name]) continue; // custom override: handled below
       count += counts[stage.name] ?? 0;
       value += values[stage.name] ?? 0;
     }
+    for (const [stageName, c] of Object.entries(counts)) {
+      if (customMappings?.[stageName] === "lead") {
+        count += c;
+        value += values[stageName] ?? 0;
+      }
+    }
     leads = { count, value };
   } else {
-    leads = sumStages(counts, values, LEAD_STAGES); // fallback to name matching
+    leads = sumStages(counts, values, LEAD_STAGES);
+    for (const [stageName, c] of Object.entries(counts)) {
+      if (customMappings?.[stageName] === "lead") {
+        leads.count += c;
+        leads.value += values[stageName] ?? 0;
+      }
+    }
   }
 
   const totalAppts = requested.count + confirmed.count;
