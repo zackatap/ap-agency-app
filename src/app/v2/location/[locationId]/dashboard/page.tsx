@@ -774,6 +774,19 @@ export default function ConversionsDashboard() {
                   {typeof window !== "undefined" ? window.location.origin + debug.url : debug.url}
                 </a>
               </p>
+              {locationId && selectedPipelineId && (
+                <p className="mt-4 text-slate-600">
+                  <strong>Troubleshoot data fetch:</strong>{" "}
+                  <a
+                    href={`/api/debug/opportunities/${locationId}?pipelineId=${selectedPipelineId}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-indigo-400 underline"
+                  >
+                    Open opportunities debug →
+                  </a>
+                </p>
+              )}
             </div>
           </details>
         )}

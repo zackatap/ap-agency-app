@@ -2,7 +2,10 @@
  * Funnel metrics calculation from stage counts/values.
  * Stage names are matched flexibly (case-insensitive, partial match).
  * Supports custom stage mappings for GHL stages that don't match built-in patterns.
+ * Opportunities with status "won" count as closed regardless of stage.
  */
+
+import { STATUS_WON_KEY } from "@/lib/ghl-oauth";
 
 export type FunnelStage = "requested" | "confirmed" | "showed" | "noShow" | "closed";
 
@@ -172,7 +175,13 @@ export function calculateFunnelMetrics(
   const confirmed = sumStages(counts, values, CONFIRMED_STAGES, customMappings, "confirmed");
   const showed = sumStages(counts, values, SHOWED_STAGES, customMappings, "showed");
   const noShow = sumStages(counts, values, NO_SHOW_STAGES, customMappings, "noShow");
-  const success = sumStages(counts, values, SUCCESS_STAGES, customMappings, "closed");
+  const successFromStages = sumStages(counts, values, SUCCESS_STAGES, customMappings, "closed");
+  const statusWonCount = counts[STATUS_WON_KEY] ?? 0;
+  const statusWonValue = values[STATUS_WON_KEY] ?? 0;
+  const success = {
+    count: successFromStages.count + statusWonCount,
+    value: successFromStages.value + statusWonValue,
+  };
 
   // Leads = pipeline order (before first appt, no custom) + custom "lead" mappings
   let leads: { count: number; value: number };

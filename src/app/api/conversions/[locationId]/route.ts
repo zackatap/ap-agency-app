@@ -3,6 +3,7 @@ import { getToken } from "@/lib/oauth-tokens";
 import { getPipelines, getOpportunityCountsByStage } from "@/lib/ghl-oauth";
 import { findMatchingPipeline, PAIN_PATIENTS_CONFIG } from "@/lib/pipeline-matching";
 import { calculateFunnelMetrics, getUnmappedStages, getEffectiveMapping } from "@/lib/funnel-metrics";
+import { STATUS_WON_KEY } from "@/lib/ghl-oauth";
 import {
   getDateRangeForPreset,
   type DateRangePreset,
@@ -87,7 +88,7 @@ export async function GET(
     const allStages = pipeline.stages ?? [];
     const allStageNames = [
       ...allStages.map((s) => s.name),
-      ...Object.keys(stageCounts),
+      ...Object.keys(stageCounts).filter((k) => k !== STATUS_WON_KEY),
     ];
     const uniqueStageNames = [...new Set(allStageNames)];
     const unmappedNames = getUnmappedStages(uniqueStageNames, customMappings);

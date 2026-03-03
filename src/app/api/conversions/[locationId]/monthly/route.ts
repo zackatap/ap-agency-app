@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getToken } from "@/lib/oauth-tokens";
-import { getPipelines, getOpportunityCountsByStage } from "@/lib/ghl-oauth";
+import { getPipelines, getOpportunityCountsByStagePerMonth, STATUS_WON_KEY } from "@/lib/ghl-oauth";
 import { findMatchingPipeline, PAIN_PATIENTS_CONFIG } from "@/lib/pipeline-matching";
 import { calculateFunnelMetrics, getUnmappedStages, getEffectiveMapping } from "@/lib/funnel-metrics";
 import { getMonthsBack } from "@/lib/date-ranges";
@@ -59,35 +59,35 @@ export async function GET(
     const monthRanges = getMonthsBack(monthsCount, clientDate);
     const customMappings = settings?.stageMappings?.[pipeline.id];
 
-    const monthsWithCounts = await Promise.all(
-      monthRanges.map(async (range) => {
-        const { counts, values } = await getOpportunityCountsByStage(
-          locationId,
-          pipeline,
-          stored.access_token,
-          { startDate: range.startDate, endDate: range.endDate }
-        );
-        const metrics = calculateFunnelMetrics(
-          counts,
-          values,
-          pipeline.stages ?? undefined,
-          customMappings
-        );
-        return {
-          monthKey: range.monthKey,
-          startDate: range.startDate,
-          endDate: range.endDate,
-          metrics,
-          stageCounts: counts,
-        };
-      })
+    // Single pipeline fetch, bucket by month - avoids 13× API calls and 429
+    const perMonth = await getOpportunityCountsByStagePerMonth(
+      locationId,
+      pipeline,
+      stored.access_token,
+      monthRanges
     );
+
+    const monthsWithCounts = perMonth.map(({ monthKey, startDate, endDate, counts, values }) => {
+      const metrics = calculateFunnelMetrics(
+        counts,
+        values,
+        pipeline.stages ?? undefined,
+        customMappings
+      );
+      return {
+        monthKey,
+        startDate,
+        endDate,
+        metrics,
+        stageCounts: counts,
+      };
+    });
     const months = monthsWithCounts.map(({ stageCounts: _, ...m }) => m);
     const latestCounts = monthsWithCounts[monthsWithCounts.length - 1]?.stageCounts ?? {};
     const stageNames = [
       ...new Set([
         ...(pipeline.stages ?? []).map((s) => s.name),
-        ...Object.keys(latestCounts),
+        ...Object.keys(latestCounts).filter((k) => k !== STATUS_WON_KEY),
       ]),
     ];
     const unmappedNames = getUnmappedStages(stageNames, customMappings);
