@@ -191,7 +191,7 @@ export async function GET(
             });
             if (!cr.ok) continue;
             const c = (await cr.json()) as { contact?: Record<string, unknown> };
-            const contact = c.contact ?? c;
+            const contact = (c.contact ?? c) as Record<string, unknown>;
             const fullName = [
               contact.firstName ?? contact.first_name,
               contact.lastName ?? contact.last_name,
