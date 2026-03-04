@@ -39,12 +39,27 @@ export interface StageMetrics {
 /** Opportunities with status "won" count as closed regardless of stage. Exported for funnel-metrics. */
 export const STATUS_WON_KEY = "__closed_by_status";
 
-function isWonStatus(opp: GHLOpportunity): boolean {
-  const s =
+/**
+ * Extract status string from opportunity. GHL schema: status is a string ("open", "won", "lost", "abandoned").
+ * Handles camelCase (status), snake_case (opportunity_status), and nested objects.
+ */
+function getOpportunityStatus(opp: GHLOpportunity): string {
+  const raw =
     (opp.status as string) ??
-    (opp as Record<string, unknown>).opportunity_status as string ??
-    "";
-  return s.toLowerCase().trim() === "won";
+    (opp as Record<string, unknown>).opportunity_status ??
+    (opp as Record<string, unknown>).opportunityStatus;
+  if (raw == null) return "";
+  if (typeof raw === "string") return raw;
+  if (typeof raw === "object" && raw !== null) {
+    const obj = raw as Record<string, unknown>;
+    return String(obj.name ?? obj.value ?? "").trim();
+  }
+  return String(raw).trim();
+}
+
+function isWonStatus(opp: GHLOpportunity): boolean {
+  const s = getOpportunityStatus(opp);
+  return s.toLowerCase() === "won";
 }
 
 export interface DateRangeFilter {
@@ -128,6 +143,7 @@ export async function getOpportunityCountsByStage(
     const searchUrl = new URL(`${GHL_BASE}/opportunities/search`);
     searchUrl.searchParams.set("location_id", locationId);
     searchUrl.searchParams.set("pipeline_id", pipeline.id);
+    searchUrl.searchParams.set("status", "all"); // Include won/lost/abandoned (default is "open" only)
     searchUrl.searchParams.set("limit", String(limit));
     searchUrl.searchParams.set("page", String(page));
 
@@ -197,6 +213,9 @@ export async function getOpportunityCountsByStage(
   return { counts, values };
 }
 
+/** Attribution mode for monthly bucketing */
+export type AttributionMode = "created" | "lastUpdated";
+
 /**
  * Fetch all opportunities once, bucket by month. Used by monthly API to avoid
  * N×months API calls (which causes 429). Single pipeline fetch, aggregate in memory.
@@ -205,7 +224,8 @@ export async function getOpportunityCountsByStagePerMonth(
   locationId: string,
   pipeline: GHLPipeline,
   accessToken: string,
-  monthRanges: Array<{ monthKey: string; startDate: string; endDate: string }>
+  monthRanges: Array<{ monthKey: string; startDate: string; endDate: string }>,
+  attributionMode: AttributionMode = "lastUpdated"
 ): Promise<
   Array<{
     monthKey: string;
@@ -244,6 +264,7 @@ export async function getOpportunityCountsByStagePerMonth(
     const searchUrl = new URL(`${GHL_BASE}/opportunities/search`);
     searchUrl.searchParams.set("location_id", locationId);
     searchUrl.searchParams.set("pipeline_id", pipeline.id);
+    searchUrl.searchParams.set("status", "all"); // Include won/lost/abandoned (default is "open" only)
     searchUrl.searchParams.set("limit", String(limit));
     searchUrl.searchParams.set("page", String(page));
 
@@ -269,11 +290,18 @@ export async function getOpportunityCountsByStagePerMonth(
     let minDateInPage: string | null = null;
 
     for (const opp of opportunities) {
+      const lastChange =
+        (opp.lastStageChangeAt as string) ??
+        ((opp as Record<string, unknown>).last_stage_change_at as string) ??
+        (opp.lastStatusChangeAt as string) ??
+        ((opp as Record<string, unknown>).last_status_change_at as string);
       const created =
         (opp.dateCreated as string) ??
         (opp.date_created as string) ??
         (opp.createdAt as string);
-      const dateStr = created ? created.split("T")[0] : null;
+      const dateStr = attributionMode === "lastUpdated"
+        ? (lastChange ?? created) ? (lastChange ?? created)!.split("T")[0] : null
+        : created ? created.split("T")[0] : null;
       if (dateStr) {
         if (!minDateInPage || dateStr < minDateInPage) minDateInPage = dateStr;
       }
@@ -320,4 +348,109 @@ export async function getOpportunityCountsByStagePerMonth(
       values: bucket.values,
     };
   });
+}
+
+/**
+ * Fetch opportunity names for a specific cell (monthKey + metric). Used for drill-down.
+ */
+export async function getOpportunityNamesForCell(
+  locationId: string,
+  pipeline: GHLPipeline,
+  accessToken: string,
+  monthRanges: Array<{ monthKey: string; startDate: string; endDate: string }>,
+  attributionMode: AttributionMode,
+  targetMonthKey: string,
+  contributingStageKeys: string[]
+): Promise<{ names: string[] }> {
+  const stageIdToName = buildStageIdToName(pipeline.stages);
+  const limit = 100;
+  let page = 1;
+  const names: string[] = [];
+  const seen = new Set<string>();
+  const keySet = new Set(contributingStageKeys.map((k) => k.toLowerCase()));
+
+  const getMonthForDate = (dateStr: string) => {
+    for (const range of monthRanges) {
+      if (dateStr >= range.startDate && dateStr <= range.endDate) return range.monthKey;
+    }
+    return null;
+  };
+
+  const oldestMonthStart = monthRanges.length > 0 ? monthRanges[monthRanges.length - 1].startDate : null;
+
+  while (page <= GHL_MAX_PAGES) {
+    if (page > 1) await delay(GHL_DELAY_MS);
+    const searchUrl = new URL(`${GHL_BASE}/opportunities/search`);
+    searchUrl.searchParams.set("location_id", locationId);
+    searchUrl.searchParams.set("pipeline_id", pipeline.id);
+    searchUrl.searchParams.set("status", "all");
+    searchUrl.searchParams.set("limit", String(limit));
+    searchUrl.searchParams.set("page", String(page));
+
+    const searchRes = await fetch(searchUrl.toString(), {
+      method: "GET",
+      headers: authHeaders(accessToken),
+    });
+    if (searchRes.status === 429) {
+      await delay(GHL_429_RETRY_MS);
+      continue;
+    }
+    if (!searchRes.ok) {
+      const err = await searchRes.text();
+      throw new Error(`GHL getOpportunities failed: ${searchRes.status} ${err}`);
+    }
+
+    const data = await searchRes.json();
+    const opportunities: GHLOpportunity[] = data.opportunities ?? data.data ?? [];
+    const total = data.total ?? data.totalCount ?? 0;
+    let minDateInPage: string | null = null;
+
+    for (const opp of opportunities) {
+      const lastChange =
+        (opp.lastStageChangeAt as string) ??
+        ((opp as Record<string, unknown>).last_stage_change_at as string) ??
+        (opp.lastStatusChangeAt as string) ??
+        ((opp as Record<string, unknown>).last_status_change_at as string);
+      const created =
+        (opp.dateCreated as string) ??
+        (opp.date_created as string) ??
+        (opp.createdAt as string);
+      const dateStr =
+        attributionMode === "lastUpdated"
+          ? (lastChange ?? created) ? (lastChange ?? created)!.split("T")[0] : null
+          : created ? created.split("T")[0] : null;
+      if (dateStr) {
+        if (!minDateInPage || dateStr < minDateInPage) minDateInPage = dateStr;
+      }
+      const monthKey = dateStr ? getMonthForDate(dateStr) : null;
+      if (monthKey !== targetMonthKey) continue;
+
+      let bucketKey: string;
+      if (isWonStatus(opp)) {
+        bucketKey = STATUS_WON_KEY;
+      } else {
+        bucketKey =
+          opp.stageName ??
+          (opp.pipelineStageId
+            ? stageIdToName.get(opp.pipelineStageId as string)
+            : null) ??
+          (opp.pipelineStageId as string) ??
+          "Unknown";
+      }
+      if (!keySet.has(bucketKey.toLowerCase())) continue;
+
+      const name = (opp.name as string) ?? (opp as Record<string, unknown>).opportunityName as string ?? `Opportunity ${opp.id}`;
+      if (!seen.has(opp.id)) {
+        seen.add(opp.id);
+        names.push(name || `Opportunity ${opp.id}`);
+      }
+    }
+
+    if (opportunities.length < limit) break;
+    if (total > 0 && page * limit >= total) break;
+    if (oldestMonthStart && minDateInPage && minDateInPage < oldestMonthStart) break;
+    page += 1;
+  }
+
+  return { names };
 }

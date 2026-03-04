@@ -158,6 +158,44 @@ export function getEffectiveMapping(
 }
 
 /** Get pipeline stage names that are not mapped (built-in or custom) */
+/**
+ * Returns stage keys (from counts) that contribute to the given metric. Used for drill-down.
+ */
+export function getStageKeysForMetric(
+  metric: string,
+  stageKeys: string[],
+  customMappings?: CustomStageMappings,
+  pipelineStages?: PipelineStageForOrder[]
+): string[] {
+  const result: string[] = [];
+  for (const key of stageKeys) {
+    if (key === STATUS_WON_KEY) {
+      if (metric === "closed") result.push(key);
+      continue;
+    }
+    if (customMappings?.[key]) {
+      const m = customMappings[key];
+      if (metric === "totalAppts" && (m === "requested" || m === "confirmed" || m === "showed")) result.push(key);
+      else if (m === metric) result.push(key);
+      continue;
+    }
+    if (metric === "leads") {
+      if (pipelineStages?.length) {
+        const sorted = [...pipelineStages].sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+        const beforeFirstAppt = sorted.findIndex((s) => stageMatches(s.name, FIRST_APPT_STAGES));
+        const leadStageNames = beforeFirstAppt >= 0 ? sorted.slice(0, beforeFirstAppt).map((s) => s.name) : sorted.map((s) => s.name);
+        if (leadStageNames.some((n) => n.toLowerCase().trim() === key.toLowerCase().trim())) result.push(key);
+      } else if (stageMatches(key, LEAD_STAGES)) result.push(key);
+    } else if (metric === "requested" && stageMatches(key, REQUESTED_STAGES)) result.push(key);
+    else if (metric === "confirmed" && stageMatches(key, CONFIRMED_STAGES)) result.push(key);
+    else if (metric === "showed" && stageMatches(key, SHOWED_STAGES)) result.push(key);
+    else if (metric === "noShow" && stageMatches(key, NO_SHOW_STAGES)) result.push(key);
+    else if (metric === "closed" && stageMatches(key, SUCCESS_STAGES)) result.push(key);
+    else if (metric === "totalAppts" && (stageMatches(key, REQUESTED_STAGES) || stageMatches(key, CONFIRMED_STAGES) || stageMatches(key, SHOWED_STAGES))) result.push(key);
+  }
+  return result;
+}
+
 export function getUnmappedStages(
   stageNames: string[],
   customMappings?: CustomStageMappings

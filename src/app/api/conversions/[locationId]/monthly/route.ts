@@ -38,6 +38,8 @@ export async function GET(
     const monthsParam = searchParams.get("months");
     const monthsCount = Math.min(Math.max(parseInt(monthsParam ?? "13", 10), 1), 24);
     const clientDate = searchParams.get("clientDate") ?? undefined;
+    const attributionParam = searchParams.get("attribution");
+    const attributionMode = attributionParam === "created" ? "created" : "lastUpdated";
 
     const pipelines = await getPipelines(locationId, stored.access_token);
     const settings = await getLocationSettings(locationId);
@@ -64,7 +66,8 @@ export async function GET(
       locationId,
       pipeline,
       stored.access_token,
-      monthRanges
+      monthRanges,
+      attributionMode
     );
 
     const monthsWithCounts = perMonth.map(({ monthKey, startDate, endDate, counts, values }) => {

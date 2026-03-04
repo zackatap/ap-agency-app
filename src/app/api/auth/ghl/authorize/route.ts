@@ -26,7 +26,7 @@ export async function GET(req: Request) {
     client_id: clientId,
     redirect_uri: redirectUri,
     response_type: "code",
-    scope: "opportunities.readonly locations.readonly oauth.readonly oauth.write",
+    scope: "opportunities.readonly locations.readonly oauth.readonly oauth.write contacts.readonly",
     state,
   });
   const sep = authBase.includes("?") ? "&" : "?";

@@ -98,6 +98,7 @@ export default function ConversionsDashboard() {
   const [monthlyData, setMonthlyData] = useState<MonthlyData[] | null>(null);
   const [monthlyLoading, setMonthlyLoading] = useState(false);
   const [rollupAssumptions, setRollupAssumptions] = useState(false);
+  const [attributionMode, setAttributionMode] = useState<"created" | "lastUpdated">("lastUpdated");
   const [settings, setSettings] = useState<LocationSettings | null>(null);
   const [unmappedStages, setUnmappedStages] = useState<UnmappedStage[]>([]);
   const [allStageMappings, setAllStageMappings] = useState<StageMappingInfo[]>([]);
@@ -161,6 +162,7 @@ export default function ConversionsDashboard() {
     params.set("pipelineId", selectedPipelineId);
     params.set("months", "13");
     params.set("clientDate", getTodayLocal());
+    params.set("attribution", attributionMode);
     const apiUrl = `/api/conversions/${locationId}/monthly?${params.toString()}`;
     setMonthlyLoading(true);
     fetch(apiUrl)
@@ -172,7 +174,7 @@ export default function ConversionsDashboard() {
       })
       .catch(() => setMonthlyData([]))
       .finally(() => setMonthlyLoading(false));
-  }, [activeTab, locationId, selectedPipelineId]);
+  }, [activeTab, locationId, selectedPipelineId, attributionMode]);
 
   const handlePipelineChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const id = e.target.value;
@@ -261,6 +263,7 @@ export default function ConversionsDashboard() {
     params.set("pipelineId", selectedPipelineId);
     params.set("months", "13");
     params.set("clientDate", getTodayLocal());
+    params.set("attribution", attributionMode);
     fetch(`/api/conversions/${locationId}/monthly?${params.toString()}`)
       .then((res) => res.json())
       .then((d: { months: MonthlyData[]; unmappedStages?: UnmappedStage[]; allStageMappings?: StageMappingInfo[] }) => {
@@ -482,6 +485,19 @@ export default function ConversionsDashboard() {
               />
               <span className="text-sm text-slate-400">Rollup Assumptions</span>
             </label>
+            {activeTab === "monthly" && (
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-slate-400">Attribution:</span>
+                <select
+                  value={attributionMode}
+                  onChange={(e) => setAttributionMode(e.target.value as "created" | "lastUpdated")}
+                  className="rounded border border-white/20 bg-white/5 px-2 py-1.5 text-sm text-white focus:border-indigo-500 focus:outline-none"
+                >
+                  <option value="lastUpdated">Last Updated</option>
+                  <option value="created">Created</option>
+                </select>
+              </div>
+            )}
           </div>
         )}
 
@@ -500,6 +516,7 @@ export default function ConversionsDashboard() {
               locationId={locationId ?? ""}
               pipelineId={selectedPipelineId}
               rollupAssumptions={rollupAssumptions}
+              attributionMode={attributionMode}
               adSpend={settings?.adSpend?.[selectedPipelineId] ?? {}}
               onAdSpendChange={(monthKey, value) => {
                 if (!locationId || !selectedPipelineId) return;
@@ -597,10 +614,10 @@ export default function ConversionsDashboard() {
                   )}
                 </div>
 
-                {/* Total Appointments accordion - collapsed hides requested/confirmed/showed breakdown */}
+                {/* Appointments accordion - collapsed hides requested/confirmed/showed breakdown */}
                 <details className="rounded-xl border border-white/10 bg-white/5">
                   <summary className="cursor-pointer px-5 py-4 text-sm text-slate-400 hover:text-slate-300">
-                    Total Appointments <span className="font-medium text-white">({(data.metrics.totalApptsRaw ?? data.metrics.requested + data.metrics.confirmed + data.metrics.showed)})</span>
+                    Appointments <span className="font-medium text-white">({(data.metrics.totalApptsRaw ?? data.metrics.requested + data.metrics.confirmed + data.metrics.showed)})</span>
                   </summary>
                   <div className="border-t border-white/10 px-5 py-4">
                     <div className="flex flex-wrap gap-4 text-sm">
@@ -895,6 +912,7 @@ function MonthToMonthTable({
   locationId,
   pipelineId,
   rollupAssumptions,
+  attributionMode,
   adSpend = {},
   onAdSpendChange,
 }: {
@@ -902,6 +920,7 @@ function MonthToMonthTable({
   locationId: string;
   pipelineId: string;
   rollupAssumptions: boolean;
+  attributionMode: "created" | "lastUpdated";
   adSpend?: Record<string, number>;
   onAdSpendChange?: (monthKey: string, value: number) => void;
 }) {
@@ -918,12 +937,39 @@ function MonthToMonthTable({
     rollupAssumptions ? applyRollup(m.metrics) : m.metrics;
 
   const [appointmentsExpanded, setAppointmentsExpanded] = useState(false);
+  const [drillDown, setDrillDown] = useState<{ label: string; monthKey: string; metric: string } | null>(null);
+  const [drillDownNames, setDrillDownNames] = useState<string[]>([]);
+  const [drillDownLoading, setDrillDownLoading] = useState(false);
+
+  const handleCellClick = (monthKey: string, metric: string, label: string) => {
+    setDrillDown({ label, monthKey, metric });
+    setDrillDownNames([]);
+    setDrillDownLoading(true);
+    const params = new URLSearchParams({
+      pipelineId,
+      monthKey,
+      metric,
+      attribution: attributionMode,
+    });
+    fetch(`/api/conversions/${locationId}/opportunity-detail?${params}`)
+      .then((r) => r.json())
+      .then((d: { names?: string[]; error?: string }) => {
+        setDrillDownNames(d.names ?? []);
+      })
+      .catch(() => setDrillDownNames([]))
+      .finally(() => setDrillDownLoading(false));
+  };
 
   return (
     <div className="rounded-xl border border-white/10 bg-white/5 overflow-hidden">
-      <h2 className="px-5 py-4 text-lg font-semibold text-white">
-        Month to Month Overview
-      </h2>
+      <div className="px-5 py-4">
+        <h2 className="text-lg font-semibold text-white">
+          Month to Month Overview
+        </h2>
+        <p className="mt-0.5 text-xs text-slate-500">
+          Attribution: {attributionMode === "lastUpdated" ? "Last Updated" : "Created"}
+        </p>
+      </div>
       <div className="overflow-x-auto">
         <table className="w-full min-w-[600px]">
           <thead>
@@ -944,7 +990,7 @@ function MonthToMonthTable({
           <tbody className="divide-y divide-white/5">
             <tr>
               <td className="sticky left-0 z-10 bg-slate-900/95 px-4 py-3 text-sm text-slate-300">
-                Total Amount Spent
+                Amount Spent
               </td>
               {months.map((m) => (
                 <td key={m.monthKey} className="px-4 py-2 text-center">
@@ -961,9 +1007,15 @@ function MonthToMonthTable({
                 </td>
               ))}
             </tr>
-            <MetricRow label="Total Leads" values={months.map((m) => getMetrics(m).leads)} />
             <MetricRow
-              label="Total CPL"
+              label="Leads"
+              values={months.map((m) => getMetrics(m).leads)}
+              metric="leads"
+              monthKeys={months.map((m) => m.monthKey)}
+              onCellClick={handleCellClick}
+            />
+            <MetricRow
+              label="CPL"
               values={months.map((m) => {
                 const spend = adSpend[m.monthKey] ?? 0;
                 const leads = getMetrics(m).leads;
@@ -980,18 +1032,35 @@ function MonthToMonthTable({
               months={months}
               expanded={appointmentsExpanded}
               onToggle={() => setAppointmentsExpanded((e) => !e)}
+              metric="totalAppts"
+              onCellClick={handleCellClick}
             />
             {appointmentsExpanded && (
               <>
                 <MetricRow
-                  label="Total Appt Requested"
+                  label="Appt Requested"
                   values={months.map((m) => getMetrics(m).requested)}
+                  subRow
+                  metric="requested"
+                  monthKeys={months.map((m) => m.monthKey)}
+                  onCellClick={handleCellClick}
                 />
                 <MetricRow
-                  label="Total Appt Confirmed"
+                  label="Appt Confirmed"
                   values={months.map((m) => getMetrics(m).confirmed)}
+                  subRow
+                  metric="confirmed"
+                  monthKeys={months.map((m) => m.monthKey)}
+                  onCellClick={handleCellClick}
                 />
-                <MetricRow label="Total Show" values={months.map((m) => getMetrics(m).showed)} />
+                <MetricRow
+                  label="Show"
+                  values={months.map((m) => getMetrics(m).showed)}
+                  subRow
+                  metric="showed"
+                  monthKeys={months.map((m) => m.monthKey)}
+                  onCellClick={handleCellClick}
+                />
               </>
             )}
             <MetricRow
@@ -999,10 +1068,22 @@ function MonthToMonthTable({
               values={months.map((m) => getMetrics(m).showRate)}
               format="percent"
             />
-            <MetricRow label="Total No Show" values={months.map((m) => getMetrics(m).noShow)} />
-            <MetricRow label="Total Closed" values={months.map((m) => getMetrics(m).closed)} />
             <MetricRow
-              label="Total CPS"
+              label="No Show"
+              values={months.map((m) => getMetrics(m).noShow)}
+              metric="noShow"
+              monthKeys={months.map((m) => m.monthKey)}
+              onCellClick={handleCellClick}
+            />
+            <MetricRow
+              label="Closed"
+              values={months.map((m) => getMetrics(m).closed)}
+              metric="closed"
+              monthKeys={months.map((m) => m.monthKey)}
+              onCellClick={handleCellClick}
+            />
+            <MetricRow
+              label="CPS"
               values={months.map((m) => {
                 const spend = adSpend[m.monthKey] ?? 0;
                 const closed = m.metrics.closed;
@@ -1011,7 +1092,7 @@ function MonthToMonthTable({
               format="currency"
             />
             <MetricRow
-              label="Total CPC"
+              label="CPC"
               values={months.map((m) => {
                 const spend = adSpend[m.monthKey] ?? 0;
                 const confirmed = m.metrics.confirmed;
@@ -1022,6 +1103,48 @@ function MonthToMonthTable({
           </tbody>
         </table>
       </div>
+
+      {drillDown && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          onClick={() => setDrillDown(null)}
+        >
+          <div
+            className="max-h-[80vh] w-full max-w-md rounded-xl border border-white/10 bg-slate-900 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+              <h3 className="font-semibold text-white">
+                {drillDown.label} — {monthLabel(drillDown.monthKey)}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setDrillDown(null)}
+                className="text-slate-400 hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="max-h-[60vh] overflow-y-auto p-4">
+              {drillDownLoading ? (
+                <div className="flex items-center justify-center py-12">
+                  <div className="h-8 w-8 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent" />
+                </div>
+              ) : drillDownNames.length > 0 ? (
+                <ul className="space-y-1.5 text-sm text-slate-300">
+                  {drillDownNames.map((name, i) => (
+                    <li key={i} className="truncate">
+                      {name}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-slate-500">No opportunities found.</p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -1030,15 +1153,18 @@ function TotalAppointmentsRow({
   months,
   expanded,
   onToggle,
+  metric,
+  onCellClick,
 }: {
   months: MonthlyData[];
   expanded?: boolean;
   onToggle?: () => void;
+  metric?: string;
+  onCellClick?: (monthKey: string, metric: string, label: string) => void;
 }) {
-  // Always use raw counts (requested + confirmed + showed) - not rolled up
   const values = months.map((m) => {
     const { requested, confirmed, showed } = m.metrics;
-    return (m.metrics.totalApptsRaw ?? requested + confirmed + showed);
+    return m.metrics.totalApptsRaw ?? requested + confirmed + showed;
   });
   return (
     <tr>
@@ -1049,12 +1175,22 @@ function TotalAppointmentsRow({
           className="flex items-center gap-2 text-left text-sm text-slate-300 hover:text-white"
         >
           <span className="tabular-nums">{expanded ? "▼" : "▶"}</span>
-          Total Appointments
+          Appointments
         </button>
       </td>
       {values.map((v, i) => (
         <td key={i} className="px-4 py-2 text-center text-sm tabular-nums text-white">
-          {v}
+          {metric && onCellClick && typeof v === "number" && v > 0 ? (
+            <button
+              type="button"
+              onClick={() => onCellClick(months[i].monthKey, metric, "Appointments")}
+              className="rounded px-1 py-0.5 text-indigo-300 hover:bg-indigo-500/20 hover:text-white underline decoration-dotted underline-offset-2"
+            >
+              {v}
+            </button>
+          ) : (
+            v
+          )}
         </td>
       ))}
     </tr>
@@ -1065,10 +1201,18 @@ function MetricRow({
   label,
   values,
   format = "number",
+  subRow,
+  metric,
+  monthKeys,
+  onCellClick,
 }: {
   label: string;
   values: (number | null)[];
   format?: "number" | "percent" | "currency";
+  subRow?: boolean;
+  metric?: string;
+  monthKeys?: string[];
+  onCellClick?: (monthKey: string, metric: string, label: string) => void;
 }) {
   const fmt = (v: number | null) => {
     if (v == null) return "—";
@@ -1076,14 +1220,25 @@ function MetricRow({
     if (format === "currency") return `$${v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
     return String(v);
   };
+  const clickable = metric && monthKeys && onCellClick && format === "number";
   return (
-    <tr>
-      <td className="sticky left-0 z-10 bg-slate-900/95 px-4 py-2 text-sm text-slate-300">
+    <tr className={subRow ? "bg-slate-800/60" : undefined}>
+      <td className={`sticky left-0 z-10 px-4 py-2 text-sm text-slate-300 ${subRow ? "pl-8 bg-slate-800/60" : "bg-slate-900/95"}`}>
         {label}
       </td>
       {values.map((v, i) => (
-        <td key={i} className="px-4 py-2 text-center text-sm tabular-nums text-white">
-          {fmt(v)}
+        <td key={i} className={`px-4 py-2 text-center text-sm tabular-nums text-white ${subRow ? "bg-slate-800/60" : ""}`}>
+          {clickable && typeof v === "number" && v > 0 && monthKeys[i] ? (
+            <button
+              type="button"
+              onClick={() => onCellClick(monthKeys[i], metric, label)}
+              className="rounded px-1 py-0.5 text-indigo-300 hover:bg-indigo-500/20 hover:text-white underline decoration-dotted underline-offset-2"
+            >
+              {fmt(v)}
+            </button>
+          ) : (
+            fmt(v)
+          )}
         </td>
       ))}
     </tr>
