@@ -72,7 +72,7 @@ const REQUESTED_STAGES = [
 const CONFIRMED_STAGES = ["appointment confirmed", "appt confirmed"];
 
 /** Stage names for "showed up" */
-const SHOWED_STAGES = ["showed up", "showed"];
+const SHOWED_STAGES = ["showed up", "showed", "did not sign on"];
 
 /** Stage names for "success" / closed */
 const SUCCESS_STAGES = ["success", "closed", "won", "pay per visit"];
@@ -97,6 +97,7 @@ const FIRST_APPT_STAGES = [
   "appointment requested",
   "appt unconfirmed",
   "appt requested",
+  "prepay"
 ];
 
 function stageMatches(name: string, targets: string[]): boolean {
