@@ -66,6 +66,7 @@ const REQUESTED_STAGES = [
   "appointment requested",
   "appt unconfirmed",
   "appt requested",
+  "prepay",
 ];
 
 /** Stage names that count as "appointment confirmed" */
