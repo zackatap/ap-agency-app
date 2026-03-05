@@ -75,8 +75,12 @@ interface LocationSettings {
   locationId: string;
   defaultPipelineId: string | null;
   defaultCampaignId: string | null;
+  facebookAdAccountId?: string | null;
+  facebookCampaignKeyword?: string | null;
   stageMappings: Record<string, Record<string, MappableStage>>;
   adSpend: Record<string, Record<string, number>>;
+  rollupAssumptions?: boolean;
+  attributionMode?: "created" | "lastUpdated";
 }
 
 export default function ConversionsDashboard() {
@@ -97,17 +101,27 @@ export default function ConversionsDashboard() {
   const [activeTab, setActiveTab] = useState<"funnel" | "monthly">("funnel");
   const [monthlyData, setMonthlyData] = useState<MonthlyData[] | null>(null);
   const [monthlyLoading, setMonthlyLoading] = useState(false);
-  const [rollupAssumptions, setRollupAssumptions] = useState(false);
+  const [rollupAssumptions, setRollupAssumptions] = useState(true); // "On Totals" default
   const [attributionMode, setAttributionMode] = useState<"created" | "lastUpdated">("lastUpdated");
   const [settings, setSettings] = useState<LocationSettings | null>(null);
   const [unmappedStages, setUnmappedStages] = useState<UnmappedStage[]>([]);
   const [allStageMappings, setAllStageMappings] = useState<StageMappingInfo[]>([]);
+  const [campaignKeyword, setCampaignKeyword] = useState("");
+  const [facebookAdSpend, setFacebookAdSpend] = useState<Record<string, number>>({});
+  const [facebookAdSpendLoading, setFacebookAdSpendLoading] = useState(false);
 
   useEffect(() => {
     if (!locationId) return;
     fetch(`/api/location/${locationId}/settings`)
       .then((res) => (res.ok ? res.json() : null))
-      .then((s) => (s ? setSettings(s) : null))
+      .then((s) => {
+        if (s) {
+          setSettings(s);
+          setCampaignKeyword(s.facebookCampaignKeyword ?? "");
+          if (s.rollupAssumptions !== undefined) setRollupAssumptions(s.rollupAssumptions);
+          if (s.attributionMode !== undefined) setAttributionMode(s.attributionMode);
+        }
+      })
       .catch(() => {});
   }, [locationId]);
 
@@ -175,6 +189,40 @@ export default function ConversionsDashboard() {
       .catch(() => setMonthlyData([]))
       .finally(() => setMonthlyLoading(false));
   }, [activeTab, locationId, selectedPipelineId, attributionMode]);
+
+  // Fetch Facebook ad spend when on monthly tab with ad account + keyword + monthly data
+  useEffect(() => {
+    const adAccountId = settings?.facebookAdAccountId?.trim();
+    if (
+      !locationId ||
+      !adAccountId ||
+      !monthlyData?.length ||
+      activeTab !== "monthly"
+    ) {
+      if (!adAccountId) setFacebookAdSpend({});
+      return;
+    }
+    setFacebookAdSpendLoading(true);
+    const monthKeys = monthlyData.map((m) => m.monthKey);
+    const params = new URLSearchParams({
+      monthKeys: monthKeys.join(","),
+    });
+    const kw = campaignKeyword.trim();
+    if (kw) params.set("campaignKeyword", kw);
+    fetch(`/api/location/${locationId}/facebook/insights?${params}`)
+      .then((res) => res.json())
+      .then((d: { spendByMonth?: Record<string, number>; error?: string }) => {
+        setFacebookAdSpend(d.spendByMonth ?? {});
+      })
+      .catch(() => setFacebookAdSpend({}))
+      .finally(() => setFacebookAdSpendLoading(false));
+  }, [
+    locationId,
+    settings?.facebookAdAccountId,
+    monthlyData,
+    campaignKeyword,
+    activeTab,
+  ]);
 
   const handlePipelineChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const id = e.target.value;
@@ -403,17 +451,74 @@ export default function ConversionsDashboard() {
             </div>
             )}
             {activeTab === "monthly" && (
-            <div className="min-w-[160px]">
-              <label className="mb-1.5 block text-sm font-medium text-slate-400">
-                Campaign
-              </label>
-              <select
-                disabled
-                className="w-full rounded-xl border border-white/20 bg-white/5 px-4 py-2.5 text-slate-500"
-              >
-                <option className="bg-slate-900">—</option>
-              </select>
-            </div>
+            <>
+              <div className="min-w-[200px]">
+                <label className="mb-1.5 block text-sm font-medium text-slate-400">
+                  Facebook Ad Account ID
+                </label>
+                <input
+                  type="text"
+                  placeholder="act_123456789"
+                  value={settings?.facebookAdAccountId ?? ""}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setSettings((prev) =>
+                      prev ? { ...prev, facebookAdAccountId: v || null } : prev
+                    );
+                  }}
+                  onBlur={(e) => {
+                    const v = (e.target.value ?? "").trim();
+                    if (!locationId) return;
+                    fetch(`/api/location/${locationId}/settings`, {
+                      method: "PATCH",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        facebookAdAccountId: v || null,
+                      }),
+                    })
+                      .then((res) => (res.ok ? res.json() : null))
+                      .then((s) => s && setSettings((prev) => (prev ? { ...prev, ...s } : prev)))
+                      .catch(() => {});
+                  }}
+                  className="w-full rounded-xl border border-white/20 bg-white/5 px-4 py-2.5 text-white placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                />
+              </div>
+              <div className="min-w-[160px]">
+                <label className="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-slate-400">
+                  Campaign Keyword
+                  <span
+                    className="group relative inline-flex cursor-help"
+                    title="Matches campaigns containing this word (e.g. pain = all with Pain or PAIN)"
+                  >
+                    <svg className="h-4 w-4 text-slate-500" fill="currentColor" viewBox="0 0 20 20" aria-hidden>
+                      <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                    </svg>
+                    <span className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 w-48 -translate-x-1/2 rounded bg-slate-800 px-2 py-1.5 text-xs text-slate-200 opacity-0 shadow-lg transition-opacity group-hover:opacity-100">
+                      Matches campaigns containing this word (e.g. pain = all with Pain or PAIN)
+                    </span>
+                  </span>
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. pain"
+                  value={campaignKeyword}
+                  onChange={(e) => setCampaignKeyword(e.target.value)}
+                  onBlur={(e) => {
+                    const v = (e.target.value ?? "").trim();
+                    if (!locationId || v === (settings?.facebookCampaignKeyword ?? "")) return;
+                    fetch(`/api/location/${locationId}/settings`, {
+                      method: "PATCH",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ facebookCampaignKeyword: v || null }),
+                    })
+                      .then((res) => (res.ok ? res.json() : null))
+                      .then((s) => s && setSettings((prev) => (prev ? { ...prev, ...s } : prev)))
+                      .catch(() => {});
+                  }}
+                  className="block w-full rounded-xl border border-white/20 bg-white/5 px-4 py-2.5 text-white placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                />
+              </div>
+            </>
             )}
             {activeTab === "funnel" && dateRangePreset === "custom" && (
               <div className="flex items-end gap-2">
@@ -451,7 +556,7 @@ export default function ConversionsDashboard() {
           </div>
         )}
 
-        {/* Tabs + Rollup toggle */}
+        {/* Tabs + Calculate dropdown */}
         {!error && (data?.pipelines?.length ?? 0) > 0 && (
           <div className="mb-6 flex flex-wrap items-center gap-4">
             <div className="flex gap-2">
@@ -476,21 +581,75 @@ export default function ConversionsDashboard() {
               Month to Month
             </button>
             </div>
-            <label className="flex cursor-pointer items-center gap-2">
-              <input
-                type="checkbox"
-                checked={rollupAssumptions}
-                onChange={(e) => setRollupAssumptions(e.target.checked)}
-                className="rounded border-white/20 bg-white/5"
-              />
-              <span className="text-sm text-slate-400">Rollup Assumptions</span>
-            </label>
+            <div className="flex items-center gap-2">
+              <span className="flex items-center gap-1.5 text-sm text-slate-400">
+                Calculate:
+                <span
+                  className="group relative inline-flex cursor-help"
+                  title="Show totals based on actual amount (On Totals) or current stage counts."
+                >
+                  <svg className="h-4 w-4 text-slate-500" fill="currentColor" viewBox="0 0 20 20" aria-hidden>
+                    <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                  </svg>
+                  <span className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 w-72 -translate-x-1/2 rounded bg-slate-800 px-2 py-1.5 text-xs text-slate-200 opacity-0 shadow-lg transition-opacity group-hover:opacity-100">
+                    Show totals based on the actual amount (On Totals), considering that an opportunity was also a count for the previous stage. You can also show based on current stage count. Ex: 10 in Leads Stage & 10 in Appointments Stage, &quot;On Totals&quot; would display 20 Leads because those appointments were Leads as well.
+                  </span>
+                </span>
+              </span>
+              <select
+                value={rollupAssumptions ? "onTotals" : "currentStageCounts"}
+                onChange={(e) => {
+                  const v = e.target.value === "onTotals";
+                  setRollupAssumptions(v);
+                  if (locationId) {
+                    fetch(`/api/location/${locationId}/settings`, {
+                      method: "PATCH",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ rollupAssumptions: v }),
+                    })
+                      .then((res) => (res.ok ? res.json() : null))
+                      .then((s) => s && setSettings((prev) => (prev ? { ...prev, rollupAssumptions: v } : prev)))
+                      .catch(() => {});
+                  }
+                }}
+                className="rounded border border-white/20 bg-white/5 px-2 py-1.5 text-sm text-white focus:border-indigo-500 focus:outline-none"
+              >
+                <option value="onTotals">On Totals</option>
+                <option value="currentStageCounts">Current Stage Counts</option>
+              </select>
+            </div>
             {activeTab === "monthly" && (
               <div className="flex items-center gap-2">
-                <span className="text-sm text-slate-400">Attribution:</span>
+                <span className="flex items-center gap-1.5 text-sm text-slate-400">
+                  Attribution:
+                  <span
+                    className="group relative inline-flex cursor-help"
+                    title="Attribute opportunity to created date or last stage change."
+                  >
+                    <svg className="h-4 w-4 text-slate-500" fill="currentColor" viewBox="0 0 20 20" aria-hidden>
+                      <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                    </svg>
+                    <span className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 w-72 -translate-x-1/2 rounded bg-slate-800 px-2 py-1.5 text-xs text-slate-200 opacity-0 shadow-lg transition-opacity group-hover:opacity-100">
+                      If a Lead is generated in Jan, but closes in March, choose to attribute that to Jan (Date Created) or March (Last Updated).
+                    </span>
+                  </span>
+                </span>
                 <select
                   value={attributionMode}
-                  onChange={(e) => setAttributionMode(e.target.value as "created" | "lastUpdated")}
+                  onChange={(e) => {
+                    const v = e.target.value as "created" | "lastUpdated";
+                    setAttributionMode(v);
+                    if (locationId) {
+                      fetch(`/api/location/${locationId}/settings`, {
+                        method: "PATCH",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ attributionMode: v }),
+                      })
+                        .then((res) => (res.ok ? res.json() : null))
+                        .then((s) => s && setSettings((prev) => (prev ? { ...prev, attributionMode: v } : prev)))
+                        .catch(() => {});
+                    }
+                  }}
                   className="rounded border border-white/20 bg-white/5 px-2 py-1.5 text-sm text-white focus:border-indigo-500 focus:outline-none"
                 >
                   <option value="lastUpdated">Last Updated</option>
@@ -517,9 +676,15 @@ export default function ConversionsDashboard() {
               pipelineId={selectedPipelineId}
               rollupAssumptions={rollupAssumptions}
               attributionMode={attributionMode}
-              adSpend={settings?.adSpend?.[selectedPipelineId] ?? {}}
+              adSpend={
+                settings?.facebookAdAccountId?.trim()
+                  ? facebookAdSpend
+                  : (settings?.adSpend?.[selectedPipelineId] ?? {})
+              }
+              adSpendLoading={!!(settings?.facebookAdAccountId?.trim() && facebookAdSpendLoading)}
+              adSpendFromFacebook={!!settings?.facebookAdAccountId?.trim()}
               onAdSpendChange={(monthKey, value) => {
-                if (!locationId || !selectedPipelineId) return;
+                if (!locationId || !selectedPipelineId || settings?.facebookAdAccountId?.trim()) return;
                 const next = {
                   ...(settings?.adSpend ?? {}),
                   [selectedPipelineId]: {
@@ -617,13 +782,13 @@ export default function ConversionsDashboard() {
                 {/* Appointments accordion - collapsed hides requested/confirmed/showed breakdown */}
                 <details className="rounded-xl border border-white/10 bg-white/5">
                   <summary className="cursor-pointer px-5 py-4 text-sm text-slate-400 hover:text-slate-300">
-                    Appointments <span className="font-medium text-white">({(data.metrics.totalApptsRaw ?? data.metrics.requested + data.metrics.confirmed + data.metrics.showed)})</span>
+                    Appointments <span className="font-medium text-white">({metrics.totalAppts})</span>
                   </summary>
                   <div className="border-t border-white/10 px-5 py-4">
                     <div className="flex flex-wrap gap-4 text-sm">
-                      <span><span className="text-slate-500">Requested:</span> {data.metrics.requested}</span>
-                      <span><span className="text-slate-500">Confirmed:</span> {data.metrics.confirmed}</span>
-                      <span><span className="text-slate-500">Showed:</span> {data.metrics.showed}</span>
+                      <span><span className="text-slate-500">Requested:</span> {metrics.requested}</span>
+                      <span><span className="text-slate-500">Confirmed:</span> {metrics.confirmed}</span>
+                      <span><span className="text-slate-500">Showed:</span> {metrics.showed}</span>
                     </div>
                   </div>
                 </details>
@@ -914,6 +1079,8 @@ function MonthToMonthTable({
   rollupAssumptions,
   attributionMode,
   adSpend = {},
+  adSpendLoading,
+  adSpendFromFacebook,
   onAdSpendChange,
 }: {
   months: MonthlyData[];
@@ -922,6 +1089,8 @@ function MonthToMonthTable({
   rollupAssumptions: boolean;
   attributionMode: "created" | "lastUpdated";
   adSpend?: Record<string, number>;
+  adSpendLoading?: boolean;
+  adSpendFromFacebook?: boolean;
   onAdSpendChange?: (monthKey: string, value: number) => void;
 }) {
   const setSpend = (monthKey: string, value: number) => {
@@ -990,20 +1159,33 @@ function MonthToMonthTable({
           <tbody className="divide-y divide-white/5">
             <tr>
               <td className="sticky left-0 z-10 bg-slate-900/95 px-4 py-3 text-sm text-slate-300">
-                Amount Spent
+                Ad Spend
               </td>
               {months.map((m) => (
                 <td key={m.monthKey} className="px-4 py-2 text-center">
-                  <input
-                    type="number"
-                    min={0}
-                    step={0.01}
-                    value={adSpend[m.monthKey] ?? ""}
-                    onChange={(e) => setSpend(m.monthKey, parseFloat(e.target.value) || 0)}
-                    onBlur={(e) => setSpend(m.monthKey, parseFloat((e.target as HTMLInputElement).value) || 0)}
-                    placeholder="0"
-                    className="w-20 rounded border border-white/20 bg-white/5 px-2 py-1 text-center text-sm text-white placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none"
-                  />
+                  {adSpendFromFacebook ? (
+                    <span className="inline-flex w-20 items-center justify-center text-sm text-white">
+                      {adSpendLoading ? (
+                        <span
+                          className="inline-block h-4 w-4 border-2 border-slate-500 border-t-transparent rounded-full animate-spin"
+                          aria-hidden
+                        />
+                      ) : (adSpend[m.monthKey] ?? 0) > 0
+                        ? "$" + Number(adSpend[m.monthKey]).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })
+                        : "—"}
+                    </span>
+                  ) : (
+                    <input
+                      type="number"
+                      min={0}
+                      step={0.01}
+                      value={adSpend[m.monthKey] ?? ""}
+                      onChange={(e) => setSpend(m.monthKey, parseFloat(e.target.value) || 0)}
+                      onBlur={(e) => setSpend(m.monthKey, parseFloat((e.target as HTMLInputElement).value) || 0)}
+                      placeholder="0"
+                      className="w-20 rounded border border-white/20 bg-white/5 px-2 py-1 text-center text-sm text-white placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none"
+                    />
+                  )}
                 </td>
               ))}
             </tr>
@@ -1015,7 +1197,7 @@ function MonthToMonthTable({
               onCellClick={handleCellClick}
             />
             <MetricRow
-              label="CPL"
+              label="Cost Per Lead"
               values={months.map((m) => {
                 const spend = adSpend[m.monthKey] ?? 0;
                 const leads = getMetrics(m).leads;
@@ -1030,6 +1212,7 @@ function MonthToMonthTable({
             />
             <TotalAppointmentsRow
               months={months}
+              getMetrics={getMetrics}
               expanded={appointmentsExpanded}
               onToggle={() => setAppointmentsExpanded((e) => !e)}
               metric="totalAppts"
@@ -1064,16 +1247,25 @@ function MonthToMonthTable({
               </>
             )}
             <MetricRow
-              label="Show %"
-              values={months.map((m) => getMetrics(m).showRate)}
-              format="percent"
-            />
-            <MetricRow
               label="No Show"
               values={months.map((m) => getMetrics(m).noShow)}
               metric="noShow"
               monthKeys={months.map((m) => m.monthKey)}
               onCellClick={handleCellClick}
+            />
+            <MetricRow
+              label="Show %"
+              values={months.map((m) => getMetrics(m).showRate)}
+              format="percent"
+            />
+            <MetricRow
+              label="Cost Per Show"
+              values={months.map((m) => {
+                const spend = adSpend[m.monthKey] ?? 0;
+                const showed = getMetrics(m).showed;
+                return showed > 0 && spend > 0 ? spend / showed : null;
+              })}
+              format="currency"
             />
             <MetricRow
               label="Closed"
@@ -1083,20 +1275,11 @@ function MonthToMonthTable({
               onCellClick={handleCellClick}
             />
             <MetricRow
-              label="CPS"
+              label="Cost Per Close"
               values={months.map((m) => {
                 const spend = adSpend[m.monthKey] ?? 0;
-                const closed = m.metrics.closed;
+                const closed = getMetrics(m).closed;
                 return closed > 0 && spend > 0 ? spend / closed : null;
-              })}
-              format="currency"
-            />
-            <MetricRow
-              label="CPC"
-              values={months.map((m) => {
-                const spend = adSpend[m.monthKey] ?? 0;
-                const confirmed = m.metrics.confirmed;
-                return confirmed > 0 && spend > 0 ? spend / confirmed : null;
               })}
               format="currency"
             />
@@ -1151,20 +1334,22 @@ function MonthToMonthTable({
 
 function TotalAppointmentsRow({
   months,
+  getMetrics,
   expanded,
   onToggle,
   metric,
   onCellClick,
 }: {
   months: MonthlyData[];
+  getMetrics?: (m: MonthlyData) => FunnelMetrics;
   expanded?: boolean;
   onToggle?: () => void;
   metric?: string;
   onCellClick?: (monthKey: string, metric: string, label: string) => void;
 }) {
   const values = months.map((m) => {
-    const { requested, confirmed, showed } = m.metrics;
-    return m.metrics.totalApptsRaw ?? requested + confirmed + showed;
+    const metrics = getMetrics ? getMetrics(m) : m.metrics;
+    return metrics.totalAppts ?? metrics.totalApptsRaw ?? metrics.requested + metrics.confirmed + metrics.showed;
   });
   return (
     <tr>

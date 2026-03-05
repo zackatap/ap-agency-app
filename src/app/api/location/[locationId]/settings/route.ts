@@ -31,21 +31,29 @@ export async function GET(
 
     const settings = await getLocationSettings(locationId);
     if (!settings) {
-      return NextResponse.json({
-        locationId,
-        defaultPipelineId: null,
-        defaultCampaignId: null,
-        stageMappings: {},
-        adSpend: {},
-      });
+    return NextResponse.json({
+      locationId,
+      defaultPipelineId: null,
+      defaultCampaignId: null,
+      facebookAdAccountId: null,
+      facebookCampaignKeyword: null,
+      stageMappings: {},
+      adSpend: {},
+      rollupAssumptions: true,
+      attributionMode: "lastUpdated",
+    });
     }
 
     return NextResponse.json({
       locationId: settings.locationId,
       defaultPipelineId: settings.defaultPipelineId,
       defaultCampaignId: settings.defaultCampaignId,
+      facebookAdAccountId: settings.facebookAdAccountId,
+      facebookCampaignKeyword: settings.facebookCampaignKeyword,
       stageMappings: settings.stageMappings,
       adSpend: settings.adSpend,
+      rollupAssumptions: settings.rollupAssumptions,
+      attributionMode: settings.attributionMode,
     });
   } catch (err) {
     console.error("[location/settings] GET error:", err);
@@ -81,8 +89,12 @@ export async function PATCH(
     const patch: {
       defaultPipelineId?: string | null;
       defaultCampaignId?: string | null;
+      facebookAdAccountId?: string | null;
+      facebookCampaignKeyword?: string | null;
       stageMappings?: StageMappings;
       adSpend?: AdSpend;
+      rollupAssumptions?: boolean;
+      attributionMode?: "created" | "lastUpdated";
       stageMapping?: {
         pipelineId: string;
         stageName: string;
@@ -93,8 +105,12 @@ export async function PATCH(
     let finalPatch: Partial<{
       defaultPipelineId: string | null;
       defaultCampaignId: string | null;
+      facebookAdAccountId: string | null;
+      facebookCampaignKeyword: string | null;
       stageMappings: StageMappings;
       adSpend: AdSpend;
+      rollupAssumptions: boolean;
+      attributionMode: "created" | "lastUpdated";
     }> = {};
 
     if (patch.defaultPipelineId !== undefined) {
@@ -103,11 +119,23 @@ export async function PATCH(
     if (patch.defaultCampaignId !== undefined) {
       finalPatch.defaultCampaignId = patch.defaultCampaignId;
     }
+    if (patch.facebookAdAccountId !== undefined) {
+      finalPatch.facebookAdAccountId = patch.facebookAdAccountId;
+    }
+    if (patch.facebookCampaignKeyword !== undefined) {
+      finalPatch.facebookCampaignKeyword = patch.facebookCampaignKeyword;
+    }
     if (patch.stageMappings !== undefined) {
       finalPatch.stageMappings = patch.stageMappings;
     }
     if (patch.adSpend !== undefined) {
       finalPatch.adSpend = patch.adSpend;
+    }
+    if (patch.rollupAssumptions !== undefined) {
+      finalPatch.rollupAssumptions = patch.rollupAssumptions;
+    }
+    if (patch.attributionMode !== undefined) {
+      finalPatch.attributionMode = patch.attributionMode;
     }
 
     if (patch.stageMapping) {
@@ -135,8 +163,12 @@ export async function PATCH(
       locationId: updated.locationId,
       defaultPipelineId: updated.defaultPipelineId,
       defaultCampaignId: updated.defaultCampaignId,
+      facebookAdAccountId: updated.facebookAdAccountId,
+      facebookCampaignKeyword: updated.facebookCampaignKeyword,
       stageMappings: updated.stageMappings,
       adSpend: updated.adSpend,
+      rollupAssumptions: updated.rollupAssumptions,
+      attributionMode: updated.attributionMode,
     });
   } catch (err) {
     console.error("[location/settings] PATCH error:", err);

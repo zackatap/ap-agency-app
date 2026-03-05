@@ -26,7 +26,23 @@ GHL_CLIENT_SECRET=your-client-secret
 GHL_REDIRECT_URI=https://ap-agency-app.vercel.app/api/auth/callback/ghl
 ```
 
-### 4. Embed in GHL
+### 4. Facebook Ad Spend (Month to Month tab)
+
+To pull ad spend directly from Facebook instead of manual entry:
+
+1. Create a [Meta Developer App](https://developers.facebook.com/apps/) and get App ID and App Secret.
+2. Generate a long-lived access token with `ads_read` permission (via [Graph API Explorer](https://developers.facebook.com/tools/explorer/) or a System User in Business Manager).
+3. Add to environment:
+
+   ```
+   META_APP_ID=your-app-id
+   META_APP_SECRET=your-app-secret
+   META_ACCESS_TOKEN=your-long-lived-token
+   ```
+
+4. On the Month to Month tab, enter the Facebook Ad Account ID (e.g. `act_123456789`), then select "All" or a specific campaign. Ad spend will be fetched from the Meta Marketing API.
+
+### 5. Embed in GHL
 
 1. In GoHighLevel, go to **Settings → Custom Menu** (or your location’s menu).
 2. Add a custom menu link that opens at the **location** level.

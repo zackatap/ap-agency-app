@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "meta:exchange-token": "node scripts/exchange-meta-token.mjs"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.0.2",
