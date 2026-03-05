@@ -14,9 +14,8 @@ This app uses **single-location (sub-account) OAuth 2.0** only. No agency/bulk i
    - Production: `https://your-app.vercel.app/api/auth/callback/ghl`
    - Local: `http://localhost:3000/api/auth/callback/ghl`
 
-5. **Scopes** (minimum):
+5. **Scopes** (minimum; no `locations.readonly` for single-location flow):
    - `opportunities.readonly`
-   - `locations.readonly`
    - `contacts.readonly`
    - `oauth.readonly`
    - `oauth.write`

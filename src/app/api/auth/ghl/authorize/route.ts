@@ -14,9 +14,9 @@ import { NextResponse } from "next/server";
 
 const GHL_CHOOSE_LOCATION = "https://marketplace.gohighlevel.com/oauth/chooselocation";
 
+// Single-location OAuth only - no agency/locations API needed
 const SCOPES = [
   "opportunities.readonly",
-  "locations.readonly",
   "contacts.readonly",
   "oauth.readonly",
   "oauth.write",
@@ -52,6 +52,8 @@ export async function GET(req: Request) {
     response_type: "code",
     scope: SCOPES,
     state,
+    // Hint to pre-select this location (not documented by GHL; may be ignored)
+    locationId,
   });
 
   const authUrl = `${process.env.GHL_OAUTH_BASE ?? GHL_CHOOSE_LOCATION}?${params.toString()}`;
