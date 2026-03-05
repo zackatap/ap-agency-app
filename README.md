@@ -4,12 +4,15 @@ A GoHighLevel (GHL) embedded app for **Automated Practice**. It provides pipelin
 
 ## Setup
 
-### 1. GHL Marketplace App
+### 1. GHL Marketplace App (Single-Location OAuth)
 
 1. Create an app in [Developer Marketplace](https://marketplace.gohighlevel.com/)
-2. In **Auth** settings, add your app's scopes (include **opportunities.readonly**)
-3. Add redirect URL: `https://ap-agency-app.vercel.app/api/auth/callback/ghl`
-4. Create a Client Key and copy **Client ID** and **Client Secret**
+2. **Target User**: Set to **Sub-Account** (required for single-location flow)
+3. In **Auth** settings, add scopes: `opportunities.readonly`, `locations.readonly`, `contacts.readonly`, `oauth.readonly`, `oauth.write`
+4. Add redirect URL: `https://your-app.vercel.app/api/auth/callback/ghl`
+5. Create a Client Key and copy **Client ID** and **Client Secret**
+
+See **[docs/GHL-AUTH-SETUP.md](docs/GHL-AUTH-SETUP.md)** for full OAuth setup and iframe notes.
 
 ### 2. Neon Database
 

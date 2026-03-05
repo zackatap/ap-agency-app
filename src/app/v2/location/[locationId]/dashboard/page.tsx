@@ -734,6 +734,9 @@ export default function ConversionsDashboard() {
             <p className="mt-2 text-amber-200/90">
               Authorize this app to read pipeline and opportunity data for this location.
             </p>
+            <p className="mt-1 text-xs text-amber-200/70">
+              If embedded in GHL, Connect opens the auth flow in the main window.
+            </p>
             <a
               href={`/api/auth/ghl/authorize?locationId=${encodeURIComponent(locationId)}`}
               target="_top"

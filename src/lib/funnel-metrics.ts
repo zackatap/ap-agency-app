@@ -311,6 +311,7 @@ export function applyRollup(metrics: FunnelMetrics): FunnelMetrics {
   const confirmedRollup = c + s + n + cl;
   const showedRollup = s + cl; // exclude noShow
 
+  const requestedRollupForTotal = r + c + s + n + cl; // everyone who reached appointment
   const totalApptsRollup = r + c + s; // requested+confirmed+showed (for rate denominators)
   const bookingRate =
     leadsRollup > 0 ? Math.round((requestedRollup / leadsRollup) * 1000) / 10 : null;
@@ -327,8 +328,8 @@ export function applyRollup(metrics: FunnelMetrics): FunnelMetrics {
     requested: requestedRollup,
     confirmed: confirmedRollup,
     showed: showedRollup,
-    totalAppts: r + c,
-    totalApptsRaw: r + c + s,
+    totalAppts: requestedRollupForTotal, // same as requested in rollup: everyone who reached appt stage
+    totalApptsRaw: requestedRollupForTotal,
     bookingRate,
     confirmationRate,
     showRate,
