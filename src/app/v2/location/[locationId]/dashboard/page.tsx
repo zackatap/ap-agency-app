@@ -107,6 +107,18 @@ export default function ConversionsDashboard() {
   const [unmappedStages, setUnmappedStages] = useState<UnmappedStage[]>([]);
   const [allStageMappings, setAllStageMappings] = useState<StageMappingInfo[]>([]);
   const [campaignKeyword, setCampaignKeyword] = useState("");
+  const [sheetCampaignOptions, setSheetCampaignOptions] = useState<string[]>([]);
+  const [sheetConfigLoaded, setSheetConfigLoaded] = useState(false);
+  const [sheetLookupDebug, setSheetLookupDebug] = useState<{
+    searchedFor: string;
+    sheetRowCount: number;
+    matchedRowCount: number;
+    allLocationIdsFromSheet: string[];
+    headerRow?: string[];
+    locationIdColumnIndex?: number;
+    locationIdColumnLetter?: string;
+    reason?: string;
+  } | null>(null);
   const [facebookAdSpend, setFacebookAdSpend] = useState<Record<string, number>>({});
   const [facebookAdSpendLoading, setFacebookAdSpendLoading] = useState(false);
 
@@ -123,6 +135,45 @@ export default function ConversionsDashboard() {
         }
       })
       .catch(() => {});
+  }, [locationId]);
+
+  // Fetch Ad Account ID & Campaign options from Google Sheet
+  useEffect(() => {
+    if (!locationId) return;
+    setSheetConfigLoaded(false);
+    setSheetLookupDebug(null);
+    fetch(`/api/location/${locationId}/facebook-config`)
+      .then((res) => res.json())
+      .then((d: {
+        config?: { adAccountId: string; campaignKeywords: string[] } | null;
+        debug?: { searchedFor: string; sheetRowCount: number; matchedRowCount: number; allLocationIdsFromSheet: string[]; headerRow?: string[]; locationIdColumnIndex?: number; locationIdColumnLetter?: string; reason?: string };
+        error?: string;
+      }) => {
+        const config = d.config;
+        if (d.debug) setSheetLookupDebug(d.debug);
+        if (config?.adAccountId) {
+          setSettings((prev) => (prev ? { ...prev, facebookAdAccountId: config.adAccountId } : prev));
+          setSheetCampaignOptions(config.campaignKeywords ?? []);
+          fetch(`/api/location/${locationId}/settings`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ facebookAdAccountId: config.adAccountId }),
+          }).catch(() => {});
+        } else {
+          setSheetCampaignOptions([]);
+        }
+      })
+      .catch((err) => {
+        setSheetCampaignOptions([]);
+        setSheetLookupDebug({
+          searchedFor: locationId,
+          sheetRowCount: 0,
+          matchedRowCount: 0,
+          allLocationIdsFromSheet: [],
+          reason: err?.message ?? "Request failed",
+        });
+      })
+      .finally(() => setSheetConfigLoaded(true));
   }, [locationId]);
 
   useEffect(() => {
@@ -458,7 +509,7 @@ export default function ConversionsDashboard() {
                 </label>
                 <input
                   type="text"
-                  placeholder="act_123456789"
+                  placeholder={sheetConfigLoaded ? "Not found in sheet" : "Loading…"}
                   value={settings?.facebookAdAccountId ?? ""}
                   onChange={(e) => {
                     const v = e.target.value;
@@ -482,41 +533,79 @@ export default function ConversionsDashboard() {
                   }}
                   className="w-full rounded-xl border border-white/20 bg-white/5 px-4 py-2.5 text-white placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                 />
+                {sheetConfigLoaded && !settings?.facebookAdAccountId && sheetLookupDebug && (
+                  <details className="mt-2">
+                    <summary className="cursor-pointer text-xs text-amber-400 hover:text-amber-300">
+                      Why not found?
+                    </summary>
+                    <div className="mt-1 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-xs text-amber-200/90 space-y-1">
+                      <p><strong>Searched for:</strong> {sheetLookupDebug.searchedFor}</p>
+                      <p><strong>Reason:</strong> {sheetLookupDebug.reason}</p>
+                      <p><strong>Sheet rows:</strong> {sheetLookupDebug.sheetRowCount}</p>
+                      {sheetLookupDebug.locationIdColumnLetter != null && (
+                        <p><strong>Location ID column:</strong> {sheetLookupDebug.locationIdColumnLetter} (index {sheetLookupDebug.locationIdColumnIndex})</p>
+                      )}
+                      {sheetLookupDebug.headerRow && sheetLookupDebug.headerRow.length > 0 && (
+                        <div>
+                          <p><strong>Header row (first 50 cols):</strong></p>
+                          <pre className="mt-0.5 max-h-24 overflow-y-auto overflow-x-auto whitespace-pre-wrap break-all text-[10px] bg-black/20 rounded p-1.5">
+                            {sheetLookupDebug.headerRow.slice(0, 50).map((h, i) => `${i}: ${h}`).join("\n")}
+                          </pre>
+                        </div>
+                      )}
+                      <div>
+                        <p><strong>All IDs in column ({sheetLookupDebug.allLocationIdsFromSheet?.length ?? 0}):</strong></p>
+                        <pre className="mt-0.5 max-h-48 overflow-y-auto overflow-x-auto whitespace-pre-wrap break-all text-[10px] bg-black/20 rounded p-1.5">
+                          {sheetLookupDebug.allLocationIdsFromSheet?.length ? sheetLookupDebug.allLocationIdsFromSheet.join("\n") : "(none – column may be wrong or empty)"}
+                        </pre>
+                      </div>
+                    </div>
+                  </details>
+                )}
               </div>
               <div className="min-w-[160px]">
                 <label className="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-slate-400">
-                  Campaign Keyword
+                  Campaign
                   <span
                     className="group relative inline-flex cursor-help"
-                    title="Matches campaigns containing this word (e.g. pain = all with Pain or PAIN)"
+                    title="Filter ad spend by campaign keyword from sheet"
                   >
                     <svg className="h-4 w-4 text-slate-500" fill="currentColor" viewBox="0 0 20 20" aria-hidden>
                       <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
                     </svg>
                     <span className="pointer-events-none absolute bottom-full left-1/2 z-10 mb-1 w-48 -translate-x-1/2 rounded bg-slate-800 px-2 py-1.5 text-xs text-slate-200 opacity-0 shadow-lg transition-opacity group-hover:opacity-100">
-                      Matches campaigns containing this word (e.g. pain = all with Pain or PAIN)
+                      Filter by keyword from sheet (All = total ad account spend)
                     </span>
                   </span>
                 </label>
-                <input
-                  type="text"
-                  placeholder="e.g. pain"
+                <select
                   value={campaignKeyword}
-                  onChange={(e) => setCampaignKeyword(e.target.value)}
-                  onBlur={(e) => {
-                    const v = (e.target.value ?? "").trim();
-                    if (!locationId || v === (settings?.facebookCampaignKeyword ?? "")) return;
-                    fetch(`/api/location/${locationId}/settings`, {
-                      method: "PATCH",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ facebookCampaignKeyword: v || null }),
-                    })
-                      .then((res) => (res.ok ? res.json() : null))
-                      .then((s) => s && setSettings((prev) => (prev ? { ...prev, ...s } : prev)))
-                      .catch(() => {});
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setCampaignKeyword(v);
+                    if (locationId) {
+                      fetch(`/api/location/${locationId}/settings`, {
+                        method: "PATCH",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ facebookCampaignKeyword: v || null }),
+                      })
+                        .then((res) => (res.ok ? res.json() : null))
+                        .then((s) => s && setSettings((prev) => (prev ? { ...prev, ...s } : prev)))
+                        .catch(() => {});
+                    }
                   }}
-                  className="block w-full rounded-xl border border-white/20 bg-white/5 px-4 py-2.5 text-white placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                />
+                  disabled={!sheetConfigLoaded}
+                  className="w-full rounded-xl border border-white/20 bg-white/5 px-4 py-2.5 text-white focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:opacity-50"
+                >
+                  <option value="" className="bg-slate-900">
+                    All
+                  </option>
+                  {sheetCampaignOptions.map((kw) => (
+                    <option key={kw} value={kw} className="bg-slate-900">
+                      {kw}
+                    </option>
+                  ))}
+                </select>
               </div>
             </>
             )}
