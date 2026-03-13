@@ -1200,24 +1200,31 @@ function MonthToMonthTable({
   const [appointmentsExpanded, setAppointmentsExpanded] = useState(false);
   const [drillDown, setDrillDown] = useState<{ label: string; monthKey: string; metric: string } | null>(null);
   const [drillDownNames, setDrillDownNames] = useState<string[]>([]);
+  const [drillDownNamesByStage, setDrillDownNamesByStage] = useState<Record<string, string[]> | null>(null);
   const [drillDownLoading, setDrillDownLoading] = useState(false);
 
   const handleCellClick = (monthKey: string, metric: string, label: string) => {
     setDrillDown({ label, monthKey, metric });
     setDrillDownNames([]);
+    setDrillDownNamesByStage(null);
     setDrillDownLoading(true);
     const params = new URLSearchParams({
       pipelineId,
       monthKey,
       metric,
       attribution: attributionMode,
+      onTotals: String(rollupAssumptions),
     });
     fetch(`/api/conversions/${locationId}/opportunity-detail?${params}`)
       .then((r) => r.json())
-      .then((d: { names?: string[]; error?: string }) => {
+      .then((d: { names?: string[]; namesByStage?: Record<string, string[]>; error?: string }) => {
         setDrillDownNames(d.names ?? []);
+        setDrillDownNamesByStage(d.namesByStage ?? null);
       })
-      .catch(() => setDrillDownNames([]))
+      .catch(() => {
+        setDrillDownNames([]);
+        setDrillDownNamesByStage(null);
+      })
       .finally(() => setDrillDownLoading(false));
   };
 
@@ -1404,6 +1411,23 @@ function MonthToMonthTable({
               {drillDownLoading ? (
                 <div className="flex items-center justify-center py-12">
                   <div className="h-8 w-8 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent" />
+                </div>
+              ) : drillDownNamesByStage && Object.keys(drillDownNamesByStage).length > 0 ? (
+                <div className="space-y-4">
+                  {Object.entries(drillDownNamesByStage).map(([stageLabel, stageNames]) =>
+                    stageNames.length > 0 ? (
+                      <div key={stageLabel}>
+                        <p className="mb-1.5 font-medium text-slate-200">{stageLabel}</p>
+                        <ul className="space-y-1 text-sm text-slate-300">
+                          {stageNames.map((name, i) => (
+                            <li key={i} className="truncate pl-2">
+                              • {name}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ) : null
+                  )}
                 </div>
               ) : drillDownNames.length > 0 ? (
                 <ul className="space-y-1.5 text-sm text-slate-300">

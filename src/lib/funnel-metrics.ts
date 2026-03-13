@@ -198,6 +198,60 @@ export function getStageKeysForMetric(
   return result;
 }
 
+/** Rollup drill-down: which funnel groups contribute to this metric when "On Totals" */
+const ROLLUP_GROUP_ORDER: { metric: string; label: string }[] = [
+  { metric: "leads", label: "Leads" },
+  { metric: "requested", label: "Appointment Requested" },
+  { metric: "confirmed", label: "Appointment Confirmed" },
+  { metric: "showed", label: "Show" },
+  { metric: "noShow", label: "No Show" },
+  { metric: "closed", label: "Closed" },
+];
+
+/** Metric -> which sub-metrics (in order) contribute to its rollup */
+const ROLLUP_METRIC_GROUPS: Record<string, string[]> = {
+  leads: ["leads", "requested", "confirmed", "showed", "noShow", "closed"],
+  requested: ["requested", "confirmed", "showed", "noShow", "closed"],
+  confirmed: ["confirmed", "showed", "noShow", "closed"],
+  showed: ["showed", "closed"],
+  noShow: ["noShow"],
+  closed: ["closed"],
+  totalAppts: ["requested", "confirmed", "showed", "noShow", "closed"],
+};
+
+export interface RollupGroup {
+  label: string;
+  stageKeys: string[];
+}
+
+/**
+ * Returns groups for rollup drill-down: when "On Totals", clicking a cell shows names
+ * grouped by funnel stage (Leads, Appointment Requested, etc.).
+ */
+export function getRollupGroupsForMetric(
+  metric: string,
+  stageKeys: string[],
+  customMappings?: CustomStageMappings,
+  pipelineStages?: PipelineStageForOrder[]
+): RollupGroup[] {
+  const subMetrics = ROLLUP_METRIC_GROUPS[metric];
+  if (!subMetrics) return [];
+
+  const labelByMetric: Record<string, string> = {};
+  for (const { metric: m, label } of ROLLUP_GROUP_ORDER) {
+    labelByMetric[m] = label;
+  }
+
+  const groups: RollupGroup[] = [];
+  for (const sub of subMetrics) {
+    const keys = getStageKeysForMetric(sub, stageKeys, customMappings, pipelineStages);
+    if (keys.length > 0) {
+      groups.push({ label: labelByMetric[sub] ?? sub, stageKeys: keys });
+    }
+  }
+  return groups;
+}
+
 export function getUnmappedStages(
   stageNames: string[],
   customMappings?: CustomStageMappings

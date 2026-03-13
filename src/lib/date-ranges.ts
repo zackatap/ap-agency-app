@@ -3,6 +3,30 @@
  * All dates are YYYY-MM-DD (start of day).
  */
 
+/** Timezone for attributing opportunity dates (GHL returns UTC). Default America/Chicago. */
+const OPPORTUNITY_TIMEZONE =
+  process.env.OPPORTUNITY_TIMEZONE?.trim() || "America/Chicago";
+
+/**
+ * Convert ISO UTC string (e.g. from GHL API) to YYYY-MM-DD in the configured timezone.
+ * Fixes misattribution: Jan 31 10:41pm CDT was incorrectly showing as Feb 1 when using UTC.
+ */
+export function isoToLocalDateString(isoString: string): string {
+  if (!isoString) return "";
+  const date = new Date(isoString);
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: OPPORTUNITY_TIMEZONE,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const parts = formatter.formatToParts(date);
+  const y = parts.find((p) => p.type === "year")?.value ?? "";
+  const m = parts.find((p) => p.type === "month")?.value ?? "";
+  const d = parts.find((p) => p.type === "day")?.value ?? "";
+  return `${y}-${m}-${d}`;
+}
+
 export type DateRangePreset =
   | "this_month"
   | "last_month"

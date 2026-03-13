@@ -4,7 +4,7 @@ import { getPipelines, getOpportunityNamesForCell, STATUS_WON_KEY } from "@/lib/
 import { findMatchingPipeline, PAIN_PATIENTS_CONFIG } from "@/lib/pipeline-matching";
 import { getMonthsBack } from "@/lib/date-ranges";
 import { getLocationSettings } from "@/lib/location-settings";
-import { getStageKeysForMetric } from "@/lib/funnel-metrics";
+import { getStageKeysForMetric, getRollupGroupsForMetric } from "@/lib/funnel-metrics";
 
 export async function GET(
   req: Request,
@@ -29,6 +29,7 @@ export async function GET(
     const monthKey = searchParams.get("monthKey");
     const metric = searchParams.get("metric");
     const attribution = searchParams.get("attribution") === "created" ? "created" : "lastUpdated";
+    const onTotals = searchParams.get("onTotals") === "true";
 
     if (!pipelineId || !monthKey || !metric) {
       return NextResponse.json(
@@ -54,32 +55,50 @@ export async function GET(
       return NextResponse.json({ error: "Invalid monthKey", names: [] }, { status: 400 });
     }
 
-    // We need the stage keys that contribute to this metric. Get them by doing a minimal fetch
-    // to get counts, then derive contributing keys. Or we can derive from pipeline + settings.
     const customMappings = settings?.stageMappings?.[pipeline.id];
     const allStageKeys = [
       ...(pipeline.stages ?? []).map((s) => s.name),
       ...Object.keys(customMappings ?? {}),
       STATUS_WON_KEY,
     ];
-    const contributingKeys = getStageKeysForMetric(
-      metric,
-      allStageKeys,
-      customMappings,
-      pipeline.stages ?? undefined
-    );
 
-    const { names } = await getOpportunityNamesForCell(
+    let contributingKeys: string[];
+    let rollupGroups: { label: string; stageKeys: string[] }[] | undefined;
+
+    if (onTotals) {
+      rollupGroups = getRollupGroupsForMetric(
+        metric,
+        allStageKeys,
+        customMappings,
+        pipeline.stages ?? undefined
+      );
+      contributingKeys = rollupGroups.flatMap((g) => g.stageKeys);
+    } else {
+      contributingKeys = getStageKeysForMetric(
+        metric,
+        allStageKeys,
+        customMappings,
+        pipeline.stages ?? undefined
+      );
+    }
+
+    const result = await getOpportunityNamesForCell(
       locationId,
       pipeline,
       stored.access_token,
       monthRanges,
       attribution,
       monthKey,
-      contributingKeys
+      contributingKeys,
+      rollupGroups
     );
 
-    return NextResponse.json({ names, metric, monthKey });
+    return NextResponse.json({
+      names: result.names,
+      namesByStage: result.namesByStage,
+      metric,
+      monthKey,
+    });
   } catch (err) {
     console.error("[opportunity-detail] Error:", err);
     return NextResponse.json(

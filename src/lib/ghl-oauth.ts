@@ -3,6 +3,8 @@
  * Tokens are stored in Redis per locationId (from OAuth callback).
  */
 
+import { isoToLocalDateString } from "@/lib/date-ranges";
+
 const GHL_BASE = "https://services.leadconnectorhq.com";
 const API_VERSION = "2021-07-28";
 
@@ -173,8 +175,8 @@ export async function getOpportunityCountsByStage(
           (opp.date_created as string) ??
           (opp.createdAt as string);
         if (created) {
-          const dateStr = created.split("T")[0];
-          if (dateStr < dateRange.startDate || dateStr > dateRange.endDate) {
+          const dateStr = isoToLocalDateString(created);
+          if (dateStr && (dateStr < dateRange.startDate || dateStr > dateRange.endDate)) {
             continue;
           }
         }
@@ -299,9 +301,10 @@ export async function getOpportunityCountsByStagePerMonth(
         (opp.dateCreated as string) ??
         (opp.date_created as string) ??
         (opp.createdAt as string);
-      const dateStr = attributionMode === "lastUpdated"
-        ? (lastChange ?? created) ? (lastChange ?? created)!.split("T")[0] : null
-        : created ? created.split("T")[0] : null;
+      const raw = attributionMode === "lastUpdated"
+        ? (lastChange ?? created)
+        : created;
+      const dateStr = raw ? isoToLocalDateString(raw) : null;
       if (dateStr) {
         if (!minDateInPage || dateStr < minDateInPage) minDateInPage = dateStr;
       }
@@ -350,8 +353,15 @@ export async function getOpportunityCountsByStagePerMonth(
   });
 }
 
+/** Shape for rollup drill-down groups (matches funnel-metrics RollupGroup) */
+interface RollupGroup {
+  label: string;
+  stageKeys: string[];
+}
+
 /**
  * Fetch opportunity names for a specific cell (monthKey + metric). Used for drill-down.
+ * When rollupGroups is provided (On Totals mode), returns namesByStage grouped by label.
  */
 export async function getOpportunityNamesForCell(
   locationId: string,
@@ -360,14 +370,29 @@ export async function getOpportunityNamesForCell(
   monthRanges: Array<{ monthKey: string; startDate: string; endDate: string }>,
   attributionMode: AttributionMode,
   targetMonthKey: string,
-  contributingStageKeys: string[]
-): Promise<{ names: string[] }> {
+  contributingStageKeys: string[],
+  rollupGroups?: RollupGroup[]
+): Promise<{ names: string[]; namesByStage?: Record<string, string[]> }> {
   const stageIdToName = buildStageIdToName(pipeline.stages);
   const limit = 100;
   let page = 1;
   const names: string[] = [];
+  const namesByStage: Record<string, string[]> | undefined = rollupGroups
+    ? Object.fromEntries(rollupGroups.map((g) => [g.label, []]))
+    : undefined;
   const seen = new Set<string>();
   const keySet = new Set(contributingStageKeys.map((k) => k.toLowerCase()));
+  const stageToGroupLabel = rollupGroups
+    ? (() => {
+        const m = new Map<string, string>();
+        for (const g of rollupGroups) {
+          for (const k of g.stageKeys) {
+            m.set(k.toLowerCase(), g.label);
+          }
+        }
+        return m;
+      })()
+    : null;
 
   const getMonthForDate = (dateStr: string) => {
     for (const range of monthRanges) {
@@ -415,10 +440,11 @@ export async function getOpportunityNamesForCell(
         (opp.dateCreated as string) ??
         (opp.date_created as string) ??
         (opp.createdAt as string);
-      const dateStr =
+      const raw =
         attributionMode === "lastUpdated"
-          ? (lastChange ?? created) ? (lastChange ?? created)!.split("T")[0] : null
-          : created ? created.split("T")[0] : null;
+          ? (lastChange ?? created)
+          : created;
+      const dateStr = raw ? isoToLocalDateString(raw) : null;
       if (dateStr) {
         if (!minDateInPage || dateStr < minDateInPage) minDateInPage = dateStr;
       }
@@ -440,9 +466,16 @@ export async function getOpportunityNamesForCell(
       if (!keySet.has(bucketKey.toLowerCase())) continue;
 
       const name = (opp.name as string) ?? (opp as Record<string, unknown>).opportunityName as string ?? `Opportunity ${opp.id}`;
+      const displayName = name || `Opportunity ${opp.id}`;
       if (!seen.has(opp.id)) {
         seen.add(opp.id);
-        names.push(name || `Opportunity ${opp.id}`);
+        if (namesByStage && stageToGroupLabel) {
+          const groupLabel = stageToGroupLabel.get(bucketKey.toLowerCase());
+          if (groupLabel && namesByStage[groupLabel]) {
+            namesByStage[groupLabel].push(displayName);
+          }
+        }
+        names.push(displayName);
       }
     }
 
@@ -452,5 +485,5 @@ export async function getOpportunityNamesForCell(
     page += 1;
   }
 
-  return { names };
+  return namesByStage ? { names, namesByStage } : { names };
 }
