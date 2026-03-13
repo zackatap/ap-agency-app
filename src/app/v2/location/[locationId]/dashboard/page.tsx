@@ -62,6 +62,7 @@ interface ConversionData {
   pipelines?: { id: string; name: string }[];
   metrics: ConversionMetrics | null;
   stageCounts?: Record<string, number>;
+  leadsBreakdown?: Record<string, number>;
   dateRange?: { startDate: string; endDate: string };
   unmappedStages?: UnmappedStage[];
   allStageMappings?: StageMappingInfo[];
@@ -871,6 +872,23 @@ export default function ConversionsDashboard() {
                   )}
                 </div>
 
+                {/* Leads accordion - shows Replied, Connected, New Lead, etc. */}
+                {Object.keys(data.leadsBreakdown ?? {}).length > 0 && (
+                  <details className="rounded-xl border border-white/10 bg-white/5">
+                    <summary className="cursor-pointer px-5 py-4 text-sm text-slate-400 hover:text-slate-300">
+                      Leads <span className="font-medium text-white">({metrics.leads})</span>
+                    </summary>
+                    <div className="border-t border-white/10 px-5 py-4">
+                      <div className="flex flex-wrap gap-4 text-sm">
+                        {Object.entries(data.leadsBreakdown ?? {}).map(([stage, count]) => (
+                          <span key={stage}>
+                            <span className="text-slate-500">{stage}:</span> {count}
+                          </span>
+                        ))}
+                      </div>
+                    </div>
+                  </details>
+                )}
                 {/* Appointments accordion - collapsed hides requested/confirmed/showed breakdown */}
                 <details className="rounded-xl border border-white/10 bg-white/5">
                   <summary className="cursor-pointer px-5 py-4 text-sm text-slate-400 hover:text-slate-300">

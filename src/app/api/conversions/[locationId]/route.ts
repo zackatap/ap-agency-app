@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { getToken } from "@/lib/oauth-tokens";
 import { getPipelines, getOpportunityCountsByStage } from "@/lib/ghl-oauth";
 import { findMatchingPipeline, PAIN_PATIENTS_CONFIG } from "@/lib/pipeline-matching";
-import { calculateFunnelMetrics, getUnmappedStages, getEffectiveMapping } from "@/lib/funnel-metrics";
+import { calculateFunnelMetrics, getUnmappedStages, getEffectiveMapping, getStageKeysForMetric } from "@/lib/funnel-metrics";
 import { STATUS_WON_KEY } from "@/lib/ghl-oauth";
 import {
   getDateRangeForPreset,
@@ -98,6 +98,18 @@ export async function GET(
       mapping: getEffectiveMapping(name, customMappings),
     }));
 
+    const leadStageKeys = getStageKeysForMetric(
+      "leads",
+      uniqueStageNames,
+      customMappings,
+      pipeline.stages ?? undefined
+    );
+    const leadsBreakdown: Record<string, number> = {};
+    for (const key of leadStageKeys) {
+      const c = stageCounts[key] ?? 0;
+      if (c > 0) leadsBreakdown[key] = c;
+    }
+
     return NextResponse.json({
       pipeline: {
         id: pipeline.id,
@@ -106,6 +118,7 @@ export async function GET(
       },
       metrics: funnel,
       stageCounts,
+      leadsBreakdown,
       dateRange,
       pipelines: pipelines.map((p) => ({ id: p.id, name: p.name })),
       allStageMappings,

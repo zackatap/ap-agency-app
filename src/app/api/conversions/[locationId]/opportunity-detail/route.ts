@@ -4,7 +4,7 @@ import { getPipelines, getOpportunityNamesForCell, STATUS_WON_KEY } from "@/lib/
 import { findMatchingPipeline, PAIN_PATIENTS_CONFIG } from "@/lib/pipeline-matching";
 import { getMonthsBack } from "@/lib/date-ranges";
 import { getLocationSettings } from "@/lib/location-settings";
-import { getStageKeysForMetric, getRollupGroupsForMetric } from "@/lib/funnel-metrics";
+import { getBreakdownGroupsForMetric } from "@/lib/funnel-metrics";
 
 export async function GET(
   req: Request,
@@ -62,25 +62,14 @@ export async function GET(
       STATUS_WON_KEY,
     ];
 
-    let contributingKeys: string[];
-    let rollupGroups: { label: string; stageKeys: string[] }[] | undefined;
-
-    if (onTotals) {
-      rollupGroups = getRollupGroupsForMetric(
-        metric,
-        allStageKeys,
-        customMappings,
-        pipeline.stages ?? undefined
-      );
-      contributingKeys = rollupGroups.flatMap((g) => g.stageKeys);
-    } else {
-      contributingKeys = getStageKeysForMetric(
-        metric,
-        allStageKeys,
-        customMappings,
-        pipeline.stages ?? undefined
-      );
-    }
+    const breakdownGroups = getBreakdownGroupsForMetric(
+      metric,
+      allStageKeys,
+      customMappings,
+      pipeline.stages ?? undefined,
+      onTotals
+    );
+    const contributingKeys = breakdownGroups.flatMap((g) => g.stageKeys);
 
     const result = await getOpportunityNamesForCell(
       locationId,
@@ -90,7 +79,7 @@ export async function GET(
       attribution,
       monthKey,
       contributingKeys,
-      rollupGroups
+      breakdownGroups.length > 0 ? breakdownGroups : undefined
     );
 
     return NextResponse.json({

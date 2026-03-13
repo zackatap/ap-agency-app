@@ -31,7 +31,8 @@ function sumStages(
   values: Record<string, number>,
   stageNames: string[],
   customMappings?: CustomStageMappings,
-  targetStage?: FunnelStage
+  targetStage?: FunnelStage,
+  excludeStageNames?: string[]
 ): { count: number; value: number } {
   let count = 0;
   let value = 0;
@@ -42,6 +43,8 @@ function sumStages(
       value += values[stageName] ?? 0;
       continue;
     }
+    // Exclude stages that match the exclude list (e.g. "Show" matches both showed and noShow)
+    if (excludeStageNames?.length && stageMatches(stageName, excludeStageNames)) continue;
     // Built-in matching
     const stageLower = stageName.toLowerCase().trim();
     for (const target of stageNames) {
@@ -90,6 +93,7 @@ const LEAD_STAGES = [
   "new patient",
   "inquiry",
   "connected",
+  "replied",
 ];
 
 /** Stages that start the "appointment" phase - we count everything BEFORE these as leads */
@@ -152,8 +156,9 @@ export function getEffectiveMapping(
   if (customMappings?.[stageName]) return customMappings[stageName];
   if (stageMatches(stageName, REQUESTED_STAGES)) return "requested";
   if (stageMatches(stageName, CONFIRMED_STAGES)) return "confirmed";
-  if (stageMatches(stageName, SHOWED_STAGES)) return "showed";
+  // Check noShow before showed so "Show" (matches both) maps to noShow
   if (stageMatches(stageName, NO_SHOW_STAGES)) return "noShow";
+  if (stageMatches(stageName, SHOWED_STAGES)) return "showed";
   if (stageMatches(stageName, SUCCESS_STAGES)) return "closed";
   if (stageMatches(stageName, LEAD_STAGES)) return "lead";
   return null;
@@ -190,23 +195,13 @@ export function getStageKeysForMetric(
       } else if (stageMatches(key, LEAD_STAGES)) result.push(key);
     } else if (metric === "requested" && stageMatches(key, REQUESTED_STAGES)) result.push(key);
     else if (metric === "confirmed" && stageMatches(key, CONFIRMED_STAGES)) result.push(key);
-    else if (metric === "showed" && stageMatches(key, SHOWED_STAGES)) result.push(key);
+    else if (metric === "showed" && stageMatches(key, SHOWED_STAGES) && !stageMatches(key, NO_SHOW_STAGES)) result.push(key);
     else if (metric === "noShow" && stageMatches(key, NO_SHOW_STAGES)) result.push(key);
     else if (metric === "closed" && stageMatches(key, SUCCESS_STAGES)) result.push(key);
     else if (metric === "totalAppts" && (stageMatches(key, REQUESTED_STAGES) || stageMatches(key, CONFIRMED_STAGES) || stageMatches(key, SHOWED_STAGES))) result.push(key);
   }
   return result;
 }
-
-/** Rollup drill-down: which funnel groups contribute to this metric when "On Totals" */
-const ROLLUP_GROUP_ORDER: { metric: string; label: string }[] = [
-  { metric: "leads", label: "Leads" },
-  { metric: "requested", label: "Appointment Requested" },
-  { metric: "confirmed", label: "Appointment Confirmed" },
-  { metric: "showed", label: "Show" },
-  { metric: "noShow", label: "No Show" },
-  { metric: "closed", label: "Closed" },
-];
 
 /** Metric -> which sub-metrics (in order) contribute to its rollup */
 const ROLLUP_METRIC_GROUPS: Record<string, string[]> = {
@@ -225,31 +220,36 @@ export interface RollupGroup {
 }
 
 /**
- * Returns groups for rollup drill-down: when "On Totals", clicking a cell shows names
- * grouped by funnel stage (Leads, Appointment Requested, etc.).
+ * Returns groups for drill-down with each actual stage broken out (Replied, Connected,
+ * Appointment Requested, etc.) so users see the breakdown instead of aggregated labels.
+ * Used for both "On Totals" and "Current Stage Counts".
  */
-export function getRollupGroupsForMetric(
+export function getBreakdownGroupsForMetric(
   metric: string,
   stageKeys: string[],
   customMappings?: CustomStageMappings,
-  pipelineStages?: PipelineStageForOrder[]
+  pipelineStages?: PipelineStageForOrder[],
+  rollup?: boolean
 ): RollupGroup[] {
-  const subMetrics = ROLLUP_METRIC_GROUPS[metric];
-  if (!subMetrics) return [];
-
-  const labelByMetric: Record<string, string> = {};
-  for (const { metric: m, label } of ROLLUP_GROUP_ORDER) {
-    labelByMetric[m] = label;
+  let keys: string[];
+  if (rollup) {
+    const subMetrics = ROLLUP_METRIC_GROUPS[metric];
+    if (!subMetrics) return [];
+    keys = subMetrics.flatMap((sub) =>
+      getStageKeysForMetric(sub, stageKeys, customMappings, pipelineStages)
+    );
+    // Dedupe while preserving order
+    const seen = new Set<string>();
+    keys = keys.filter((k) => {
+      const lower = k.toLowerCase();
+      if (seen.has(lower)) return false;
+      seen.add(lower);
+      return true;
+    });
+  } else {
+    keys = getStageKeysForMetric(metric, stageKeys, customMappings, pipelineStages);
   }
-
-  const groups: RollupGroup[] = [];
-  for (const sub of subMetrics) {
-    const keys = getStageKeysForMetric(sub, stageKeys, customMappings, pipelineStages);
-    if (keys.length > 0) {
-      groups.push({ label: labelByMetric[sub] ?? sub, stageKeys: keys });
-    }
-  }
-  return groups;
+  return keys.map((key) => ({ label: key, stageKeys: [key] }));
 }
 
 export function getUnmappedStages(
@@ -267,7 +267,8 @@ export function calculateFunnelMetrics(
 ): FunnelMetrics {
   const requested = sumStages(counts, values, REQUESTED_STAGES, customMappings, "requested");
   const confirmed = sumStages(counts, values, CONFIRMED_STAGES, customMappings, "confirmed");
-  const showed = sumStages(counts, values, SHOWED_STAGES, customMappings, "showed");
+  // Exclude no-show stages from showed (e.g. "Show" matches both "showed" and "no show")
+  const showed = sumStages(counts, values, SHOWED_STAGES, customMappings, "showed", NO_SHOW_STAGES);
   const noShow = sumStages(counts, values, NO_SHOW_STAGES, customMappings, "noShow");
   const successFromStages = sumStages(counts, values, SUCCESS_STAGES, customMappings, "closed");
   const statusWonCount = counts[STATUS_WON_KEY] ?? 0;
