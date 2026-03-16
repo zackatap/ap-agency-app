@@ -61,6 +61,8 @@ interface ConversionData {
   pipeline: { id: string; name: string; stages?: PipelineStage[] } | null;
   pipelines?: { id: string; name: string }[];
   metrics: ConversionMetrics | null;
+  previousMetrics?: ConversionMetrics | null;
+  previousDateRange?: { startDate: string; endDate: string } | null;
   stageCounts?: Record<string, number>;
   leadsBreakdown?: Record<string, number>;
   dateRange?: { startDate: string; endDate: string };
@@ -103,6 +105,7 @@ export default function ConversionsDashboard() {
   const [monthlyData, setMonthlyData] = useState<MonthlyData[] | null>(null);
   const [monthlyLoading, setMonthlyLoading] = useState(false);
   const [rollupAssumptions, setRollupAssumptions] = useState(true); // "On Totals" default
+  const [compareEnabled, setCompareEnabled] = useState(false);
   const [attributionMode, setAttributionMode] = useState<"created" | "lastUpdated">("lastUpdated");
   const [settings, setSettings] = useState<LocationSettings | null>(null);
   const [unmappedStages, setUnmappedStages] = useState<UnmappedStage[]>([]);
@@ -300,6 +303,7 @@ export default function ConversionsDashboard() {
       params.set("dateFrom", customDateFrom);
       params.set("dateTo", customDateTo);
     }
+    if (compareEnabled) params.set("compare", "true");
 
     const apiUrl = `/api/conversions/${locationId}?${params.toString()}`;
     setLoading(true);
@@ -322,6 +326,7 @@ export default function ConversionsDashboard() {
     urlParams.set("dateRange", preset);
     urlParams.set("clientDate", getTodayLocal());
     if (selectedPipelineId) urlParams.set("pipelineId", selectedPipelineId);
+    if (compareEnabled) urlParams.set("compare", "true");
 
     const apiUrl = `/api/conversions/${locationId}?${urlParams.toString()}`;
     setLoading(true);
@@ -345,6 +350,7 @@ export default function ConversionsDashboard() {
       params.set("dateFrom", customDateFrom);
       params.set("dateTo", customDateTo);
     }
+    if (compareEnabled) params.set("compare", "true");
     fetch(`/api/conversions/${locationId}?${params.toString()}`)
       .then((res) => (res.ok ? res.json() : null))
       .then((d: ConversionData | null) => {
@@ -420,6 +426,7 @@ export default function ConversionsDashboard() {
     params.set("dateTo", customDateTo);
     params.set("clientDate", getTodayLocal());
     if (selectedPipelineId) params.set("pipelineId", selectedPipelineId);
+    if (compareEnabled) params.set("compare", "true");
 
     const apiUrl = `/api/conversions/${locationId}?${params.toString()}`;
     setLoading(true);
@@ -482,6 +489,7 @@ export default function ConversionsDashboard() {
               </select>
             </div>
             {activeTab === "funnel" && (
+            <>
             <div className="min-w-[180px]">
               <label className="mb-1.5 block text-sm font-medium text-slate-400">
                 Date range
@@ -501,6 +509,42 @@ export default function ConversionsDashboard() {
                 )}
               </select>
             </div>
+            <label className="flex cursor-pointer items-center gap-2 self-end pb-2.5">
+              <input
+                type="checkbox"
+                checked={compareEnabled}
+                onChange={(e) => {
+                  const v = e.target.checked;
+                  setCompareEnabled(v);
+                  if (locationId) {
+                    const params = new URLSearchParams();
+                    params.set("dateRange", dateRangePreset);
+                    params.set("clientDate", getTodayLocal());
+                    if (selectedPipelineId) params.set("pipelineId", selectedPipelineId);
+                    if (dateRangePreset === "custom" && customDateFrom && customDateTo) {
+                      params.set("dateFrom", customDateFrom);
+                      params.set("dateTo", customDateTo);
+                    }
+                    if (v) params.set("compare", "true");
+                    setLoading(true);
+                    fetch(`/api/conversions/${locationId}?${params.toString()}`)
+                      .then((res) => (res.ok ? res.json() : null))
+                      .then((d: ConversionData | null) => {
+                        if (d) {
+                          setData(d);
+                          if (d.unmappedStages) setUnmappedStages(d.unmappedStages);
+                          if (d.allStageMappings) setAllStageMappings(d.allStageMappings);
+                        }
+                      })
+                      .catch(() => {})
+                      .finally(() => setLoading(false));
+                  }
+                }}
+                className="rounded border-white/20 bg-white/5 text-indigo-600 focus:ring-indigo-500"
+              />
+              <span className="text-sm text-slate-400">Compare to previous period</span>
+            </label>
+            </>
             )}
             {activeTab === "monthly" && (
             <>
@@ -853,6 +897,9 @@ export default function ConversionsDashboard() {
               <>
                 {(() => {
                   const metrics = rollupAssumptions ? applyRollup(data.metrics) : data.metrics;
+                  const prevMetrics = data.previousMetrics
+                    ? (rollupAssumptions ? applyRollup(data.previousMetrics) : data.previousMetrics)
+                    : null;
                   return (
               <>
                 {/* Compact header */}
@@ -862,6 +909,11 @@ export default function ConversionsDashboard() {
                     {data.dateRange && (
                       <p className="text-xs text-slate-500">
                         {formatDate(data.dateRange.startDate)} – {formatDate(data.dateRange.endDate)}
+                        {data.previousDateRange && (
+                          <span className="ml-2 text-slate-600">
+                            vs {formatDate(data.previousDateRange.startDate)} – {formatDate(data.previousDateRange.endDate)}
+                          </span>
+                        )}
                       </p>
                     )}
                   </div>
@@ -871,6 +923,85 @@ export default function ConversionsDashboard() {
                     </p>
                   )}
                 </div>
+
+                {/* Comparison table when Compare is enabled */}
+                {prevMetrics && (
+                  <div className="overflow-hidden rounded-xl border border-white/10">
+                    <table className="w-full min-w-[400px] text-sm">
+                      <thead>
+                        <tr className="border-b border-white/10 bg-white/5">
+                          <th className="px-4 py-3 text-left font-medium text-slate-400">Metric</th>
+                          <th className="px-4 py-3 text-right font-medium text-slate-400">
+                            {data.dateRange && `${formatDate(data.dateRange.startDate)} – ${formatDate(data.dateRange.endDate)}`}
+                          </th>
+                          <th className="px-4 py-3 text-right font-medium text-slate-400">
+                            {data.previousDateRange && `${formatDate(data.previousDateRange.startDate)} – ${formatDate(data.previousDateRange.endDate)}`}
+                          </th>
+                          <th className="px-4 py-3 text-right font-medium text-slate-400">Change</th>
+                          <th className="px-4 py-3 text-right font-medium text-slate-400">Change(%)</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-white/5">
+                        {[
+                          { key: "leads", label: "Leads", fmt: "num" as const },
+                          { key: "totalAppts", label: "Appointments", fmt: "num" as const },
+                          { key: "requested", label: "Requested", fmt: "num" as const },
+                          { key: "confirmed", label: "Confirmed", fmt: "num" as const },
+                          { key: "showed", label: "Showed", fmt: "num" as const },
+                          { key: "noShow", label: "No Show", fmt: "num" as const },
+                          { key: "closed", label: "Closed", fmt: "num" as const },
+                          { key: "bookingRate", label: "Booking rate", fmt: "pct" as const },
+                          { key: "confirmationRate", label: "Confirmation rate", fmt: "pct" as const },
+                          { key: "showRate", label: "Show rate", fmt: "pct" as const },
+                          { key: "showedConversionRate", label: "Showed conversions", fmt: "pct" as const },
+                          { key: "totalValue", label: "Pipeline value", fmt: "currency" as const },
+                        ].map(({ key, label, fmt }) => {
+                          const curr = (metrics as unknown as Record<string, unknown>)[key] as number | null | undefined;
+                          const prev = (prevMetrics as unknown as Record<string, unknown>)[key] as number | null | undefined;
+                          const currVal = curr ?? 0;
+                          const prevVal = prev ?? 0;
+                          const change = typeof curr === "number" && typeof prev === "number" ? curr - prev : null;
+                          const pctChange =
+                            prevVal !== 0 && change !== null
+                              ? Math.round((change / prevVal) * 10000) / 100
+                              : prevVal === 0 && currVal > 0
+                                ? 100
+                                : prevVal === 0 && currVal === 0
+                                  ? 0
+                                  : null;
+                          const formatVal = (v: number) =>
+                            fmt === "pct" ? (v != null ? `${v}%` : "—") : fmt === "currency" ? `$${formatCurrency(v)}` : String(v ?? "—");
+                          return (
+                            <tr key={key} className="bg-white/[0.02]">
+                              <td className="px-4 py-2.5 text-slate-300">{label}</td>
+                              <td className="px-4 py-2.5 text-right tabular-nums text-white">{formatVal(currVal)}</td>
+                              <td className="px-4 py-2.5 text-right tabular-nums text-slate-500">{formatVal(prevVal)}</td>
+                              <td className="px-4 py-2.5 text-right tabular-nums">
+                                {change !== null ? (
+                                  <span className={change >= 0 ? "text-emerald-400" : "text-red-400"}>
+                                    {fmt === "currency"
+                                      ? `${change >= 0 ? "+" : "-"}$${formatCurrency(Math.abs(change))}`
+                                      : fmt === "pct"
+                                        ? `${change >= 0 ? "+" : ""}${Math.round(change * 10) / 10}pp`
+                                        : `${change >= 0 ? "+" : ""}${change}`
+                                  }
+                                  </span>
+                                ) : "—"}
+                              </td>
+                              <td className="px-4 py-2.5 text-right tabular-nums">
+                                {pctChange !== null ? (
+                                  <span className={pctChange >= 0 ? "text-emerald-400" : "text-red-400"}>
+                                    {pctChange >= 0 ? "▲" : "▼"} {Math.abs(pctChange)}%
+                                  </span>
+                                ) : "—"}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
 
                 {/* Leads accordion - shows Replied, Connected, New Lead, etc. */}
                 {Object.keys(data.leadsBreakdown ?? {}).length > 0 && (

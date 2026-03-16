@@ -156,3 +156,23 @@ export const DATE_RANGE_LABELS: Record<DateRangePreset, string> = {
   last_90: "Last 90 days",
   custom: "Custom range",
 };
+
+/**
+ * Returns the previous period of equal length immediately before the given range.
+ * E.g. Mar 9–15 (7 days) → Mar 2–8.
+ */
+export function getPreviousPeriod(range: DateRange): DateRange {
+  const [startY, startM, startD] = range.startDate.split("-").map(Number);
+  const [endY, endM, endD] = range.endDate.split("-").map(Number);
+  const start = new Date(startY, startM - 1, startD);
+  const end = new Date(endY, endM - 1, endD);
+  const days = Math.round((end.getTime() - start.getTime()) / (24 * 60 * 60 * 1000)) + 1;
+  const prevEnd = new Date(start);
+  prevEnd.setDate(prevEnd.getDate() - 1);
+  const prevStart = new Date(prevEnd);
+  prevStart.setDate(prevStart.getDate() - days + 1);
+  return {
+    startDate: toLocalDate(prevStart),
+    endDate: toLocalDate(prevEnd),
+  };
+}

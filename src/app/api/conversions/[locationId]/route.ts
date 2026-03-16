@@ -6,6 +6,7 @@ import { calculateFunnelMetrics, getUnmappedStages, getEffectiveMapping, getStag
 import { STATUS_WON_KEY } from "@/lib/ghl-oauth";
 import {
   getDateRangeForPreset,
+  getPreviousPeriod,
   type DateRangePreset,
 } from "@/lib/date-ranges";
 import { getLocationSettings } from "@/lib/location-settings";
@@ -43,6 +44,7 @@ export async function GET(
     const dateFrom = searchParams.get("dateFrom") ?? undefined;
     const dateTo = searchParams.get("dateTo") ?? undefined;
     const clientDate = searchParams.get("clientDate") ?? undefined; // YYYY-MM-DD from user's timezone
+    const compare = searchParams.get("compare") === "true";
 
     const pipelines = await getPipelines(locationId, stored.access_token);
     const settings = await getLocationSettings(locationId);
@@ -85,6 +87,26 @@ export async function GET(
       pipeline.stages ?? undefined,
       customMappings
     );
+
+    let previousMetrics: typeof funnel | null = null;
+    let previousDateRange: { startDate: string; endDate: string } | null = null;
+    if (compare) {
+      const prevRange = getPreviousPeriod(dateRange);
+      const { counts: prevCounts, values: prevValues } =
+        await getOpportunityCountsByStage(
+          locationId,
+          pipeline,
+          stored.access_token,
+          prevRange
+        );
+      previousMetrics = calculateFunnelMetrics(
+        prevCounts,
+        prevValues,
+        pipeline.stages ?? undefined,
+        customMappings
+      );
+      previousDateRange = prevRange;
+    }
     const allStages = pipeline.stages ?? [];
     const allStageNames = [
       ...allStages.map((s) => s.name),
@@ -117,6 +139,8 @@ export async function GET(
         stages: pipeline.stages ?? [],
       },
       metrics: funnel,
+      previousMetrics,
+      previousDateRange,
       stageCounts,
       leadsBreakdown,
       dateRange,
