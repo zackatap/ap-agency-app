@@ -76,7 +76,7 @@ const REQUESTED_STAGES = [
 const CONFIRMED_STAGES = ["appointment confirmed", "appt confirmed"];
 
 /** Stage names for "showed up" */
-const SHOWED_STAGES = ["showed up", "showed", "did not sign on"];
+const SHOWED_STAGES = ["showed up", "showed", "did not sign on", "report of findings"];
 
 /** Stage names for "success" / closed */
 const SUCCESS_STAGES = ["success", "closed", "won", "pay per visit"];
