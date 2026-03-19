@@ -964,7 +964,7 @@ export default function ConversionsDashboard() {
                                   ? 0
                                   : null;
                           const formatVal = (v: number) =>
-                            fmt === "pct" ? (v != null ? `${v}%` : "—") : fmt === "currency" ? `$${formatCurrency(v)}` : String(v ?? "—");
+                            fmt === "pct" ? (v != null ? `${v}%` : "—") : String(v ?? "—");
                           return (
                             <tr key={key} className="bg-white/[0.02]">
                               <td className="px-4 py-2.5 text-slate-300">{label}</td>
@@ -973,12 +973,10 @@ export default function ConversionsDashboard() {
                               <td className="px-4 py-2.5 text-right tabular-nums">
                                 {change !== null ? (
                                   <span className={change >= 0 ? "text-emerald-400" : "text-red-400"}>
-                                    {fmt === "currency"
-                                      ? `${change >= 0 ? "+" : "-"}$${formatCurrency(Math.abs(change))}`
-                                      : fmt === "pct"
-                                        ? `${change >= 0 ? "+" : ""}${Math.round(change * 10) / 10}pp`
-                                        : `${change >= 0 ? "+" : ""}${change}`
-                                  }
+                                    {fmt === "pct"
+                                      ? `${change >= 0 ? "+" : ""}${Math.round(change * 10) / 10}pp`
+                                      : `${change >= 0 ? "+" : ""}${change}`
+                                    }
                                   </span>
                                 ) : "—"}
                               </td>
