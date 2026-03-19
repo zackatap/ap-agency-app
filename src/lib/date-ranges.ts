@@ -33,6 +33,7 @@ export type DateRangePreset =
   | "last_30"
   | "last_60"
   | "last_90"
+  | "maximum"
   | "custom";
 
 export interface DateRange {
@@ -103,6 +104,10 @@ export function getDateRangeForPreset(
       start.setDate(start.getDate() - 90);
       return { startDate: toLocalDate(start), endDate: toLocalDate(today) };
     }
+    case "maximum": {
+      // All-time: from a fixed early date to today (maximum data like Facebook Ads)
+      return { startDate: "2010-01-01", endDate: toLocalDate(today) };
+    }
     case "custom": {
       if (customFrom && customTo) {
         return { startDate: customFrom, endDate: customTo };
@@ -154,6 +159,7 @@ export const DATE_RANGE_LABELS: Record<DateRangePreset, string> = {
   last_30: "Last 30 days",
   last_60: "Last 60 days",
   last_90: "Last 90 days",
+  maximum: "Maximum",
   custom: "Custom range",
 };
 

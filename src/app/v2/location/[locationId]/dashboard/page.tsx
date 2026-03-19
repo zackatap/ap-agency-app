@@ -917,11 +917,6 @@ export default function ConversionsDashboard() {
                       </p>
                     )}
                   </div>
-                  {metrics.totalValue > 0 && (
-                    <p className="text-xl font-semibold tabular-nums text-indigo-300">
-                      ${formatCurrency(metrics.totalValue)} pipeline value
-                    </p>
-                  )}
                 </div>
 
                 {/* Comparison table when Compare is enabled */}
@@ -954,7 +949,6 @@ export default function ConversionsDashboard() {
                           { key: "confirmationRate", label: "Confirmation rate", fmt: "pct" as const },
                           { key: "showRate", label: "Show rate", fmt: "pct" as const },
                           { key: "showedConversionRate", label: "Showed conversions", fmt: "pct" as const },
-                          { key: "totalValue", label: "Pipeline value", fmt: "currency" as const },
                         ].map(({ key, label, fmt }) => {
                           const curr = (metrics as unknown as Record<string, unknown>)[key] as number | null | undefined;
                           const prev = (prevMetrics as unknown as Record<string, unknown>)[key] as number | null | undefined;
