@@ -393,3 +393,115 @@ export function applyRollup(metrics: FunnelMetrics): FunnelMetrics {
     showedConversionRate,
   };
 }
+
+/** By-ad attribution API row; rollup uses same math as {@link applyRollup}. */
+export interface AttributionBreakdownRowRollup {
+  key: string;
+  leads: number;
+  requested: number;
+  confirmed: number;
+  showed: number;
+  noShow: number;
+  unmapped: number;
+  success: number;
+  total: number;
+  totalValue: number;
+  successValue: number;
+  bookingRate: number | null;
+  showRate: number | null;
+  successPerShowed: number | null;
+  /** Facebook spend for the row (unchanged by rollup; cost-per uses rolled counts). */
+  spend?: number | null;
+}
+
+/**
+ * On Totals for attribution rows: each stage count includes everyone at or after that stage
+ * (same assumptions as {@link applyRollup}). `noShow`, `unmapped`, `total`, values unchanged.
+ */
+export function applyRollupToAttributionRow(
+  row: AttributionBreakdownRowRollup
+): AttributionBreakdownRowRollup {
+  const l = row.leads;
+  const r = row.requested;
+  const c = row.confirmed;
+  const s = row.showed;
+  const n = row.noShow;
+  const cl = row.success;
+
+  const leadsRollup = l + r + c + s + n + cl;
+  const requestedRollup = r + c + s + n + cl;
+  const confirmedRollup = c + s + n + cl;
+  const showedRollup = s + cl;
+
+  const bookingRate =
+    leadsRollup > 0
+      ? Math.round((requestedRollup / leadsRollup) * 1000) / 10
+      : null;
+  const showRate =
+    requestedRollup > 0
+      ? Math.round((showedRollup / requestedRollup) * 1000) / 10
+      : null;
+  const successPerShowed =
+    showedRollup > 0 ? Math.round((cl / showedRollup) * 1000) / 10 : null;
+
+  return {
+    ...row,
+    leads: leadsRollup,
+    requested: requestedRollup,
+    confirmed: confirmedRollup,
+    showed: showedRollup,
+    bookingRate,
+    showRate,
+    successPerShowed,
+  };
+}
+
+/** Per-opportunity funnel bucket for attribution breakdowns (matches aggregate stage logic). */
+export type OpportunityFunnelBucket =
+  | "lead"
+  | "requested"
+  | "confirmed"
+  | "showed"
+  | "noShow"
+  | "closed"
+  | "unmapped";
+
+/**
+ * Classify a single opportunity into a funnel bucket, aligned with `calculateFunnelMetrics`.
+ * Won opps are always `closed`. Custom stage mappings take precedence; then pipeline order
+ * (stages before first appointment phase count as leads); then built-in name matching.
+ */
+export function classifyOpportunityFunnelBucket(params: {
+  isWon: boolean;
+  stageName: string;
+  pipelineStages?: PipelineStageForOrder[];
+  customMappings?: CustomStageMappings;
+}): OpportunityFunnelBucket {
+  const { isWon, stageName, pipelineStages, customMappings } = params;
+  if (isWon) return "closed";
+
+  const custom = customMappings?.[stageName];
+  if (custom) {
+    if (custom === "lead") return "lead";
+    return custom;
+  }
+
+  if (pipelineStages?.length) {
+    const sorted = [...pipelineStages].sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+    const idx = sorted.findIndex(
+      (s) => s.name.toLowerCase().trim() === stageName.toLowerCase().trim()
+    );
+    const firstApptIdx = sorted.findIndex((s) => stageMatches(s.name, FIRST_APPT_STAGES));
+    if (idx >= 0 && firstApptIdx >= 0 && idx < firstApptIdx) return "lead";
+    if (idx >= 0 && firstApptIdx < 0) return "lead";
+  }
+
+  const m = getEffectiveMapping(stageName, customMappings);
+  if (m === "lead") return "lead";
+  if (m === "requested") return "requested";
+  if (m === "confirmed") return "confirmed";
+  if (m === "showed") return "showed";
+  if (m === "noShow") return "noShow";
+  if (m === "closed") return "closed";
+  return "unmapped";
+}

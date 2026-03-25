@@ -1,13 +1,16 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import {
   DATE_RANGE_LABELS,
   getTodayLocal,
   type DateRangePreset,
 } from "@/lib/date-ranges";
-import { applyRollup } from "@/lib/funnel-metrics";
+import {
+  applyRollup,
+  applyRollupToAttributionRow,
+} from "@/lib/funnel-metrics";
 
 interface FunnelMetrics {
   leads: number;
@@ -101,7 +104,7 @@ export default function ConversionsDashboard() {
   const [dateRangePreset, setDateRangePreset] = useState<DateRangePreset>("last_30");
   const [customDateFrom, setCustomDateFrom] = useState("");
   const [customDateTo, setCustomDateTo] = useState("");
-  const [activeTab, setActiveTab] = useState<"funnel" | "monthly">("funnel");
+  const [activeTab, setActiveTab] = useState<"funnel" | "monthly" | "attribution">("funnel");
   const [monthlyData, setMonthlyData] = useState<MonthlyData[] | null>(null);
   const [monthlyLoading, setMonthlyLoading] = useState(false);
   const [rollupAssumptions, setRollupAssumptions] = useState(true); // "On Totals" default
@@ -125,6 +128,169 @@ export default function ConversionsDashboard() {
   } | null>(null);
   const [facebookAdSpend, setFacebookAdSpend] = useState<Record<string, number>>({});
   const [facebookAdSpendLoading, setFacebookAdSpendLoading] = useState(false);
+
+  type AttributionDimensionUI = "content" | "medium" | "campaign" | "source";
+  type AttributionSortKey =
+    | "key"
+    | "leads"
+    | "requested"
+    | "confirmed"
+    | "showed"
+    | "success"
+    | "bookingRate"
+    | "showRate"
+    | "successPerShowed"
+    | "successValue"
+    | "spend"
+    | "costPerLead"
+    | "costPerShowed"
+    | "costPerSuccess";
+  interface AttributionBreakdownRow {
+    key: string;
+    leads: number;
+    requested: number;
+    confirmed: number;
+    showed: number;
+    noShow: number;
+    unmapped: number;
+    success: number;
+    total: number;
+    totalValue: number;
+    successValue: number;
+    bookingRate: number | null;
+    showRate: number | null;
+    successPerShowed: number | null;
+    spend: number | null;
+  }
+  interface AttributionApiResponse {
+    pipeline: { id: string; name: string } | null;
+    rows: AttributionBreakdownRow[];
+    meta: {
+      opportunitiesInRange: number;
+      contactsFetched: number;
+      dimension: AttributionDimensionUI;
+      dateRange: { startDate: string; endDate: string };
+      attributionMode: string;
+      metaSpendError?: string;
+    } | null;
+    message?: string;
+    error?: string;
+  }
+  const [attributionData, setAttributionData] = useState<AttributionApiResponse | null>(null);
+  const [attributionLoading, setAttributionLoading] = useState(false);
+  const [attributionError, setAttributionError] = useState<string | null>(null);
+  const [attributionDimension, setAttributionDimension] =
+    useState<AttributionDimensionUI>("content");
+  /** Bumps when stage mappings change so attribution refetches. */
+  const [attributionRefresh, setAttributionRefresh] = useState(0);
+  const [attributionWrapNames, setAttributionWrapNames] = useState(true);
+  const [attributionSortKey, setAttributionSortKey] =
+    useState<AttributionSortKey>("success");
+  const [attributionSortDir, setAttributionSortDir] = useState<"asc" | "desc">(
+    "desc"
+  );
+
+  const attributionRolledRows = useMemo(() => {
+    const rows = attributionData?.rows ?? [];
+    if (!rollupAssumptions) return rows;
+    return rows.map((r) => applyRollupToAttributionRow(r));
+  }, [attributionData?.rows, rollupAssumptions]);
+
+  const attributionSortedRows = useMemo(() => {
+    const rows = attributionRolledRows;
+    const sk = attributionSortKey;
+    const dir = attributionSortDir;
+    const nullCmp = (a: number | null, b: number | null): number | null => {
+      if (a == null && b == null) return 0;
+      if (a == null) return 1;
+      if (b == null) return -1;
+      return null;
+    };
+    return [...rows].sort((a, b) => {
+      if (sk === "key") {
+        const c = a.key.localeCompare(b.key, undefined, { sensitivity: "base" });
+        return dir === "desc" ? -c : c;
+      }
+      let av: number | null;
+      let bv: number | null;
+      switch (sk) {
+        case "leads":
+          av = a.leads;
+          bv = b.leads;
+          break;
+        case "requested":
+          av = a.requested;
+          bv = b.requested;
+          break;
+        case "confirmed":
+          av = a.confirmed;
+          bv = b.confirmed;
+          break;
+        case "showed":
+          av = a.showed;
+          bv = b.showed;
+          break;
+        case "success":
+          av = a.success;
+          bv = b.success;
+          break;
+        case "bookingRate":
+          av = a.bookingRate;
+          bv = b.bookingRate;
+          break;
+        case "showRate":
+          av = a.showRate;
+          bv = b.showRate;
+          break;
+        case "successPerShowed":
+          av = a.successPerShowed;
+          bv = b.successPerShowed;
+          break;
+        case "successValue":
+          av = a.successValue;
+          bv = b.successValue;
+          break;
+        case "spend":
+          av = a.spend ?? null;
+          bv = b.spend ?? null;
+          break;
+        case "costPerLead":
+          av =
+            a.spend != null && a.leads > 0 ? a.spend / a.leads : null;
+          bv =
+            b.spend != null && b.leads > 0 ? b.spend / b.leads : null;
+          break;
+        case "costPerShowed":
+          av =
+            a.spend != null && a.showed > 0 ? a.spend / a.showed : null;
+          bv =
+            b.spend != null && b.showed > 0 ? b.spend / b.showed : null;
+          break;
+        case "costPerSuccess":
+          av =
+            a.spend != null && a.success > 0 ? a.spend / a.success : null;
+          bv =
+            b.spend != null && b.success > 0 ? b.spend / b.success : null;
+          break;
+        default:
+          return 0;
+      }
+      const n = nullCmp(av, bv);
+      if (n !== null) return n;
+      const an = av as number;
+      const bn = bv as number;
+      return dir === "desc" ? bn - an : an - bn;
+    });
+  }, [attributionRolledRows, attributionSortKey, attributionSortDir]);
+
+  const handleAttributionSort = (sk: AttributionSortKey) => {
+    if (sk === attributionSortKey) {
+      setAttributionSortDir((d) => (d === "asc" ? "desc" : "asc"));
+    } else {
+      setAttributionSortKey(sk);
+      setAttributionSortDir(sk === "key" ? "asc" : "desc");
+    }
+  };
 
   useEffect(() => {
     if (!locationId) return;
@@ -244,6 +410,46 @@ export default function ConversionsDashboard() {
       .catch(() => setMonthlyData([]))
       .finally(() => setMonthlyLoading(false));
   }, [activeTab, locationId, selectedPipelineId, attributionMode]);
+
+  useEffect(() => {
+    if (activeTab !== "attribution" || !locationId || !selectedPipelineId) return;
+    const params = new URLSearchParams();
+    params.set("pipelineId", selectedPipelineId);
+    params.set("dateRange", dateRangePreset);
+    params.set("clientDate", getTodayLocal());
+    if (dateRangePreset === "custom" && customDateFrom && customDateTo) {
+      params.set("dateFrom", customDateFrom);
+      params.set("dateTo", customDateTo);
+    }
+    params.set("attribution", attributionMode);
+    params.set("dimension", attributionDimension);
+    setAttributionLoading(true);
+    setAttributionError(null);
+    fetch(`/api/conversions/${locationId}/attribution?${params.toString()}`)
+      .then(async (res) => {
+        const body = (await res.json()) as AttributionApiResponse & { error?: string };
+        if (!res.ok) {
+          throw new Error(body.error ?? `${res.status} ${res.statusText}`);
+        }
+        return body;
+      })
+      .then(setAttributionData)
+      .catch((e: Error) => {
+        setAttributionData(null);
+        setAttributionError(e?.message ?? "Failed to load attribution");
+      })
+      .finally(() => setAttributionLoading(false));
+  }, [
+    activeTab,
+    locationId,
+    selectedPipelineId,
+    dateRangePreset,
+    customDateFrom,
+    customDateTo,
+    attributionMode,
+    attributionDimension,
+    attributionRefresh,
+  ]);
 
   // Fetch Facebook ad spend when on monthly tab with ad account + keyword + monthly data
   useEffect(() => {
@@ -413,6 +619,7 @@ export default function ConversionsDashboard() {
           );
           refetchConversions();
           if (activeTab === "monthly") refetchMonthly();
+          setAttributionRefresh((n) => n + 1);
         }
       })
       .catch(() => {});
@@ -488,7 +695,7 @@ export default function ConversionsDashboard() {
                 ))}
               </select>
             </div>
-            {activeTab === "funnel" && (
+            {(activeTab === "funnel" || activeTab === "attribution") && (
             <>
             <div className="min-w-[180px]">
               <label className="mb-1.5 block text-sm font-medium text-slate-400">
@@ -654,7 +861,8 @@ export default function ConversionsDashboard() {
               </div>
             </>
             )}
-            {activeTab === "funnel" && dateRangePreset === "custom" && (
+            {(activeTab === "funnel" || activeTab === "attribution") &&
+              dateRangePreset === "custom" && (
               <div className="flex items-end gap-2">
                 <div>
                   <label className="mb-1.5 block text-sm font-medium text-slate-400">
@@ -680,7 +888,12 @@ export default function ConversionsDashboard() {
                 </div>
                 <button
                   onClick={handleCustomDateApply}
-                  disabled={loading || !customDateFrom || !customDateTo}
+                  disabled={
+                    !customDateFrom ||
+                    !customDateTo ||
+                    (activeTab === "funnel" && loading) ||
+                    (activeTab === "attribution" && attributionLoading)
+                  }
                   className="rounded-xl bg-indigo-600 px-4 py-2.5 font-medium text-white transition-colors hover:bg-indigo-500 disabled:opacity-50"
                 >
                   Apply
@@ -705,6 +918,16 @@ export default function ConversionsDashboard() {
               Funnel
             </button>
             <button
+              onClick={() => setActiveTab("attribution")}
+              className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
+                activeTab === "attribution"
+                  ? "bg-indigo-600 text-white"
+                  : "bg-white/5 text-slate-400 hover:bg-white/10 hover:text-white"
+              }`}
+            >
+              By ad
+            </button>
+            <button
               onClick={() => setActiveTab("monthly")}
               className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
                 activeTab === "monthly"
@@ -715,6 +938,9 @@ export default function ConversionsDashboard() {
               Month to Month
             </button>
             </div>
+            {(activeTab === "funnel" ||
+              activeTab === "monthly" ||
+              activeTab === "attribution") && (
             <div className="flex items-center gap-2">
               <span className="flex items-center gap-1.5 text-sm text-slate-400">
                 Calculate:
@@ -752,7 +978,36 @@ export default function ConversionsDashboard() {
                 <option value="currentStageCounts">Current Stage Counts</option>
               </select>
             </div>
-            {activeTab === "monthly" && (
+            )}
+            {activeTab === "attribution" && (
+              <div className="flex flex-wrap items-center gap-3">
+                <label className="flex items-center gap-2 text-sm text-slate-400">
+                  <span>Group by</span>
+                  <select
+                    value={attributionDimension}
+                    onChange={(e) =>
+                      setAttributionDimension(e.target.value as AttributionDimensionUI)
+                    }
+                    className="rounded border border-white/20 bg-white/5 px-2 py-1.5 text-sm text-white focus:border-indigo-500 focus:outline-none"
+                  >
+                    <option value="content">Ad (utm_content)</option>
+                    <option value="medium">Ad set (utm_medium)</option>
+                    <option value="campaign">Campaign (utm_campaign)</option>
+                    <option value="source">Source</option>
+                  </select>
+                </label>
+                <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-400">
+                  <input
+                    type="checkbox"
+                    checked={attributionWrapNames}
+                    onChange={(e) => setAttributionWrapNames(e.target.checked)}
+                    className="rounded border-white/20 bg-white/5 text-indigo-600 focus:ring-indigo-500"
+                  />
+                  Wrap long names
+                </label>
+              </div>
+            )}
+            {(activeTab === "monthly" || activeTab === "attribution") && (
               <div className="flex items-center gap-2">
                 <span className="flex items-center gap-1.5 text-sm text-slate-400">
                   Attribution:
@@ -795,7 +1050,259 @@ export default function ConversionsDashboard() {
         )}
 
         {/* Content */}
-        {activeTab === "monthly" ? (
+        {activeTab === "attribution" ? (
+          attributionLoading ? (
+            <div className="flex items-center justify-center rounded-2xl border border-white/10 bg-white/5 px-12 py-24">
+              <div className="flex flex-col items-center gap-4">
+                <div className="h-10 w-10 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent" />
+                <p className="text-slate-400">Loading attribution…</p>
+                <p className="max-w-md text-center text-xs text-slate-500">
+                  Fetching contacts for UTM data can take a while for large pipelines.
+                </p>
+              </div>
+            </div>
+          ) : attributionError ? (
+            <div className="rounded-2xl border border-red-500/30 bg-red-500/10 px-8 py-6">
+              <p className="font-medium text-red-300">Attribution error</p>
+              <p className="mt-1 text-red-200/90">{attributionError}</p>
+            </div>
+          ) : attributionData?.rows?.length ? (
+            <div className="space-y-4">
+              {attributionData.meta?.dateRange && (
+                <p className="text-sm text-slate-400">
+                  {attributionData.pipeline?.name ?? "Pipeline"} ·{" "}
+                  {formatDate(attributionData.meta.dateRange.startDate)} –{" "}
+                  {formatDate(attributionData.meta.dateRange.endDate)} ·{" "}
+                  {attributionData.meta.opportunitiesInRange} opps ·{" "}
+                  {attributionData.meta.contactsFetched} contacts loaded
+                </p>
+              )}
+              {attributionData.meta?.metaSpendError ? (
+                <p className="text-sm text-amber-300/95">
+                  Meta spend unavailable: {attributionData.meta.metaSpendError}
+                </p>
+              ) : null}
+              <div className="overflow-x-auto rounded-xl border border-white/10">
+                <table
+                  className={`text-left text-sm ${
+                    attributionWrapNames ? "w-full min-w-[1040px]" : "w-full min-w-[1280px]"
+                  }`}
+                >
+                  <thead>
+                    <tr className="border-b border-white/10 bg-white/5">
+                      <th
+                        className={`px-3 py-3 font-medium text-slate-400 ${
+                          attributionWrapNames ? "min-w-[280px] max-w-md lg:max-w-lg" : "w-[28%]"
+                        }`}
+                        aria-sort={
+                          attributionSortKey === "key"
+                            ? attributionSortDir === "asc"
+                              ? "ascending"
+                              : "descending"
+                            : "none"
+                        }
+                      >
+                        <button
+                          type="button"
+                          onClick={() => handleAttributionSort("key")}
+                          className="flex w-full flex-col items-start gap-0.5 text-left text-slate-400 transition-colors hover:text-white"
+                        >
+                          <span className="inline-flex items-center gap-1">
+                            {attributionDimension === "content"
+                              ? "Ad"
+                              : attributionDimension === "medium"
+                                ? "Ad set"
+                                : attributionDimension === "campaign"
+                                  ? "Campaign"
+                                  : "Source"}
+                            {attributionSortKey === "key" && (
+                              <span className="text-indigo-400" aria-hidden>
+                                {attributionSortDir === "desc" ? "↓" : "↑"}
+                              </span>
+                            )}
+                          </span>
+                          <span className="text-[10px] font-normal text-slate-500">
+                            Hover any cell for full text
+                          </span>
+                        </button>
+                      </th>
+                      {(
+                        [
+                          ["leads", "Leads"],
+                          ["requested", "Req"],
+                          ["confirmed", "Conf"],
+                          ["showed", "Showed"],
+                          ["success", "Success"],
+                          ["bookingRate", "Book %"],
+                          ["showRate", "Show %"],
+                          ["successPerShowed", "Succ/show %"],
+                          ["successValue", "$ success"],
+                          ["spend", "Spend"],
+                          ["costPerLead", "$/lead"],
+                          ["costPerShowed", "$/show"],
+                          ["costPerSuccess", "$/succ"],
+                        ] as const
+                      ).map(([colKey, label]) => (
+                        <th
+                          key={colKey}
+                          className="px-2 py-3 text-right font-medium"
+                          aria-sort={
+                            attributionSortKey === colKey
+                              ? attributionSortDir === "asc"
+                                ? "ascending"
+                                : "descending"
+                              : "none"
+                          }
+                        >
+                          <button
+                            type="button"
+                            onClick={() => handleAttributionSort(colKey)}
+                            className="inline-flex w-full items-center justify-end gap-0.5 text-slate-400 transition-colors hover:text-white"
+                          >
+                            {label}
+                            {attributionSortKey === colKey && (
+                              <span className="text-indigo-400" aria-hidden>
+                                {attributionSortDir === "desc" ? "↓" : "↑"}
+                              </span>
+                            )}
+                          </button>
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-white/5">
+                    {attributionSortedRows.map((row, rowIdx) => (
+                      <tr key={`${row.key}-${rowIdx}`} className="bg-white/[0.02]">
+                        <td
+                          className={`px-3 py-2.5 align-top text-slate-200 ${
+                            attributionWrapNames
+                              ? "min-w-[220px] max-w-md whitespace-pre-wrap break-words lg:max-w-lg"
+                              : "max-w-[min(380px,32vw)] truncate"
+                          }`}
+                          title={row.key}
+                        >
+                          {row.key}
+                        </td>
+                        <td className="px-2 py-2.5 text-right tabular-nums text-white">{row.leads}</td>
+                        <td className="px-2 py-2.5 text-right tabular-nums text-slate-300">{row.requested}</td>
+                        <td className="px-2 py-2.5 text-right tabular-nums text-slate-300">{row.confirmed}</td>
+                        <td className="px-2 py-2.5 text-right tabular-nums text-slate-300">{row.showed}</td>
+                        <td className="px-2 py-2.5 text-right tabular-nums text-emerald-400">{row.success}</td>
+                        <td className="px-2 py-2.5 text-right tabular-nums text-slate-400">
+                          {row.bookingRate != null ? `${row.bookingRate}%` : "—"}
+                        </td>
+                        <td className="px-2 py-2.5 text-right tabular-nums text-slate-400">
+                          {row.showRate != null ? `${row.showRate}%` : "—"}
+                        </td>
+                        <td className="px-2 py-2.5 text-right tabular-nums text-slate-400">
+                          {row.successPerShowed != null ? `${row.successPerShowed}%` : "—"}
+                        </td>
+                        <td className="px-2 py-2.5 text-right tabular-nums text-slate-300">
+                          {row.successValue > 0
+                            ? row.successValue.toLocaleString(undefined, {
+                                style: "currency",
+                                currency: "USD",
+                                maximumFractionDigits: 0,
+                              })
+                            : "—"}
+                        </td>
+                        <td className="px-2 py-2.5 text-right tabular-nums text-slate-300">
+                          {row.spend != null
+                            ? row.spend.toLocaleString(undefined, {
+                                style: "currency",
+                                currency: "USD",
+                                maximumFractionDigits: 0,
+                              })
+                            : "—"}
+                        </td>
+                        <td className="px-2 py-2.5 text-right tabular-nums text-slate-400">
+                          {row.spend != null && row.leads > 0
+                            ? (row.spend / row.leads).toLocaleString(undefined, {
+                                style: "currency",
+                                currency: "USD",
+                                maximumFractionDigits: 0,
+                              })
+                            : "—"}
+                        </td>
+                        <td className="px-2 py-2.5 text-right tabular-nums text-slate-400">
+                          {row.spend != null && row.showed > 0
+                            ? (row.spend / row.showed).toLocaleString(undefined, {
+                                style: "currency",
+                                currency: "USD",
+                                maximumFractionDigits: 0,
+                              })
+                            : "—"}
+                        </td>
+                        <td className="px-2 py-2.5 text-right tabular-nums text-slate-400">
+                          {row.spend != null && row.success > 0
+                            ? (row.spend / row.success).toLocaleString(undefined, {
+                                style: "currency",
+                                currency: "USD",
+                                maximumFractionDigits: 0,
+                              })
+                            : "—"}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="space-y-2 text-xs text-slate-500">
+                <p>
+                  <span className="text-slate-400">Calculate</span> uses the same{" "}
+                  <span className="text-slate-400">On Totals</span> /{" "}
+                  <span className="text-slate-400">Current Stage Counts</span> setting as Funnel and
+                  Month to Month (saved per location). On Totals inflates Leads / Req / Conf /
+                  Showed so later-stage opps count toward earlier stages; rates match that view.
+                </p>
+                <p>
+                  Click any column header to sort; click again to reverse. Default is Success
+                  (high→low). Names are normalized (extra spaces collapsed) so the same ad set
+                  rolls into one row when the string matches. Rows with no % (—) sort after rows
+                  with a value.
+                </p>
+                <p>
+                  <span className="text-slate-400">Counts</span> — each cell is opportunities in
+                  that funnel stage for this row (same stage mapping as the Funnel tab).{" "}
+                  <span className="text-slate-400">Success</span> includes won deals and
+                  success-mapped stages. <span className="text-slate-400">Unmapped</span> (not
+                  shown as a column) is stages we could not classify.
+                </p>
+                <p>
+                  <span className="text-slate-400">Booking %</span> = (Req + Conf) ÷ (Leads + Req +
+                  Conf), same as the funnel booking rate idea: of everyone still a lead or in the
+                  booking funnel, what share has requested or confirmed an appointment. Example: 6
+                  leads + 1 req + 1 conf → denominator 8, numerator 2 → <strong className="text-slate-400">25%</strong>.
+                </p>
+                <p>
+                  <span className="text-slate-400">Show %</span> = Showed ÷ (Req + Conf).{" "}
+                  <span className="text-slate-400">Succ/show %</span> = Success ÷ Showed when
+                  Showed &gt; 0. <span className="text-slate-400">(unknown)</span> = missing value for
+                  this grouping on the contact (see GHL{" "}
+                  <code className="text-slate-400">attributionSource</code> / custom fields).
+                </p>
+                <p>
+                  <span className="text-slate-400">Spend</span> comes from Meta Insights for the same
+                  date range, joined by Facebook ad / ad set / campaign ID on the contact (when the
+                  By ad dimension matches that level). A location needs an ad account in settings
+                  and <code className="text-slate-400">META_ACCESS_TOKEN</code> on the server.{" "}
+                  <span className="text-slate-400">$/lead</span>, <span className="text-slate-400">$/show</span>, and{" "}
+                  <span className="text-slate-400">$/succ</span> use Spend ÷ the displayed funnel counts, so{" "}
+                  <span className="text-slate-400">On Totals</span> changes denominators the same way as
+                  the Leads / Showed / Success columns. Spend itself is not rolled up.
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 px-8 py-6">
+              <p className="font-medium text-amber-200">No attribution rows</p>
+              <p className="mt-1 text-amber-200/90">
+                {attributionData?.message ??
+                  "No opportunities in this date range, or pipeline not selected."}
+              </p>
+            </div>
+          )
+        ) : activeTab === "monthly" ? (
           monthlyLoading ? (
             <div className="flex items-center justify-center rounded-2xl border border-white/10 bg-white/5 px-12 py-24">
               <div className="flex flex-col items-center gap-4">

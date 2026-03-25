@@ -151,3 +151,99 @@ export async function fetchSpendByMonth(
     };
   }
 }
+
+export type MetaInsightsLevel = "campaign" | "adset" | "ad";
+
+/**
+ * Spend for each object at the given insights level over an inclusive date range (YYYY-MM-DD).
+ * Paginates all results. Optionally restrict to specific campaign IDs (keyword filter flow).
+ */
+export async function fetchSpendByInsightsLevel(
+  adAccountId: string,
+  level: MetaInsightsLevel,
+  since: string,
+  until: string,
+  options?: { campaignIds?: string[] }
+): Promise<{ spendByObjectId: Record<string, number>; error?: string }> {
+  const token = getAccessToken();
+  if (!token) {
+    return { spendByObjectId: {}, error: "META_ACCESS_TOKEN not configured" };
+  }
+
+  const graphId = normalizeAdAccountId(adAccountId);
+  if (!graphId) {
+    return { spendByObjectId: {}, error: "Invalid ad account ID" };
+  }
+
+  const idField =
+    level === "campaign"
+      ? "campaign_id"
+      : level === "adset"
+        ? "adset_id"
+        : "ad_id";
+
+  const spendByObjectId: Record<string, number> = {};
+  let url: string | null =
+    `${META_GRAPH}/${META_API_VERSION}/${graphId}/insights?${new URLSearchParams({
+      fields: `spend,${idField}`,
+      level,
+      time_range: JSON.stringify({ since, until }),
+      access_token: token,
+      limit: "500",
+    }).toString()}`;
+
+  if (options?.campaignIds?.length) {
+    const u = new URL(url);
+    u.searchParams.set(
+      "filtering",
+      JSON.stringify([
+        {
+          field: "campaign.id",
+          operator: "IN",
+          value: options.campaignIds,
+        },
+      ])
+    );
+    url = u.toString();
+  }
+
+  try {
+    while (url) {
+      const res = await fetch(url);
+      const json = (await res.json()) as {
+        data?: Array<Record<string, string | undefined>>;
+        paging?: { next?: string };
+        error?: { message?: string };
+      };
+
+      if (json.error) {
+        return {
+          spendByObjectId,
+          error: json.error.message ?? "Insights error",
+        };
+      }
+
+      const rows = Array.isArray(json.data) ? json.data : [];
+      for (const row of rows) {
+        const oid = row[idField];
+        const spendVal = row.spend;
+        if (oid != null && spendVal != null) {
+          const id = String(oid);
+          const val = parseFloat(String(spendVal));
+          if (!isNaN(val)) {
+            spendByObjectId[id] = (spendByObjectId[id] ?? 0) + val;
+          }
+        }
+      }
+
+      url = json.paging?.next ?? null;
+    }
+
+    return { spendByObjectId };
+  } catch (err) {
+    return {
+      spendByObjectId: {},
+      error: err instanceof Error ? err.message : "Failed to fetch insights",
+    };
+  }
+}

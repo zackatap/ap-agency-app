@@ -59,7 +59,8 @@ function getOpportunityStatus(opp: GHLOpportunity): string {
   return String(raw).trim();
 }
 
-function isWonStatus(opp: GHLOpportunity): boolean {
+/** True when GHL marks the opportunity won (counts as success regardless of stage). */
+export function isOpportunityWon(opp: GHLOpportunity): boolean {
   const s = getOpportunityStatus(opp);
   return s.toLowerCase() === "won";
 }
@@ -69,7 +70,7 @@ export interface DateRangeFilter {
   endDate: string;
 }
 
-function authHeaders(token: string): HeadersInit {
+export function ghlAuthHeaders(token: string): HeadersInit {
   return {
     Accept: "application/json",
     "Content-Type": "application/json",
@@ -82,7 +83,7 @@ const GHL_MAX_PAGES = 40; // Safety limit; date-based exit can stop earlier
 const GHL_DELAY_MS = 150; // Delay between pagination requests to avoid 429
 const GHL_429_RETRY_MS = 3000; // Wait before retry on rate limit
 
-function delay(ms: number): Promise<void> {
+export function ghlDelay(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
 
@@ -109,7 +110,7 @@ export async function getPipelines(
   url.searchParams.set("locationId", locationId);
 
   const res = await fetch(url.toString(), {
-    headers: authHeaders(accessToken),
+    headers: ghlAuthHeaders(accessToken),
   });
   if (!res.ok) {
     const err = await res.text();
@@ -140,7 +141,7 @@ export async function getOpportunityCountsByStage(
   let hasMore = true;
 
   while (hasMore) {
-    if (page > 1) await delay(GHL_DELAY_MS);
+    if (page > 1) await ghlDelay(GHL_DELAY_MS);
 
     const searchUrl = new URL(`${GHL_BASE}/opportunities/search`);
     searchUrl.searchParams.set("location_id", locationId);
@@ -151,11 +152,11 @@ export async function getOpportunityCountsByStage(
 
     const searchRes = await fetch(searchUrl.toString(), {
       method: "GET",
-      headers: authHeaders(accessToken),
+      headers: ghlAuthHeaders(accessToken),
     });
 
     if (searchRes.status === 429) {
-      await delay(GHL_429_RETRY_MS);
+      await ghlDelay(GHL_429_RETRY_MS);
       continue; // Retry same page
     }
 
@@ -189,7 +190,7 @@ export async function getOpportunityCountsByStage(
             ? ((opp as Record<string, unknown>).monetary_value as number)
             : 0;
 
-      if (isWonStatus(opp)) {
+      if (isOpportunityWon(opp)) {
         counts[STATUS_WON_KEY] = (counts[STATUS_WON_KEY] ?? 0) + 1;
         values[STATUS_WON_KEY] = (values[STATUS_WON_KEY] ?? 0) + val;
       } else {
@@ -261,7 +262,7 @@ export async function getOpportunityCountsByStagePerMonth(
     : null;
 
   while (page <= GHL_MAX_PAGES) {
-    if (page > 1) await delay(GHL_DELAY_MS);
+    if (page > 1) await ghlDelay(GHL_DELAY_MS);
 
     const searchUrl = new URL(`${GHL_BASE}/opportunities/search`);
     searchUrl.searchParams.set("location_id", locationId);
@@ -272,11 +273,11 @@ export async function getOpportunityCountsByStagePerMonth(
 
     const searchRes = await fetch(searchUrl.toString(), {
       method: "GET",
-      headers: authHeaders(accessToken),
+      headers: ghlAuthHeaders(accessToken),
     });
 
     if (searchRes.status === 429) {
-      await delay(GHL_429_RETRY_MS);
+      await ghlDelay(GHL_429_RETRY_MS);
       continue;
     }
 
@@ -319,7 +320,7 @@ export async function getOpportunityCountsByStagePerMonth(
             ? ((opp as Record<string, unknown>).monetary_value as number)
             : 0;
 
-      if (isWonStatus(opp)) {
+      if (isOpportunityWon(opp)) {
         bucket.counts[STATUS_WON_KEY] = (bucket.counts[STATUS_WON_KEY] ?? 0) + 1;
         bucket.values[STATUS_WON_KEY] = (bucket.values[STATUS_WON_KEY] ?? 0) + val;
       } else {
@@ -404,7 +405,7 @@ export async function getOpportunityNamesForCell(
   const oldestMonthStart = monthRanges.length > 0 ? monthRanges[monthRanges.length - 1].startDate : null;
 
   while (page <= GHL_MAX_PAGES) {
-    if (page > 1) await delay(GHL_DELAY_MS);
+    if (page > 1) await ghlDelay(GHL_DELAY_MS);
     const searchUrl = new URL(`${GHL_BASE}/opportunities/search`);
     searchUrl.searchParams.set("location_id", locationId);
     searchUrl.searchParams.set("pipeline_id", pipeline.id);
@@ -414,10 +415,10 @@ export async function getOpportunityNamesForCell(
 
     const searchRes = await fetch(searchUrl.toString(), {
       method: "GET",
-      headers: authHeaders(accessToken),
+      headers: ghlAuthHeaders(accessToken),
     });
     if (searchRes.status === 429) {
-      await delay(GHL_429_RETRY_MS);
+      await ghlDelay(GHL_429_RETRY_MS);
       continue;
     }
     if (!searchRes.ok) {
@@ -452,7 +453,7 @@ export async function getOpportunityNamesForCell(
       if (monthKey !== targetMonthKey) continue;
 
       let bucketKey: string;
-      if (isWonStatus(opp)) {
+      if (isOpportunityWon(opp)) {
         bucketKey = STATUS_WON_KEY;
       } else {
         bucketKey =
