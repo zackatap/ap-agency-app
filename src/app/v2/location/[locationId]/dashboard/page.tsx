@@ -1846,6 +1846,7 @@ function MonthToMonthTable({
     rollupAssumptions ? applyRollup(m.metrics) : m.metrics;
 
   const [appointmentsExpanded, setAppointmentsExpanded] = useState(false);
+  const [roasExpanded, setRoasExpanded] = useState(false);
   const [drillDown, setDrillDown] = useState<{ label: string; monthKey: string; metric: string } | null>(null);
   const [drillDownNames, setDrillDownNames] = useState<string[]>([]);
   const [drillDownNamesByStage, setDrillDownNamesByStage] = useState<Record<string, string[]> | null>(null);
@@ -2030,6 +2031,34 @@ function MonthToMonthTable({
               })}
               format="currency"
             />
+            <MetricRow
+              label="Total Value Closed"
+              values={months.map((m) => {
+                const v = getMetrics(m).successValue;
+                return v > 0 ? v : null;
+              })}
+              format="currency"
+              trClassName="border-t border-white/10"
+              labelClassName="font-medium text-slate-200"
+            />
+            <RoasAccordionHeaderRow
+              months={months}
+              expanded={roasExpanded}
+              onToggle={() => setRoasExpanded((e) => !e)}
+            />
+            {roasExpanded && (
+              <MetricRow
+                label="Return on ad spend"
+                subRow
+                values={months.map((m) => {
+                  const spend = adSpend[m.monthKey] ?? 0;
+                  const closedValue = getMetrics(m).successValue;
+                  if (spend <= 0 || closedValue <= 0) return null;
+                  return closedValue / spend;
+                })}
+                format="roas"
+              />
+            )}
           </tbody>
         </table>
       </div>
@@ -2146,6 +2175,53 @@ function TotalAppointmentsRow({
   );
 }
 
+/** ROAS multiplier as "10:1" (closed value ÷ ad spend). */
+function formatRoasRatio(multiplier: number): string {
+  if (!Number.isFinite(multiplier) || multiplier <= 0) return "—";
+  const rounded =
+    multiplier >= 100
+      ? Math.round(multiplier)
+      : Math.round(multiplier * 10) / 10;
+  const s =
+    Number.isInteger(rounded) || Math.abs(rounded - Math.round(rounded)) < 1e-9
+      ? String(Math.round(rounded))
+      : rounded.toFixed(1).replace(/\.0$/, "");
+  return `${s}:1`;
+}
+
+function RoasAccordionHeaderRow({
+  months,
+  expanded,
+  onToggle,
+}: {
+  months: MonthlyData[];
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  return (
+    <tr>
+      <td className="sticky left-0 z-10 bg-slate-900/95 px-4 py-2">
+        <button
+          type="button"
+          onClick={onToggle}
+          className="flex items-center gap-2 text-left text-sm font-medium text-slate-200 hover:text-white"
+        >
+          <span className="tabular-nums text-slate-400">{expanded ? "▼" : "▶"}</span>
+          ROAS
+        </button>
+      </td>
+      {months.map((m) => (
+        <td
+          key={m.monthKey}
+          className="px-4 py-2 text-center text-sm tabular-nums text-slate-500"
+        >
+          —
+        </td>
+      ))}
+    </tr>
+  );
+}
+
 function MetricRow({
   label,
   values,
@@ -2154,25 +2230,36 @@ function MetricRow({
   metric,
   monthKeys,
   onCellClick,
+  trClassName,
+  labelClassName,
 }: {
   label: string;
   values: (number | null)[];
-  format?: "number" | "percent" | "currency";
+  format?: "number" | "percent" | "currency" | "roas";
   subRow?: boolean;
   metric?: string;
   monthKeys?: string[];
   onCellClick?: (monthKey: string, metric: string, label: string) => void;
+  trClassName?: string;
+  labelClassName?: string;
 }) {
   const fmt = (v: number | null) => {
     if (v == null) return "—";
     if (format === "percent") return `${v}%`;
     if (format === "currency") return `$${v.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    if (format === "roas") return formatRoasRatio(v);
     return String(v);
   };
   const clickable = metric && monthKeys && onCellClick && format === "number";
   return (
-    <tr className={subRow ? "bg-slate-800/60" : undefined}>
-      <td className={`sticky left-0 z-10 px-4 py-2 text-sm text-slate-300 ${subRow ? "pl-8 bg-slate-800/60" : "bg-slate-900/95"}`}>
+    <tr
+      className={[subRow ? "bg-slate-800/60" : "", trClassName ?? ""]
+        .filter(Boolean)
+        .join(" ")}
+    >
+      <td
+        className={`sticky left-0 z-10 px-4 py-2 text-sm text-slate-300 ${subRow ? "pl-8 bg-slate-800/60" : "bg-slate-900/95"} ${labelClassName ?? ""}`}
+      >
         {label}
       </td>
       {values.map((v, i) => (
