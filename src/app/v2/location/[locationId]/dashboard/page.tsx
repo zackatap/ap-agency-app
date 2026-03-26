@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useSearchParams } from "next/navigation";
 import {
   DATE_RANGE_LABELS,
@@ -136,15 +136,15 @@ export default function ConversionsDashboard() {
     | "requested"
     | "confirmed"
     | "showed"
-    | "success"
+    | "closed"
     | "bookingRate"
     | "showRate"
-    | "successPerShowed"
-    | "successValue"
+    | "closedPerShowed"
+    | "closedValue"
     | "spend"
     | "costPerLead"
     | "costPerShowed"
-    | "costPerSuccess";
+    | "costPerClosed";
   interface AttributionBreakdownRow {
     key: string;
     leads: number;
@@ -153,13 +153,13 @@ export default function ConversionsDashboard() {
     showed: number;
     noShow: number;
     unmapped: number;
-    success: number;
+    closed: number;
     total: number;
     totalValue: number;
-    successValue: number;
+    closedValue: number;
     bookingRate: number | null;
     showRate: number | null;
-    successPerShowed: number | null;
+    closedPerShowed: number | null;
     spend: number | null;
   }
   interface AttributionApiResponse {
@@ -185,7 +185,9 @@ export default function ConversionsDashboard() {
   const [attributionRefresh, setAttributionRefresh] = useState(0);
   const [attributionWrapNames, setAttributionWrapNames] = useState(true);
   const [attributionSortKey, setAttributionSortKey] =
-    useState<AttributionSortKey>("success");
+    useState<AttributionSortKey>("closed");
+  /** Ignores stale funnel API responses when date range / pipeline changes mid-flight. */
+  const conversionsFetchGenRef = useRef(0);
   const [attributionSortDir, setAttributionSortDir] = useState<"asc" | "desc">(
     "desc"
   );
@@ -230,9 +232,9 @@ export default function ConversionsDashboard() {
           av = a.showed;
           bv = b.showed;
           break;
-        case "success":
-          av = a.success;
-          bv = b.success;
+        case "closed":
+          av = a.closed;
+          bv = b.closed;
           break;
         case "bookingRate":
           av = a.bookingRate;
@@ -242,13 +244,13 @@ export default function ConversionsDashboard() {
           av = a.showRate;
           bv = b.showRate;
           break;
-        case "successPerShowed":
-          av = a.successPerShowed;
-          bv = b.successPerShowed;
+        case "closedPerShowed":
+          av = a.closedPerShowed;
+          bv = b.closedPerShowed;
           break;
-        case "successValue":
-          av = a.successValue;
-          bv = b.successValue;
+        case "closedValue":
+          av = a.closedValue;
+          bv = b.closedValue;
           break;
         case "spend":
           av = a.spend ?? null;
@@ -266,11 +268,11 @@ export default function ConversionsDashboard() {
           bv =
             b.spend != null && b.showed > 0 ? b.spend / b.showed : null;
           break;
-        case "costPerSuccess":
+        case "costPerClosed":
           av =
-            a.spend != null && a.success > 0 ? a.spend / a.success : null;
+            a.spend != null && a.closed > 0 ? a.spend / a.closed : null;
           bv =
-            b.spend != null && b.success > 0 ? b.spend / b.success : null;
+            b.spend != null && b.closed > 0 ? b.spend / b.closed : null;
           break;
         default:
           return 0;
@@ -352,6 +354,7 @@ export default function ConversionsDashboard() {
       return;
     }
 
+    const gen = ++conversionsFetchGenRef.current;
     const params = new URLSearchParams();
     params.set("dateRange", "last_30");
     params.set("clientDate", getTodayLocal());
@@ -378,17 +381,21 @@ export default function ConversionsDashboard() {
         return JSON.parse(body);
       })
       .then((d: ConversionData) => {
-        if (d !== undefined) {
-          setData(d);
-          if (d.pipeline) {
-            setSelectedPipelineId(d.pipeline.id);
-            setUnmappedStages(d.unmappedStages ?? []);
-            setAllStageMappings(d.allStageMappings ?? []);
-          }
+        if (gen !== conversionsFetchGenRef.current || d === undefined) return;
+        setData(d);
+        if (d.pipeline) {
+          setSelectedPipelineId(d.pipeline.id);
+          setUnmappedStages(d.unmappedStages ?? []);
+          setAllStageMappings(d.allStageMappings ?? []);
         }
       })
-      .catch((err) => setError(err?.message ?? String(err)))
-      .finally(() => setLoading(false));
+      .catch((err) => {
+        if (gen !== conversionsFetchGenRef.current) return;
+        setError(err?.message ?? String(err));
+      })
+      .finally(() => {
+        if (gen === conversionsFetchGenRef.current) setLoading(false);
+      });
   }, [locationId]);
 
   useEffect(() => {
@@ -413,6 +420,7 @@ export default function ConversionsDashboard() {
 
   useEffect(() => {
     if (activeTab !== "attribution" || !locationId || !selectedPipelineId) return;
+    const ac = new AbortController();
     const params = new URLSearchParams();
     params.set("pipelineId", selectedPipelineId);
     params.set("dateRange", dateRangePreset);
@@ -425,7 +433,8 @@ export default function ConversionsDashboard() {
     params.set("dimension", attributionDimension);
     setAttributionLoading(true);
     setAttributionError(null);
-    fetch(`/api/conversions/${locationId}/attribution?${params.toString()}`)
+    const url = `/api/conversions/${locationId}/attribution?${params.toString()}`;
+    fetch(url, { signal: ac.signal })
       .then(async (res) => {
         const body = (await res.json()) as AttributionApiResponse & { error?: string };
         if (!res.ok) {
@@ -433,12 +442,20 @@ export default function ConversionsDashboard() {
         }
         return body;
       })
-      .then(setAttributionData)
-      .catch((e: Error) => {
-        setAttributionData(null);
-        setAttributionError(e?.message ?? "Failed to load attribution");
+      .then((body) => {
+        setAttributionData(body);
+        setAttributionError(null);
       })
-      .finally(() => setAttributionLoading(false));
+      .catch((e: unknown) => {
+        if (e instanceof Error && e.name === "AbortError") return;
+        const msg = e instanceof Error ? e.message : "Failed to load attribution";
+        setAttributionData(null);
+        setAttributionError(msg);
+      })
+      .finally(() => {
+        if (!ac.signal.aborted) setAttributionLoading(false);
+      });
+    return () => ac.abort();
   }, [
     activeTab,
     locationId,
@@ -511,6 +528,7 @@ export default function ConversionsDashboard() {
     }
     if (compareEnabled) params.set("compare", "true");
 
+    const gen = ++conversionsFetchGenRef.current;
     const apiUrl = `/api/conversions/${locationId}?${params.toString()}`;
     setLoading(true);
     fetch(apiUrl)
@@ -518,9 +536,17 @@ export default function ConversionsDashboard() {
         if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
         return res.json();
       })
-      .then((d: ConversionData) => setData(d))
-      .catch((err) => setError(err?.message ?? String(err)))
-      .finally(() => setLoading(false));
+      .then((d: ConversionData) => {
+        if (gen !== conversionsFetchGenRef.current) return;
+        setData(d);
+      })
+      .catch((err) => {
+        if (gen !== conversionsFetchGenRef.current) return;
+        setError(err?.message ?? String(err));
+      })
+      .finally(() => {
+        if (gen === conversionsFetchGenRef.current) setLoading(false);
+      });
   };
 
   const handleDateRangeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
@@ -528,6 +554,7 @@ export default function ConversionsDashboard() {
     setDateRangePreset(preset);
     if (!locationId || preset === "custom") return; // Custom waits for Apply
 
+    const gen = ++conversionsFetchGenRef.current;
     const urlParams = new URLSearchParams();
     urlParams.set("dateRange", preset);
     urlParams.set("clientDate", getTodayLocal());
@@ -541,13 +568,22 @@ export default function ConversionsDashboard() {
         if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
         return res.json();
       })
-      .then((d: ConversionData) => setData(d))
-      .catch((err) => setError(err?.message ?? String(err)))
-      .finally(() => setLoading(false));
+      .then((d: ConversionData) => {
+        if (gen !== conversionsFetchGenRef.current) return;
+        setData(d);
+      })
+      .catch((err) => {
+        if (gen !== conversionsFetchGenRef.current) return;
+        setError(err?.message ?? String(err));
+      })
+      .finally(() => {
+        if (gen === conversionsFetchGenRef.current) setLoading(false);
+      });
   };
 
   const refetchConversions = () => {
     if (!locationId) return;
+    const gen = ++conversionsFetchGenRef.current;
     const params = new URLSearchParams();
     params.set("dateRange", dateRangePreset);
     params.set("clientDate", getTodayLocal());
@@ -560,11 +596,10 @@ export default function ConversionsDashboard() {
     fetch(`/api/conversions/${locationId}?${params.toString()}`)
       .then((res) => (res.ok ? res.json() : null))
       .then((d: ConversionData | null) => {
-        if (d) {
-          setData(d);
-          if (d.unmappedStages) setUnmappedStages(d.unmappedStages);
-          if (d.allStageMappings) setAllStageMappings(d.allStageMappings);
-        }
+        if (gen !== conversionsFetchGenRef.current || !d) return;
+        setData(d);
+        if (d.unmappedStages) setUnmappedStages(d.unmappedStages);
+        if (d.allStageMappings) setAllStageMappings(d.allStageMappings);
       })
       .catch(() => {});
   };
@@ -627,6 +662,7 @@ export default function ConversionsDashboard() {
 
   const handleCustomDateApply = () => {
     if (!locationId || !customDateFrom || !customDateTo) return;
+    const gen = ++conversionsFetchGenRef.current;
     const params = new URLSearchParams();
     params.set("dateRange", "custom");
     params.set("dateFrom", customDateFrom);
@@ -642,9 +678,17 @@ export default function ConversionsDashboard() {
         if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
         return res.json();
       })
-      .then((d: ConversionData) => setData(d))
-      .catch((err) => setError(err?.message ?? String(err)))
-      .finally(() => setLoading(false));
+      .then((d: ConversionData) => {
+        if (gen !== conversionsFetchGenRef.current) return;
+        setData(d);
+      })
+      .catch((err) => {
+        if (gen !== conversionsFetchGenRef.current) return;
+        setError(err?.message ?? String(err));
+      })
+      .finally(() => {
+        if (gen === conversionsFetchGenRef.current) setLoading(false);
+      });
   };
 
   if (!locationId) return null;
@@ -724,6 +768,7 @@ export default function ConversionsDashboard() {
                   const v = e.target.checked;
                   setCompareEnabled(v);
                   if (locationId) {
+                    const gen = ++conversionsFetchGenRef.current;
                     const params = new URLSearchParams();
                     params.set("dateRange", dateRangePreset);
                     params.set("clientDate", getTodayLocal());
@@ -737,14 +782,15 @@ export default function ConversionsDashboard() {
                     fetch(`/api/conversions/${locationId}?${params.toString()}`)
                       .then((res) => (res.ok ? res.json() : null))
                       .then((d: ConversionData | null) => {
-                        if (d) {
-                          setData(d);
-                          if (d.unmappedStages) setUnmappedStages(d.unmappedStages);
-                          if (d.allStageMappings) setAllStageMappings(d.allStageMappings);
-                        }
+                        if (gen !== conversionsFetchGenRef.current || !d) return;
+                        setData(d);
+                        if (d.unmappedStages) setUnmappedStages(d.unmappedStages);
+                        if (d.allStageMappings) setAllStageMappings(d.allStageMappings);
                       })
                       .catch(() => {})
-                      .finally(() => setLoading(false));
+                      .finally(() => {
+                        if (gen === conversionsFetchGenRef.current) setLoading(false);
+                      });
                   }
                 }}
                 className="rounded border-white/20 bg-white/5 text-indigo-600 focus:ring-indigo-500"
@@ -1082,7 +1128,7 @@ export default function ConversionsDashboard() {
                   Meta spend unavailable: {attributionData.meta.metaSpendError}
                 </p>
               ) : null}
-              <div className="overflow-x-auto rounded-xl border border-white/10">
+              <div className="overflow-x-auto rounded-xl border border-white/10 pb-5">
                 <table
                   className={`text-left text-sm ${
                     attributionWrapNames ? "w-full min-w-[1040px]" : "w-full min-w-[1280px]"
@@ -1132,16 +1178,16 @@ export default function ConversionsDashboard() {
                           ["requested", "Req"],
                           ["confirmed", "Conf"],
                           ["showed", "Showed"],
-                          ["success", "Success"],
+                          ["closed", "Closed"],
                           ["bookingRate", "Book %"],
                           ["showRate", "Show %"],
-                          ["successPerShowed", "Succ/show %"],
-                          ["successValue", "$ success"],
+                          ["closedPerShowed", "Closed/show %"],
+                          ["closedValue", "Value closed"],
                           ["spend", "Spend"],
                           ["costPerLead", "$/lead"],
                           ["costPerShowed", "$/show"],
-                          ["costPerSuccess", "$/succ"],
-                        ] as const
+                          ["costPerClosed", "$/closed"],
+                        ] as const satisfies readonly (readonly [AttributionSortKey, string])[]
                       ).map(([colKey, label]) => (
                         <th
                           key={colKey}
@@ -1187,7 +1233,7 @@ export default function ConversionsDashboard() {
                         <td className="px-2 py-2.5 text-right tabular-nums text-slate-300">{row.requested}</td>
                         <td className="px-2 py-2.5 text-right tabular-nums text-slate-300">{row.confirmed}</td>
                         <td className="px-2 py-2.5 text-right tabular-nums text-slate-300">{row.showed}</td>
-                        <td className="px-2 py-2.5 text-right tabular-nums text-emerald-400">{row.success}</td>
+                        <td className="px-2 py-2.5 text-right tabular-nums text-emerald-400">{row.closed}</td>
                         <td className="px-2 py-2.5 text-right tabular-nums text-slate-400">
                           {row.bookingRate != null ? `${row.bookingRate}%` : "—"}
                         </td>
@@ -1195,11 +1241,11 @@ export default function ConversionsDashboard() {
                           {row.showRate != null ? `${row.showRate}%` : "—"}
                         </td>
                         <td className="px-2 py-2.5 text-right tabular-nums text-slate-400">
-                          {row.successPerShowed != null ? `${row.successPerShowed}%` : "—"}
+                          {row.closedPerShowed != null ? `${row.closedPerShowed}%` : "—"}
                         </td>
                         <td className="px-2 py-2.5 text-right tabular-nums text-slate-300">
-                          {row.successValue > 0
-                            ? row.successValue.toLocaleString(undefined, {
+                          {row.closedValue > 0
+                            ? row.closedValue.toLocaleString(undefined, {
                                 style: "currency",
                                 currency: "USD",
                                 maximumFractionDigits: 0,
@@ -1234,8 +1280,8 @@ export default function ConversionsDashboard() {
                             : "—"}
                         </td>
                         <td className="px-2 py-2.5 text-right tabular-nums text-slate-400">
-                          {row.spend != null && row.success > 0
-                            ? (row.spend / row.success).toLocaleString(undefined, {
+                          {row.spend != null && row.closed > 0
+                            ? (row.spend / row.closed).toLocaleString(undefined, {
                                 style: "currency",
                                 currency: "USD",
                                 maximumFractionDigits: 0,
@@ -1256,7 +1302,7 @@ export default function ConversionsDashboard() {
                   Showed so later-stage opps count toward earlier stages; rates match that view.
                 </p>
                 <p>
-                  Click any column header to sort; click again to reverse. Default is Success
+                  Click any column header to sort; click again to reverse. Default is Closed
                   (high→low). Names are normalized (extra spaces collapsed) so the same ad set
                   rolls into one row when the string matches. Rows with no % (—) sort after rows
                   with a value.
@@ -1264,9 +1310,11 @@ export default function ConversionsDashboard() {
                 <p>
                   <span className="text-slate-400">Counts</span> — each cell is opportunities in
                   that funnel stage for this row (same stage mapping as the Funnel tab).{" "}
-                  <span className="text-slate-400">Success</span> includes won deals and
-                  success-mapped stages. <span className="text-slate-400">Unmapped</span> (not
-                  shown as a column) is stages we could not classify.
+                  <span className="text-slate-400">Closed</span> uses the same rules as Month to
+                  Month: GHL status won plus stages mapped to closed/success (see funnel settings).{" "}
+                  <span className="text-slate-400">Value closed</span> is the sum of opportunity
+                  value for those opps. <span className="text-slate-400">Unmapped</span> (not shown
+                  as a column) is stages we could not classify.
                 </p>
                 <p>
                   <span className="text-slate-400">Booking %</span> = (Req + Conf) ÷ (Leads + Req +
@@ -1276,7 +1324,7 @@ export default function ConversionsDashboard() {
                 </p>
                 <p>
                   <span className="text-slate-400">Show %</span> = Showed ÷ (Req + Conf).{" "}
-                  <span className="text-slate-400">Succ/show %</span> = Success ÷ Showed when
+                  <span className="text-slate-400">Closed/show %</span> = Closed ÷ Showed when
                   Showed &gt; 0. <span className="text-slate-400">(unknown)</span> = missing value for
                   this grouping on the contact (see GHL{" "}
                   <code className="text-slate-400">attributionSource</code> / custom fields).
@@ -1287,9 +1335,9 @@ export default function ConversionsDashboard() {
                   By ad dimension matches that level). A location needs an ad account in settings
                   and <code className="text-slate-400">META_ACCESS_TOKEN</code> on the server.{" "}
                   <span className="text-slate-400">$/lead</span>, <span className="text-slate-400">$/show</span>, and{" "}
-                  <span className="text-slate-400">$/succ</span> use Spend ÷ the displayed funnel counts, so{" "}
+                  <span className="text-slate-400">$/closed</span> use Spend ÷ the displayed funnel counts, so{" "}
                   <span className="text-slate-400">On Totals</span> changes denominators the same way as
-                  the Leads / Showed / Success columns. Spend itself is not rolled up.
+                  the Leads / Showed / Closed columns. Spend itself is not rolled up.
                 </p>
               </div>
             </div>
@@ -1887,7 +1935,7 @@ function MonthToMonthTable({
           Attribution: {attributionMode === "lastUpdated" ? "Last Updated" : "Created"}
         </p>
       </div>
-      <div className="overflow-x-auto">
+      <div className="overflow-x-auto pb-5">
         <table className="w-full min-w-[600px]">
           <thead>
             <tr className="border-b border-white/10">

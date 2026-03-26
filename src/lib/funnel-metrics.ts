@@ -403,13 +403,13 @@ export interface AttributionBreakdownRowRollup {
   showed: number;
   noShow: number;
   unmapped: number;
-  success: number;
+  closed: number;
   total: number;
   totalValue: number;
-  successValue: number;
+  closedValue: number;
   bookingRate: number | null;
   showRate: number | null;
-  successPerShowed: number | null;
+  closedPerShowed: number | null;
   /** Facebook spend for the row (unchanged by rollup; cost-per uses rolled counts). */
   spend?: number | null;
 }
@@ -426,7 +426,7 @@ export function applyRollupToAttributionRow(
   const c = row.confirmed;
   const s = row.showed;
   const n = row.noShow;
-  const cl = row.success;
+  const cl = row.closed;
 
   const leadsRollup = l + r + c + s + n + cl;
   const requestedRollup = r + c + s + n + cl;
@@ -441,7 +441,7 @@ export function applyRollupToAttributionRow(
     requestedRollup > 0
       ? Math.round((showedRollup / requestedRollup) * 1000) / 10
       : null;
-  const successPerShowed =
+  const closedPerShowed =
     showedRollup > 0 ? Math.round((cl / showedRollup) * 1000) / 10 : null;
 
   return {
@@ -452,7 +452,7 @@ export function applyRollupToAttributionRow(
     showed: showedRollup,
     bookingRate,
     showRate,
-    successPerShowed,
+    closedPerShowed,
   };
 }
 

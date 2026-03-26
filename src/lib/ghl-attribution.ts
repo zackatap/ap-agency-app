@@ -5,10 +5,11 @@
  * Does not use opportunity Source or opportunity-level UTMs.
  */
 
-import { isoToLocalDateString } from "@/lib/date-ranges";
 import {
   type GHLPipeline,
   type GHLOpportunity,
+  type AttributionMode,
+  getOpportunityAttributionLocalDate,
   isOpportunityWon,
   ghlAuthHeaders,
   ghlDelay,
@@ -48,13 +49,16 @@ export interface AttributionBreakdownRow {
   showed: number;
   noShow: number;
   unmapped: number;
-  success: number;
+  /** Same definition as Month to Month “Closed”: won + success-mapped stages (see classifyOpportunityFunnelBucket). */
+  closed: number;
   total: number;
   totalValue: number;
-  successValue: number;
+  /** Monetary value for closed opps in this row (matches funnel successValue / monthly Total Value Closed). */
+  closedValue: number;
   bookingRate: number | null;
   showRate: number | null;
-  successPerShowed: number | null;
+  /** Closed ÷ Showed % when showed > 0 (same formula as funnel showedConversionRate numerator). */
+  closedPerShowed: number | null;
   /** Facebook spend for this row’s Meta IDs in the report date range (server-filled). */
   spend: number | null;
 }
@@ -360,10 +364,10 @@ type RowAgg = {
   showed: number;
   noShow: number;
   unmapped: number;
-  success: number;
+  closed: number;
   total: number;
   totalValue: number;
-  successValue: number;
+  closedValue: number;
   adIds: Set<string>;
   adSetIds: Set<string>;
   campaignIds: Set<string>;
@@ -377,10 +381,10 @@ function emptyRowAgg(): RowAgg {
     showed: 0,
     noShow: 0,
     unmapped: 0,
-    success: 0,
+    closed: 0,
     total: 0,
     totalValue: 0,
-    successValue: 0,
+    closedValue: 0,
     adIds: new Set(),
     adSetIds: new Set(),
     campaignIds: new Set(),
@@ -413,8 +417,8 @@ function addToRow(row: RowAgg, bucket: string, value: number) {
       row.noShow += 1;
       break;
     case "closed":
-      row.success += 1;
-      row.successValue += value;
+      row.closed += 1;
+      row.closedValue += value;
       break;
     case "unmapped":
       row.unmapped += 1;
@@ -435,9 +439,9 @@ function finalizeRow(
     pool > 0 ? Math.round((totalAppts / pool) * 1000) / 10 : null;
   const showRate =
     totalAppts > 0 ? Math.round((row.showed / totalAppts) * 1000) / 10 : null;
-  const successPerShowed =
+  const closedPerShowed =
     row.showed > 0
-      ? Math.round((row.success / row.showed) * 1000) / 10
+      ? Math.round((row.closed / row.showed) * 1000) / 10
       : null;
 
   const spendJoinIds =
@@ -457,13 +461,13 @@ function finalizeRow(
     showed: row.showed,
     noShow: row.noShow,
     unmapped: row.unmapped,
-    success: row.success,
+    closed: row.closed,
     total: row.total,
     totalValue: Math.round(row.totalValue * 100) / 100,
-    successValue: Math.round(row.successValue * 100) / 100,
+    closedValue: Math.round(row.closedValue * 100) / 100,
     bookingRate,
     showRate,
-    successPerShowed,
+    closedPerShowed,
     spend: null,
     spendJoinIds,
   };
@@ -541,7 +545,7 @@ export async function getAttributionBreakdown(params: {
   pipeline: GHLPipeline;
   accessToken: string;
   dateRange: { startDate: string; endDate: string };
-  attributionMode: "created" | "lastUpdated";
+  attributionMode: AttributionMode;
   dimension: AttributionDimension;
   customMappings?: CustomStageMappings;
 }): Promise<{
@@ -606,20 +610,10 @@ export async function getAttributionBreakdown(params: {
       if (seenOpp.has(opp.id)) continue;
       seenOpp.add(opp.id);
 
-      const lastChange =
-        (opp.lastStageChangeAt as string) ??
-        ((opp as Record<string, unknown>).last_stage_change_at as string) ??
-        (opp.lastStatusChangeAt as string) ??
-        ((opp as Record<string, unknown>).last_status_change_at as string);
-      const created =
-        (opp.dateCreated as string) ??
-        (opp.date_created as string) ??
-        (opp.createdAt as string);
-      const raw =
-        attributionMode === "lastUpdated"
-          ? (lastChange ?? created)
-          : created;
-      const dateStr = raw ? isoToLocalDateString(raw) : null;
+      const dateStr = getOpportunityAttributionLocalDate(
+        opp,
+        attributionMode
+      );
       if (
         dateStr &&
         (dateStr < dateRange.startDate || dateStr > dateRange.endDate)
@@ -698,7 +692,7 @@ export async function getAttributionBreakdown(params: {
 
   const rows = [...agg.entries()]
     .map(([key, row]) => finalizeRow(key, row, dimension))
-    .sort((a, b) => b.success - a.success || b.total - a.total);
+    .sort((a, b) => b.closed - a.closed || b.total - a.total);
 
   return {
     rows,

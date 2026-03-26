@@ -41,6 +41,9 @@ export interface StageMetrics {
 /** Opportunities with status "won" count as closed regardless of stage. Exported for funnel-metrics. */
 export const STATUS_WON_KEY = "__closed_by_status";
 
+/** Created date vs last activity for bucketing (funnel, monthly, By ad). */
+export type AttributionMode = "created" | "lastUpdated";
+
 /**
  * Extract status string from opportunity. GHL schema: status is a string ("open", "won", "lost", "abandoned").
  * Handles camelCase (status), snake_case (opportunity_status), and nested objects.
@@ -63,6 +66,33 @@ function getOpportunityStatus(opp: GHLOpportunity): string {
 export function isOpportunityWon(opp: GHLOpportunity): boolean {
   const s = getOpportunityStatus(opp);
   return s.toLowerCase() === "won";
+}
+
+/**
+ * Local calendar date (YYYY-MM-DD) for Created vs Last Updated attribution.
+ * lastUpdated: stage/status change → record update → created (aligned with monthly + funnel).
+ * created: created timestamp only.
+ */
+export function getOpportunityAttributionLocalDate(
+  opp: GHLOpportunity,
+  mode: AttributionMode
+): string | null {
+  const lastChange =
+    (opp.lastStageChangeAt as string) ??
+    ((opp as Record<string, unknown>).last_stage_change_at as string) ??
+    (opp.lastStatusChangeAt as string) ??
+    ((opp as Record<string, unknown>).last_status_change_at as string);
+  const updated =
+    (opp.dateUpdated as string) ??
+    ((opp as Record<string, unknown>).updated_at as string) ??
+    ((opp as Record<string, unknown>).date_updated as string);
+  const created =
+    (opp.dateCreated as string) ??
+    (opp.date_created as string) ??
+    (opp.createdAt as string);
+  const raw =
+    mode === "lastUpdated" ? (lastChange ?? updated ?? created) : created;
+  return raw ? isoToLocalDateString(raw) : null;
 }
 
 export interface DateRangeFilter {
@@ -216,9 +246,6 @@ export async function getOpportunityCountsByStage(
   return { counts, values };
 }
 
-/** Attribution mode for monthly bucketing */
-export type AttributionMode = "created" | "lastUpdated";
-
 /**
  * Fetch all opportunities once, bucket by month. Used by monthly API to avoid
  * N×months API calls (which causes 429). Single pipeline fetch, aggregate in memory.
@@ -293,19 +320,7 @@ export async function getOpportunityCountsByStagePerMonth(
     let minDateInPage: string | null = null;
 
     for (const opp of opportunities) {
-      const lastChange =
-        (opp.lastStageChangeAt as string) ??
-        ((opp as Record<string, unknown>).last_stage_change_at as string) ??
-        (opp.lastStatusChangeAt as string) ??
-        ((opp as Record<string, unknown>).last_status_change_at as string);
-      const created =
-        (opp.dateCreated as string) ??
-        (opp.date_created as string) ??
-        (opp.createdAt as string);
-      const raw = attributionMode === "lastUpdated"
-        ? (lastChange ?? created)
-        : created;
-      const dateStr = raw ? isoToLocalDateString(raw) : null;
+      const dateStr = getOpportunityAttributionLocalDate(opp, attributionMode);
       if (dateStr) {
         if (!minDateInPage || dateStr < minDateInPage) minDateInPage = dateStr;
       }
@@ -432,20 +447,7 @@ export async function getOpportunityNamesForCell(
     let minDateInPage: string | null = null;
 
     for (const opp of opportunities) {
-      const lastChange =
-        (opp.lastStageChangeAt as string) ??
-        ((opp as Record<string, unknown>).last_stage_change_at as string) ??
-        (opp.lastStatusChangeAt as string) ??
-        ((opp as Record<string, unknown>).last_status_change_at as string);
-      const created =
-        (opp.dateCreated as string) ??
-        (opp.date_created as string) ??
-        (opp.createdAt as string);
-      const raw =
-        attributionMode === "lastUpdated"
-          ? (lastChange ?? created)
-          : created;
-      const dateStr = raw ? isoToLocalDateString(raw) : null;
+      const dateStr = getOpportunityAttributionLocalDate(opp, attributionMode);
       if (dateStr) {
         if (!minDateInPage || dateStr < minDateInPage) minDateInPage = dateStr;
       }
