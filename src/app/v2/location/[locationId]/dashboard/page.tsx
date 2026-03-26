@@ -1846,7 +1846,7 @@ function MonthToMonthTable({
     rollupAssumptions ? applyRollup(m.metrics) : m.metrics;
 
   const [appointmentsExpanded, setAppointmentsExpanded] = useState(false);
-  const [roasExpanded, setRoasExpanded] = useState(false);
+  const [totalValueClosedExpanded, setTotalValueClosedExpanded] = useState(false);
   const [drillDown, setDrillDown] = useState<{ label: string; monthKey: string; metric: string } | null>(null);
   const [drillDownNames, setDrillDownNames] = useState<string[]>([]);
   const [drillDownNamesByStage, setDrillDownNamesByStage] = useState<Record<string, string[]> | null>(null);
@@ -2031,34 +2031,13 @@ function MonthToMonthTable({
               })}
               format="currency"
             />
-            <MetricRow
-              label="Total Value Closed"
-              values={months.map((m) => {
-                const v = getMetrics(m).successValue;
-                return v > 0 ? v : null;
-              })}
-              format="currency"
-              trClassName="border-t border-white/10"
-              labelClassName="font-medium text-slate-200"
-            />
-            <RoasAccordionHeaderRow
+            <TotalValueClosedRow
               months={months}
-              expanded={roasExpanded}
-              onToggle={() => setRoasExpanded((e) => !e)}
+              getMetrics={getMetrics}
+              adSpend={adSpend}
+              expanded={totalValueClosedExpanded}
+              onToggle={() => setTotalValueClosedExpanded((e) => !e)}
             />
-            {roasExpanded && (
-              <MetricRow
-                label="Return on ad spend"
-                subRow
-                values={months.map((m) => {
-                  const spend = adSpend[m.monthKey] ?? 0;
-                  const closedValue = getMetrics(m).successValue;
-                  if (spend <= 0 || closedValue <= 0) return null;
-                  return closedValue / spend;
-                })}
-                format="roas"
-              />
-            )}
           </tbody>
         </table>
       </div>
@@ -2189,36 +2168,64 @@ function formatRoasRatio(multiplier: number): string {
   return `${s}:1`;
 }
 
-function RoasAccordionHeaderRow({
+function TotalValueClosedRow({
   months,
+  getMetrics,
+  adSpend,
   expanded,
   onToggle,
 }: {
   months: MonthlyData[];
+  getMetrics: (m: MonthlyData) => FunnelMetrics;
+  adSpend: Record<string, number>;
   expanded: boolean;
   onToggle: () => void;
 }) {
+  const closedValues = months.map((m) => {
+    const v = getMetrics(m).successValue;
+    return v > 0 ? v : null;
+  });
   return (
-    <tr>
-      <td className="sticky left-0 z-10 bg-slate-900/95 px-4 py-2">
-        <button
-          type="button"
-          onClick={onToggle}
-          className="flex items-center gap-2 text-left text-sm font-medium text-slate-200 hover:text-white"
-        >
-          <span className="tabular-nums text-slate-400">{expanded ? "▼" : "▶"}</span>
-          ROAS
-        </button>
-      </td>
-      {months.map((m) => (
-        <td
-          key={m.monthKey}
-          className="px-4 py-2 text-center text-sm tabular-nums text-slate-500"
-        >
-          —
+    <>
+      <tr className="border-t border-white/10">
+        <td className="sticky left-0 z-10 bg-slate-900/95 px-4 py-2">
+          <button
+            type="button"
+            onClick={onToggle}
+            className="flex items-center gap-2 text-left text-sm font-medium text-slate-200 hover:text-white"
+          >
+            <span className="tabular-nums text-slate-400">{expanded ? "▼" : "▶"}</span>
+            Total Value Closed
+          </button>
         </td>
-      ))}
-    </tr>
+        {closedValues.map((v, i) => (
+          <td
+            key={months[i]!.monthKey}
+            className="px-4 py-2 text-center text-sm tabular-nums text-white"
+          >
+            {v != null
+              ? `$${v.toLocaleString("en-US", {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}`
+              : "—"}
+          </td>
+        ))}
+      </tr>
+      {expanded && (
+        <MetricRow
+          label="ROAS"
+          subRow
+          values={months.map((m) => {
+            const spend = adSpend[m.monthKey] ?? 0;
+            const closedValue = getMetrics(m).successValue;
+            if (spend <= 0 || closedValue <= 0) return null;
+            return closedValue / spend;
+          })}
+          format="roas"
+        />
+      )}
+    </>
   );
 }
 
