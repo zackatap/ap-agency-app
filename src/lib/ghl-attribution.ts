@@ -552,6 +552,8 @@ export async function getAttributionBreakdown(params: {
   rows: AttributionBreakdownRowInternal[];
   meta: {
     opportunitiesInRange: number;
+    /** Count of opps classified as closed (matches sum of row.closed across rows). */
+    closedInRange: number;
     contactsFetched: number;
     dimension: AttributionDimension;
   };
@@ -694,10 +696,13 @@ export async function getAttributionBreakdown(params: {
     .map(([key, row]) => finalizeRow(key, row, dimension))
     .sort((a, b) => b.closed - a.closed || b.total - a.total);
 
+  const closedInRange = inRange.filter((r) => r.bucket === "closed").length;
+
   return {
     rows,
     meta: {
       opportunitiesInRange: inRange.length,
+      closedInRange,
       contactsFetched: uniqueContactIds.length,
       dimension,
     },

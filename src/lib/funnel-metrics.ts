@@ -468,8 +468,10 @@ export type OpportunityFunnelBucket =
 
 /**
  * Classify a single opportunity into a funnel bucket, aligned with `calculateFunnelMetrics`.
- * Won opps are always `closed`. Custom stage mappings take precedence; then pipeline order
- * (stages before first appointment phase count as leads); then built-in name matching.
+ * Won opps are always `closed`. Custom mappings first; then explicit funnel stages from
+ * `getEffectiveMapping` (requested / showed / closed / …) so name-based success stages match
+ * monthly `sumStages` even when the stage sits before the first appointment in pipeline order;
+ * then pipeline-order “pre–first-appt” fallback for unclassified early stages; then lead/unmapped.
  */
 export function classifyOpportunityFunnelBucket(params: {
   isWon: boolean;
@@ -486,6 +488,11 @@ export function classifyOpportunityFunnelBucket(params: {
     return custom;
   }
 
+  const effective = getEffectiveMapping(stageName, customMappings);
+  if (effective && effective !== "lead") {
+    return effective;
+  }
+
   if (pipelineStages?.length) {
     const sorted = [...pipelineStages].sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
     const idx = sorted.findIndex(
@@ -496,12 +503,6 @@ export function classifyOpportunityFunnelBucket(params: {
     if (idx >= 0 && firstApptIdx < 0) return "lead";
   }
 
-  const m = getEffectiveMapping(stageName, customMappings);
-  if (m === "lead") return "lead";
-  if (m === "requested") return "requested";
-  if (m === "confirmed") return "confirmed";
-  if (m === "showed") return "showed";
-  if (m === "noShow") return "noShow";
-  if (m === "closed") return "closed";
+  if (effective === "lead") return "lead";
   return "unmapped";
 }

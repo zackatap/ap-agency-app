@@ -166,6 +166,7 @@ export default function ConversionsDashboard() {
     rows: AttributionBreakdownRow[];
     meta: {
       opportunitiesInRange: number;
+      closedInRange?: number;
       contactsFetched: number;
       dimension: AttributionDimensionUI;
       dateRange: { startDate: string; endDate: string };
@@ -1114,8 +1115,11 @@ export default function ConversionsDashboard() {
                   {attributionData.pipeline?.name ?? "Pipeline"} ·{" "}
                   {formatDate(attributionData.meta.dateRange.startDate)} –{" "}
                   {formatDate(attributionData.meta.dateRange.endDate)} ·{" "}
-                  {attributionData.meta.opportunitiesInRange} opps ·{" "}
-                  {attributionData.meta.contactsFetched} contacts loaded
+                  {attributionData.meta.opportunitiesInRange} opps
+                  {attributionData.meta.closedInRange != null
+                    ? ` · ${attributionData.meta.closedInRange} closed`
+                    : ""}{" "}
+                  · {attributionData.meta.contactsFetched} contacts loaded
                 </p>
               )}
               {attributionData.meta?.metaSpendError ? (
@@ -1292,9 +1296,14 @@ export default function ConversionsDashboard() {
                   that funnel stage for this row (same stage mapping as the Funnel tab).{" "}
                   <span className="text-slate-400">Closed</span> uses the same rules as Month to
                   Month: GHL status won plus stages mapped to closed/success (see funnel settings).{" "}
-                  <span className="text-slate-400">Value Closed</span> is the sum of opportunity
-                  value for those opps. <span className="text-slate-400">Unmapped</span> (not shown
-                  as a column) is stages we could not classify.
+                  The summary line <span className="text-slate-400">closed</span> count should equal
+                  the sum of the Closed column (every opp is in exactly one row). Month to Month
+                  shows <span className="text-slate-400">one calendar month per column</span>; By ad
+                  uses your <span className="text-slate-400">date range</span> — compare the same
+                  window (e.g. sum one month’s Closed column to that month only, not to Last 90
+                  days). <span className="text-slate-400">Value Closed</span> is the sum of
+                  opportunity value for closed opps. <span className="text-slate-400">Unmapped</span>{" "}
+                  (not shown as a column) is stages we could not classify.
                 </p>
                 <p>
                   <span className="text-slate-400">Appts</span> = Req + Conf (appointment stages).{" "}
