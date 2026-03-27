@@ -132,19 +132,18 @@ export default function ConversionsDashboard() {
   type AttributionDimensionUI = "content" | "medium" | "campaign" | "source";
   type AttributionSortKey =
     | "key"
-    | "leads"
-    | "requested"
-    | "confirmed"
-    | "showed"
-    | "closed"
-    | "bookingRate"
-    | "showRate"
-    | "closedPerShowed"
-    | "closedValue"
     | "spend"
-    | "costPerLead"
-    | "costPerShowed"
-    | "costPerClosed";
+    | "leads"
+    | "cpl"
+    | "appts"
+    | "bookingRate"
+    | "showed"
+    | "cps"
+    | "showRate"
+    | "closed"
+    | "cpClose"
+    | "closePercent"
+    | "closedValue";
   interface AttributionBreakdownRow {
     key: string;
     leads: number;
@@ -216,63 +215,59 @@ export default function ConversionsDashboard() {
       let av: number | null;
       let bv: number | null;
       switch (sk) {
+        case "spend":
+          av = a.spend ?? null;
+          bv = b.spend ?? null;
+          break;
         case "leads":
           av = a.leads;
           bv = b.leads;
           break;
-        case "requested":
-          av = a.requested;
-          bv = b.requested;
+        case "cpl":
+          av =
+            a.spend != null && a.leads > 0 ? a.spend / a.leads : null;
+          bv =
+            b.spend != null && b.leads > 0 ? b.spend / b.leads : null;
           break;
-        case "confirmed":
-          av = a.confirmed;
-          bv = b.confirmed;
-          break;
-        case "showed":
-          av = a.showed;
-          bv = b.showed;
-          break;
-        case "closed":
-          av = a.closed;
-          bv = b.closed;
+        case "appts":
+          av = a.requested + a.confirmed;
+          bv = b.requested + b.confirmed;
           break;
         case "bookingRate":
           av = a.bookingRate;
           bv = b.bookingRate;
           break;
+        case "showed":
+          av = a.showed;
+          bv = b.showed;
+          break;
+        case "cps":
+          av =
+            a.spend != null && a.showed > 0 ? a.spend / a.showed : null;
+          bv =
+            b.spend != null && b.showed > 0 ? b.spend / b.showed : null;
+          break;
         case "showRate":
           av = a.showRate;
           bv = b.showRate;
           break;
-        case "closedPerShowed":
+        case "closed":
+          av = a.closed;
+          bv = b.closed;
+          break;
+        case "cpClose":
+          av =
+            a.spend != null && a.closed > 0 ? a.spend / a.closed : null;
+          bv =
+            b.spend != null && b.closed > 0 ? b.spend / b.closed : null;
+          break;
+        case "closePercent":
           av = a.closedPerShowed;
           bv = b.closedPerShowed;
           break;
         case "closedValue":
           av = a.closedValue;
           bv = b.closedValue;
-          break;
-        case "spend":
-          av = a.spend ?? null;
-          bv = b.spend ?? null;
-          break;
-        case "costPerLead":
-          av =
-            a.spend != null && a.leads > 0 ? a.spend / a.leads : null;
-          bv =
-            b.spend != null && b.leads > 0 ? b.spend / b.leads : null;
-          break;
-        case "costPerShowed":
-          av =
-            a.spend != null && a.showed > 0 ? a.spend / a.showed : null;
-          bv =
-            b.spend != null && b.showed > 0 ? b.spend / b.showed : null;
-          break;
-        case "costPerClosed":
-          av =
-            a.spend != null && a.closed > 0 ? a.spend / a.closed : null;
-          bv =
-            b.spend != null && b.closed > 0 ? b.spend / b.closed : null;
           break;
         default:
           return 0;
@@ -1131,7 +1126,7 @@ export default function ConversionsDashboard() {
               <div className="overflow-x-auto rounded-xl border border-white/10 pb-5">
                 <table
                   className={`text-left text-sm ${
-                    attributionWrapNames ? "w-full min-w-[1040px]" : "w-full min-w-[1280px]"
+                    attributionWrapNames ? "w-full min-w-[1180px]" : "w-full min-w-[1320px]"
                   }`}
                 >
                   <thead>
@@ -1174,24 +1169,29 @@ export default function ConversionsDashboard() {
                       </th>
                       {(
                         [
-                          ["leads", "Leads"],
-                          ["requested", "Req"],
-                          ["confirmed", "Conf"],
-                          ["showed", "Showed"],
-                          ["closed", "Closed"],
-                          ["bookingRate", "Book %"],
-                          ["showRate", "Show %"],
-                          ["closedPerShowed", "Closed/show %"],
-                          ["closedValue", "Value closed"],
-                          ["spend", "Spend"],
-                          ["costPerLead", "$/lead"],
-                          ["costPerShowed", "$/show"],
-                          ["costPerClosed", "$/closed"],
-                        ] as const satisfies readonly (readonly [AttributionSortKey, string])[]
-                      ).map(([colKey, label]) => (
+                          ["spend", "Spend", false],
+                          ["leads", "Leads", false],
+                          ["cpl", "CPL", false],
+                          ["appts", "Appts", false],
+                          ["bookingRate", "Book %", true],
+                          ["showed", "Showed", false],
+                          ["cps", "CPS", false],
+                          ["showRate", "Show %", true],
+                          ["closed", "Closed", false],
+                          ["cpClose", "CPClose", false],
+                          ["closePercent", "Close %", true],
+                          ["closedValue", "Value Closed", false],
+                        ] as const satisfies readonly (readonly [
+                          AttributionSortKey,
+                          string,
+                          boolean,
+                        ])[]
+                      ).map(([colKey, label, nowrap]) => (
                         <th
                           key={colKey}
-                          className="px-2 py-3 text-right font-medium"
+                          className={`px-2 py-3 text-right font-medium ${
+                            nowrap ? "whitespace-nowrap min-w-[5.25rem]" : ""
+                          }`}
                           aria-sort={
                             attributionSortKey === colKey
                               ? attributionSortDir === "asc"
@@ -1203,7 +1203,9 @@ export default function ConversionsDashboard() {
                           <button
                             type="button"
                             onClick={() => handleAttributionSort(colKey)}
-                            className="inline-flex w-full items-center justify-end gap-0.5 text-slate-400 transition-colors hover:text-white"
+                            className={`inline-flex w-full items-center justify-end gap-0.5 text-slate-400 transition-colors hover:text-white ${
+                              nowrap ? "whitespace-nowrap" : ""
+                            }`}
                           >
                             {label}
                             {attributionSortKey === colKey && (
@@ -1217,79 +1219,57 @@ export default function ConversionsDashboard() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/5">
-                    {attributionSortedRows.map((row, rowIdx) => (
-                      <tr key={`${row.key}-${rowIdx}`} className="bg-white/[0.02]">
-                        <td
-                          className={`px-3 py-2.5 align-top text-slate-200 ${
-                            attributionWrapNames
-                              ? "min-w-[220px] max-w-md whitespace-pre-wrap break-words lg:max-w-lg"
-                              : "max-w-[min(380px,32vw)] truncate"
-                          }`}
-                          title={row.key}
-                        >
-                          {row.key}
-                        </td>
-                        <td className="px-2 py-2.5 text-right tabular-nums text-white">{row.leads}</td>
-                        <td className="px-2 py-2.5 text-right tabular-nums text-slate-300">{row.requested}</td>
-                        <td className="px-2 py-2.5 text-right tabular-nums text-slate-300">{row.confirmed}</td>
-                        <td className="px-2 py-2.5 text-right tabular-nums text-slate-300">{row.showed}</td>
-                        <td className="px-2 py-2.5 text-right tabular-nums text-emerald-400">{row.closed}</td>
-                        <td className="px-2 py-2.5 text-right tabular-nums text-slate-400">
-                          {row.bookingRate != null ? `${row.bookingRate}%` : "—"}
-                        </td>
-                        <td className="px-2 py-2.5 text-right tabular-nums text-slate-400">
-                          {row.showRate != null ? `${row.showRate}%` : "—"}
-                        </td>
-                        <td className="px-2 py-2.5 text-right tabular-nums text-slate-400">
-                          {row.closedPerShowed != null ? `${row.closedPerShowed}%` : "—"}
-                        </td>
-                        <td className="px-2 py-2.5 text-right tabular-nums text-slate-300">
-                          {row.closedValue > 0
-                            ? row.closedValue.toLocaleString(undefined, {
-                                style: "currency",
-                                currency: "USD",
-                                maximumFractionDigits: 0,
-                              })
-                            : "—"}
-                        </td>
-                        <td className="px-2 py-2.5 text-right tabular-nums text-slate-300">
-                          {row.spend != null
-                            ? row.spend.toLocaleString(undefined, {
-                                style: "currency",
-                                currency: "USD",
-                                maximumFractionDigits: 0,
-                              })
-                            : "—"}
-                        </td>
-                        <td className="px-2 py-2.5 text-right tabular-nums text-slate-400">
-                          {row.spend != null && row.leads > 0
-                            ? (row.spend / row.leads).toLocaleString(undefined, {
-                                style: "currency",
-                                currency: "USD",
-                                maximumFractionDigits: 0,
-                              })
-                            : "—"}
-                        </td>
-                        <td className="px-2 py-2.5 text-right tabular-nums text-slate-400">
-                          {row.spend != null && row.showed > 0
-                            ? (row.spend / row.showed).toLocaleString(undefined, {
-                                style: "currency",
-                                currency: "USD",
-                                maximumFractionDigits: 0,
-                              })
-                            : "—"}
-                        </td>
-                        <td className="px-2 py-2.5 text-right tabular-nums text-slate-400">
-                          {row.spend != null && row.closed > 0
-                            ? (row.spend / row.closed).toLocaleString(undefined, {
-                                style: "currency",
-                                currency: "USD",
-                                maximumFractionDigits: 0,
-                              })
-                            : "—"}
-                        </td>
-                      </tr>
-                    ))}
+                    {attributionSortedRows.map((row, rowIdx) => {
+                      const appts = row.requested + row.confirmed;
+                      const fmtUsd = (n: number) =>
+                        n.toLocaleString(undefined, {
+                          style: "currency",
+                          currency: "USD",
+                          maximumFractionDigits: 0,
+                        });
+                      return (
+                        <tr key={`${row.key}-${rowIdx}`} className="bg-white/[0.02]">
+                          <td
+                            className={`px-3 py-2.5 align-top text-slate-200 ${
+                              attributionWrapNames
+                                ? "min-w-[220px] max-w-md whitespace-pre-wrap break-words lg:max-w-lg"
+                                : "max-w-[min(380px,32vw)] truncate"
+                            }`}
+                            title={row.key}
+                          >
+                            {row.key}
+                          </td>
+                          <td className="px-2 py-2.5 text-right tabular-nums text-slate-300">
+                            {row.spend != null ? fmtUsd(row.spend) : "—"}
+                          </td>
+                          <td className="px-2 py-2.5 text-right tabular-nums text-white">{row.leads}</td>
+                          <td className="px-2 py-2.5 text-right tabular-nums text-slate-400">
+                            {row.spend != null && row.leads > 0 ? fmtUsd(row.spend / row.leads) : "—"}
+                          </td>
+                          <td className="px-2 py-2.5 text-right tabular-nums text-slate-300">{appts}</td>
+                          <td className="px-2 py-2.5 text-right tabular-nums text-slate-400 whitespace-nowrap">
+                            {row.bookingRate != null ? `${row.bookingRate}%` : "—"}
+                          </td>
+                          <td className="px-2 py-2.5 text-right tabular-nums text-slate-300">{row.showed}</td>
+                          <td className="px-2 py-2.5 text-right tabular-nums text-slate-400">
+                            {row.spend != null && row.showed > 0 ? fmtUsd(row.spend / row.showed) : "—"}
+                          </td>
+                          <td className="px-2 py-2.5 text-right tabular-nums text-slate-400 whitespace-nowrap">
+                            {row.showRate != null ? `${row.showRate}%` : "—"}
+                          </td>
+                          <td className="px-2 py-2.5 text-right tabular-nums text-emerald-400">{row.closed}</td>
+                          <td className="px-2 py-2.5 text-right tabular-nums text-slate-400">
+                            {row.spend != null && row.closed > 0 ? fmtUsd(row.spend / row.closed) : "—"}
+                          </td>
+                          <td className="px-2 py-2.5 text-right tabular-nums text-slate-400 whitespace-nowrap">
+                            {row.closedPerShowed != null ? `${row.closedPerShowed}%` : "—"}
+                          </td>
+                          <td className="px-2 py-2.5 text-right tabular-nums text-slate-300">
+                            {row.closedValue > 0 ? fmtUsd(row.closedValue) : "—"}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -1298,8 +1278,8 @@ export default function ConversionsDashboard() {
                   <span className="text-slate-400">Calculate</span> uses the same{" "}
                   <span className="text-slate-400">On Totals</span> /{" "}
                   <span className="text-slate-400">Current Stage Counts</span> setting as Funnel and
-                  Month to Month (saved per location). On Totals inflates Leads / Req / Conf /
-                  Showed so later-stage opps count toward earlier stages; rates match that view.
+                  Month to Month (saved per location). On Totals inflates Leads, Appts (Req+Conf),
+                  Showed, etc., so later-stage opps count toward earlier stages; rates match that view.
                 </p>
                 <p>
                   Click any column header to sort; click again to reverse. Default is Closed
@@ -1312,32 +1292,31 @@ export default function ConversionsDashboard() {
                   that funnel stage for this row (same stage mapping as the Funnel tab).{" "}
                   <span className="text-slate-400">Closed</span> uses the same rules as Month to
                   Month: GHL status won plus stages mapped to closed/success (see funnel settings).{" "}
-                  <span className="text-slate-400">Value closed</span> is the sum of opportunity
+                  <span className="text-slate-400">Value Closed</span> is the sum of opportunity
                   value for those opps. <span className="text-slate-400">Unmapped</span> (not shown
                   as a column) is stages we could not classify.
                 </p>
                 <p>
-                  <span className="text-slate-400">Booking %</span> = (Req + Conf) ÷ (Leads + Req +
-                  Conf), same as the funnel booking rate idea: of everyone still a lead or in the
-                  booking funnel, what share has requested or confirmed an appointment. Example: 6
-                  leads + 1 req + 1 conf → denominator 8, numerator 2 → <strong className="text-slate-400">25%</strong>.
+                  <span className="text-slate-400">Appts</span> = Req + Conf (appointment stages).{" "}
+                  <span className="text-slate-400">Book %</span> = Appts ÷ (Leads + Appts), same as
+                  the funnel booking rate. Example: 6 leads + 2 appts → denominator 8, numerator 2 →{" "}
+                  <strong className="text-slate-400">25%</strong>.
                 </p>
                 <p>
-                  <span className="text-slate-400">Show %</span> = Showed ÷ (Req + Conf).{" "}
-                  <span className="text-slate-400">Closed/show %</span> = Closed ÷ Showed when
-                  Showed &gt; 0. <span className="text-slate-400">(unknown)</span> = missing value for
-                  this grouping on the contact (see GHL{" "}
-                  <code className="text-slate-400">attributionSource</code> / custom fields).
+                  <span className="text-slate-400">Show %</span> = Showed ÷ Appts.{" "}
+                  <span className="text-slate-400">Close %</span> = Closed ÷ Showed when Showed &gt; 0.{" "}
+                  <span className="text-slate-400">(unknown)</span> = missing value for this grouping on
+                  the contact (see GHL <code className="text-slate-400">attributionSource</code> / custom fields).
                 </p>
                 <p>
                   <span className="text-slate-400">Spend</span> comes from Meta Insights for the same
                   date range, joined by Facebook ad / ad set / campaign ID on the contact (when the
                   By ad dimension matches that level). A location needs an ad account in settings
                   and <code className="text-slate-400">META_ACCESS_TOKEN</code> on the server.{" "}
-                  <span className="text-slate-400">$/lead</span>, <span className="text-slate-400">$/show</span>, and{" "}
-                  <span className="text-slate-400">$/closed</span> use Spend ÷ the displayed funnel counts, so{" "}
+                  <span className="text-slate-400">CPL</span>, <span className="text-slate-400">CPS</span>, and{" "}
+                  <span className="text-slate-400">CPClose</span> use Spend ÷ the displayed counts, so{" "}
                   <span className="text-slate-400">On Totals</span> changes denominators the same way as
-                  the Leads / Showed / Closed columns. Spend itself is not rolled up.
+                  Leads / Showed / Closed. Spend itself is not rolled up.
                 </p>
               </div>
             </div>
