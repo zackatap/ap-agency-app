@@ -167,6 +167,8 @@ export default function ConversionsDashboard() {
     meta: {
       opportunitiesInRange: number;
       closedInRange?: number;
+      funnelClosedAggregate?: number;
+      closedMatchesFunnelAggregate?: boolean;
       contactsFetched: number;
       dimension: AttributionDimensionUI;
       dateRange: { startDate: string; endDate: string };
@@ -1118,10 +1120,21 @@ export default function ConversionsDashboard() {
                   {attributionData.meta.opportunitiesInRange} opps
                   {attributionData.meta.closedInRange != null
                     ? ` · ${attributionData.meta.closedInRange} closed`
+                    : ""}
+                  {attributionData.meta.funnelClosedAggregate != null &&
+                  attributionData.meta.closedInRange !==
+                    attributionData.meta.funnelClosedAggregate
+                    ? ` (funnel tally ${attributionData.meta.funnelClosedAggregate})`
                     : ""}{" "}
                   · {attributionData.meta.contactsFetched} contacts loaded
                 </p>
               )}
+              {attributionData.meta?.closedMatchesFunnelAggregate === false ? (
+                <p className="text-sm text-amber-300/95">
+                  Closed count mismatch vs pipeline funnel math — please report this (table vs
+                  aggregate).
+                </p>
+              ) : null}
               {attributionData.meta?.metaSpendError ? (
                 <p className="text-sm text-amber-300/95">
                   Meta spend unavailable: {attributionData.meta.metaSpendError}
@@ -1292,18 +1305,25 @@ export default function ConversionsDashboard() {
                   with a value.
                 </p>
                 <p>
-                  <span className="text-slate-400">Counts</span> — each cell is opportunities in
-                  that funnel stage for this row (same stage mapping as the Funnel tab).{" "}
-                  <span className="text-slate-400">Closed</span> uses the same rules as Month to
-                  Month: GHL status won plus stages mapped to closed/success (see funnel settings).{" "}
-                  The summary line <span className="text-slate-400">closed</span> count should equal
-                  the sum of the Closed column (every opp is in exactly one row). Month to Month
-                  shows <span className="text-slate-400">one calendar month per column</span>; By ad
-                  uses your <span className="text-slate-400">date range</span> — compare the same
-                  window (e.g. sum one month’s Closed column to that month only, not to Last 90
-                  days). <span className="text-slate-400">Value Closed</span> is the sum of
-                  opportunity value for closed opps. <span className="text-slate-400">Unmapped</span>{" "}
-                  (not shown as a column) is stages we could not classify.
+                  <span className="text-slate-400">Every opportunity</span> in the date range appears
+                  in <span className="text-slate-400">exactly one row</span> (we never drop opps).
+                  Rows are split only by contact fields for “Group by” (e.g. Ad ={" "}
+                  <code className="text-slate-400">utm_content</code>).{" "}
+                  <span className="text-slate-400">(unknown)</span> means that field is blank on the
+                  contact — not “everything else.” Closed deals still only show in{" "}
+                  <span className="text-slate-400">Closed</span> if GHL marks them won or the stage
+                  maps to closed; early-stage opps in (unknown) are not “missing” closed counts.
+                </p>
+                <p>
+                  <span className="text-slate-400">Counts</span> — same stage mapping as Funnel /
+                  Month to Month. The summary <span className="text-slate-400">closed</span> equals
+                  the sum of the Closed column and matches pipeline funnel math for this range.{" "}
+                  <span className="text-slate-400">Month to Month</span> is one calendar month per
+                  column; <span className="text-slate-400">By ad</span> uses your date range (e.g. Last
+                  90 days) — do not sum several month columns and expect that to match 90-day totals.{" "}
+                  <span className="text-slate-400">Value Closed</span> is opportunity value for closed
+                  opps. <span className="text-slate-400">Unmapped</span> funnel stages are not shown as
+                  a column.
                 </p>
                 <p>
                   <span className="text-slate-400">Appts</span> = Req + Conf (appointment stages).{" "}

@@ -9,12 +9,14 @@ import {
   type GHLPipeline,
   type GHLOpportunity,
   type AttributionMode,
+  STATUS_WON_KEY,
   getOpportunityAttributionLocalDate,
   isOpportunityWon,
   ghlAuthHeaders,
   ghlDelay,
 } from "@/lib/ghl-oauth";
 import {
+  calculateFunnelMetrics,
   classifyOpportunityFunnelBucket,
   type CustomStageMappings,
 } from "@/lib/funnel-metrics";
@@ -554,6 +556,10 @@ export async function getAttributionBreakdown(params: {
     opportunitiesInRange: number;
     /** Count of opps classified as closed (matches sum of row.closed across rows). */
     closedInRange: number;
+    /** Same closed count as Month to Month funnel math on in-range opps (stage histogram + calculateFunnelMetrics). */
+    funnelClosedAggregate: number;
+    /** False if per-opp buckets disagree with aggregate funnel (should not happen). */
+    closedMatchesFunnelAggregate: boolean;
     contactsFetched: number;
     dimension: AttributionDimension;
   };
@@ -578,6 +584,8 @@ export async function getAttributionBreakdown(params: {
     value: number;
     bucket: string;
   }> = [];
+  const aggregateCounts: Record<string, number> = {};
+  const aggregateValues: Record<string, number> = {};
 
   while (page <= GHL_MAX_PAGES) {
     if (page > 1) await ghlDelay(GHL_DELAY_MS);
@@ -632,6 +640,16 @@ export async function getAttributionBreakdown(params: {
         (opp.pipelineStageId as string) ??
         "Unknown";
 
+      const val = getOppMonetaryValue(opp);
+      if (won) {
+        aggregateCounts[STATUS_WON_KEY] = (aggregateCounts[STATUS_WON_KEY] ?? 0) + 1;
+        aggregateValues[STATUS_WON_KEY] =
+          (aggregateValues[STATUS_WON_KEY] ?? 0) + val;
+      } else {
+        aggregateCounts[stageName] = (aggregateCounts[stageName] ?? 0) + 1;
+        aggregateValues[stageName] = (aggregateValues[stageName] ?? 0) + val;
+      }
+
       const bucket = classifyOpportunityFunnelBucket({
         isWon: won,
         stageName,
@@ -646,7 +664,7 @@ export async function getAttributionBreakdown(params: {
 
       inRange.push({
         contactId: cid,
-        value: getOppMonetaryValue(opp),
+        value: val,
         bucket,
       });
     }
@@ -697,12 +715,23 @@ export async function getAttributionBreakdown(params: {
     .sort((a, b) => b.closed - a.closed || b.total - a.total);
 
   const closedInRange = inRange.filter((r) => r.bucket === "closed").length;
+  const funnelMetrics = calculateFunnelMetrics(
+    aggregateCounts,
+    aggregateValues,
+    pipelineStages,
+    customMappings
+  );
+  const funnelClosedAggregate = funnelMetrics.closed;
+  const closedMatchesFunnelAggregate =
+    closedInRange === funnelClosedAggregate;
 
   return {
     rows,
     meta: {
       opportunitiesInRange: inRange.length,
       closedInRange,
+      funnelClosedAggregate,
+      closedMatchesFunnelAggregate,
       contactsFetched: uniqueContactIds.length,
       dimension,
     },
