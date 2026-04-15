@@ -118,7 +118,7 @@ export async function GET(
     const tokenLocationDenied =
       lowered.includes("does not have access to this location") ||
       lowered.includes("token does not have access to this location") ||
-      (lowered.includes("ghl workflows:") &&
+      (lowered.includes("get /workflows/") &&
         lowered.includes("403") &&
         lowered.includes("access to this location"));
 

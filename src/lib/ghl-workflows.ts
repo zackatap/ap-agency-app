@@ -1,4 +1,4 @@
-import { ghlAuthHeaders } from "@/lib/ghl-oauth";
+import { ghlAuthHeadersGet } from "@/lib/ghl-oauth";
 
 const GHL_BASE = "https://services.leadconnectorhq.com";
 
@@ -63,46 +63,22 @@ function extractWorkflowArray(payload: unknown): unknown[] {
 }
 
 /**
- * Location-scoped list (same pattern as dashboard: explicit location in request).
- * Docs: https://marketplace.gohighlevel.com/docs/ghl/emails/list-workflow-campaigns-v-2
- */
-async function fetchWorkflowCampaignsByLocation(
-  locationId: string,
-  accessToken: string
-): Promise<{ ok: true; workflows: GHLWorkflow[] } | { ok: false; status: number; body: string }> {
-  const endpoint = `${GHL_BASE}/emails/public/v2/locations/${encodeURIComponent(locationId)}/campaigns/workflows`;
-  const res = await fetch(endpoint, {
-    method: "GET",
-    headers: ghlAuthHeaders(accessToken),
-  });
-  const body = await res.text();
-  if (!res.ok) {
-    return { ok: false, status: res.status, body };
-  }
-  let payload: unknown;
-  try {
-    payload = JSON.parse(body) as unknown;
-  } catch {
-    return { ok: false, status: res.status, body: body.slice(0, 300) };
-  }
-  const rows = extractWorkflowArray(payload);
-  const workflows = rows
-    .map((item) => normalizeWorkflow(item))
-    .filter((item): item is GHLWorkflow => item !== null);
-  return { ok: true, workflows };
-}
-
-/**
- * Core workflows resource.
+ * Official Workflows API — list workflows.
  * Docs: https://marketplace.gohighlevel.com/docs/ghl/workflows/get-workflow
+ * Scopes: https://marketplace.gohighlevel.com/docs/Authorization/Scopes (workflows.readonly → GET /workflows/)
  */
-async function fetchWorkflowsRoot(
-  accessToken: string
+async function fetchWorkflowsOnce(
+  accessToken: string,
+  searchParams?: URLSearchParams
 ): Promise<{ ok: true; workflows: GHLWorkflow[] } | { ok: false; status: number; body: string }> {
-  const endpoint = new URL("/workflows/", GHL_BASE);
-  const res = await fetch(endpoint.toString(), {
+  const url = new URL("/workflows/", GHL_BASE);
+  if (searchParams) {
+    searchParams.forEach((v, k) => url.searchParams.set(k, v));
+  }
+
+  const res = await fetch(url.toString(), {
     method: "GET",
-    headers: ghlAuthHeaders(accessToken),
+    headers: ghlAuthHeadersGet(accessToken),
   });
   const body = await res.text();
   if (!res.ok) {
@@ -125,47 +101,47 @@ export async function getWorkflowCampaigns(
   locationId: string,
   accessToken: string
 ): Promise<GHLWorkflow[]> {
-  const byLocation = await fetchWorkflowCampaignsByLocation(locationId, accessToken);
-  if (byLocation.ok) {
-    return byLocation.workflows;
+  const withLoc = new URLSearchParams();
+  withLoc.set("locationId", locationId);
+
+  const tryWithQuery = await fetchWorkflowsOnce(accessToken, withLoc);
+  if (tryWithQuery.ok) {
+    return tryWithQuery.workflows;
   }
 
-  const lowered = byLocation.body.toLowerCase();
-  const scopeIssue =
-    byLocation.status === 401 &&
-    (lowered.includes("not authorized for this scope") ||
-      lowered.includes("scope"));
-
-  const atRoot = await fetchWorkflowsRoot(accessToken);
-  if (atRoot.ok) {
-    return atRoot.workflows;
+  const plain = await fetchWorkflowsOnce(accessToken);
+  if (plain.ok) {
+    return plain.workflows;
   }
 
   throw new Error(
-    `GHL workflows: location list failed (${byLocation.status} ${byLocation.body.slice(0, 200)}); ` +
-      `GET /workflows/ failed (${atRoot.status} ${atRoot.body.slice(0, 200)})` +
-      (scopeIssue
-        ? ". Ensure Marketplace app includes campaigns.readonly (location list) or workflows.readonly works for GET /workflows/."
-        : "")
+    `GHL GET /workflows/ failed with locationId query (${tryWithQuery.status} ${tryWithQuery.body.slice(0, 220)}); ` +
+      `without query (${plain.status} ${plain.body.slice(0, 220)}). ` +
+      `Docs: https://marketplace.gohighlevel.com/docs/ghl/workflows/get-workflow — requires Sub-Account token with workflows.readonly.`
   );
 }
 
-/** For debug probe only — returns raw outcomes without throwing. */
+export type WorkflowProbeRow = { status: number; snippet: string; count?: number };
+
+/** Diagnostics: workflows API only (no campaigns / emails). */
 export async function probeWorkflowSources(
   locationId: string,
   accessToken: string
 ): Promise<{
-  locationCampaignsPath: { status: number; snippet: string; count?: number };
-  workflowsRoot: { status: number; snippet: string; count?: number };
+  workflowsWithLocationIdQuery: WorkflowProbeRow;
+  workflowsPlain: WorkflowProbeRow;
 }> {
-  const a = await fetchWorkflowCampaignsByLocation(locationId, accessToken);
-  const b = await fetchWorkflowsRoot(accessToken);
+  const q = new URLSearchParams();
+  q.set("locationId", locationId);
+
+  const a = await fetchWorkflowsOnce(accessToken, q);
+  const b = await fetchWorkflowsOnce(accessToken);
 
   return {
-    locationCampaignsPath: a.ok
+    workflowsWithLocationIdQuery: a.ok
       ? { status: 200, snippet: "ok", count: a.workflows.length }
       : { status: a.status, snippet: a.body.slice(0, 280) },
-    workflowsRoot: b.ok
+    workflowsPlain: b.ok
       ? { status: 200, snippet: "ok", count: b.workflows.length }
       : { status: b.status, snippet: b.body.slice(0, 280) },
   };

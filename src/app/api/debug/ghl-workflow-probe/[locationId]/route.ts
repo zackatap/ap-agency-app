@@ -1,15 +1,16 @@
 import { NextResponse } from "next/server";
 import { getToken } from "@/lib/oauth-tokens";
 import { probeWorkflowSources } from "@/lib/ghl-workflows";
+import { getPipelines } from "@/lib/ghl-oauth";
+import { summarizeGhlJwtForDebug } from "@/lib/ghl-jwt";
 
 /**
- * Self-service diagnosis: same token, two official workflow list paths.
- * Open in browser after auth — no secrets returned.
+ * Self-service: same stored token vs GET /workflows/ (official Workflows API only).
  *
- * - Location list: GET /emails/public/v2/locations/:id/campaigns/workflows
- *   https://marketplace.gohighlevel.com/docs/ghl/emails/list-workflow-campaigns-v-2
- * - Workflows API: GET /workflows/
- *   https://marketplace.gohighlevel.com/docs/ghl/workflows/get-workflow
+ * - GET /workflows/?locationId=… (camelCase — not in public doc body; validated by API)
+ * - GET /workflows/
+ *
+ * Docs: https://marketplace.gohighlevel.com/docs/ghl/workflows/get-workflow
  */
 export async function GET(
   _req: Request,
@@ -28,28 +29,50 @@ export async function GET(
     );
   }
 
-  const probe = await probeWorkflowSources(locationId, stored.access_token);
+  let pipelinesProbe: { ok: boolean; status: string; pipelineCount?: number; error?: string };
+  try {
+    const pipelines = await getPipelines(locationId, stored.access_token);
+    pipelinesProbe = {
+      ok: true,
+      status: "ok",
+      pipelineCount: pipelines.length,
+    };
+  } catch (e) {
+    pipelinesProbe = {
+      ok: false,
+      status: "error",
+      error: e instanceof Error ? e.message.slice(0, 300) : "pipeline fetch failed",
+    };
+  }
+
+  const wf = await probeWorkflowSources(locationId, stored.access_token);
+  const jwt = summarizeGhlJwtForDebug(stored.access_token);
 
   return NextResponse.json(
     {
       locationId,
       tokenFingerprint: stored.access_token.slice(-8),
-      companyId: stored.companyId ?? null,
+      companyIdFromStore: stored.companyId ?? null,
+      jwtSummary: jwt,
       docs: {
-        listWorkflowCampaigns:
-          "https://marketplace.gohighlevel.com/docs/ghl/emails/list-workflow-campaigns-v-2",
         getWorkflow: "https://marketplace.gohighlevel.com/docs/ghl/workflows/get-workflow",
+        workflowsApi: "https://marketplace.gohighlevel.com/docs/ghl/workflows/workflows-api",
+        scopes: "https://marketplace.gohighlevel.com/docs/Authorization/Scopes",
+      },
+      sanity: {
+        getPipelinesSameToken: pipelinesProbe,
+        note:
+          "If pipelines work but both /workflows/ calls fail, the access token is valid for opportunities but not accepted for workflows (scope/installation or GHL-side).",
       },
       results: {
-        emailsLocationCampaignsWorkflows: probe.locationCampaignsPath,
-        workflowsRoot: probe.workflowsRoot,
+        getWorkflowsWithLocationIdQuery: wf.workflowsWithLocationIdQuery,
+        getWorkflowsPlain: wf.workflowsPlain,
       },
       interpretation:
-        probe.locationCampaignsPath.status === 200
-          ? "Use location-scoped list (matches dashboard-style explicit location)."
-          : probe.workflowsRoot.status === 200
-            ? "Location list failed but GET /workflows/ works — token may lack campaigns.readonly."
-            : "Both failed — check Marketplace app scopes (campaigns.readonly + workflows.readonly) and reconnect.",
+        wf.workflowsWithLocationIdQuery.status === 200 ||
+        wf.workflowsPlain.status === 200
+          ? "At least one GET /workflows/ variant succeeded."
+          : "Both /workflows/ variants failed — confirm Marketplace app includes workflows.readonly for Sub-Account and reinstall; if pipelines work, open a GHL API bug with traceId from snippet.",
     },
     {
       headers: {

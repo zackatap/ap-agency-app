@@ -109,6 +109,15 @@ export function ghlAuthHeaders(token: string): HeadersInit {
   };
 }
 
+/** GET requests — omit Content-Type (some GHL routes are picky). */
+export function ghlAuthHeadersGet(token: string): HeadersInit {
+  return {
+    Accept: "application/json",
+    Authorization: `Bearer ${token}`,
+    Version: API_VERSION,
+  };
+}
+
 const GHL_MAX_PAGES = 40; // Safety limit; date-based exit can stop earlier
 const GHL_DELAY_MS = 150; // Delay between pagination requests to avoid 429
 const GHL_429_RETRY_MS = 3000; // Wait before retry on rate limit
