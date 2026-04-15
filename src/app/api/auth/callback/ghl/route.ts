@@ -97,7 +97,20 @@ export async function GET(req: Request) {
   };
 
   const accessToken = tokenData.access_token;
-  const resolvedLocationId = tokenData.locationId ?? locationId;
+  const tokenLocationId = String(tokenData.locationId ?? "").trim();
+  if (tokenLocationId && tokenLocationId !== locationId) {
+    console.warn(
+      "[oauth-callback] Token location mismatch",
+      JSON.stringify({
+        stateLocationId: locationId,
+        tokenLocationId,
+      })
+    );
+  }
+
+  // Bind token storage to the location passed in OAuth state (the location where
+  // the user clicked Connect) so subsequent API calls use the same key.
+  const resolvedLocationId = locationId;
 
   if (!accessToken) {
     return NextResponse.redirect(errorUrl("Token response missing access_token"));
@@ -107,7 +120,7 @@ export async function GET(req: Request) {
   await setToken(resolvedLocationId, {
     access_token: accessToken,
     refresh_token: tokenData.refresh_token ?? "",
-    locationId: resolvedLocationId,
+    locationId: tokenLocationId || resolvedLocationId,
     companyId: tokenData.companyId,
     expires_at: Math.floor(Date.now() / 1000) + expiresIn,
   });

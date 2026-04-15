@@ -6,6 +6,35 @@ function buildWorkflowUrl(locationId: string, workflowId: string): string {
   return `https://app.gohighlevel.com/v2/location/${encodeURIComponent(locationId)}/automation/workflows/${encodeURIComponent(workflowId)}`;
 }
 
+function decodeJwtPayload(token: string): Record<string, unknown> | null {
+  try {
+    const parts = token.split(".");
+    if (parts.length < 2) return null;
+    const payload = parts[1];
+    const normalized = payload.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized.padEnd(
+      normalized.length + ((4 - (normalized.length % 4)) % 4),
+      "="
+    );
+    const json = Buffer.from(padded, "base64").toString("utf-8");
+    const parsed = JSON.parse(json) as Record<string, unknown>;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function extractTokenLocation(claims: Record<string, unknown> | null): string {
+  if (!claims) return "";
+  return String(
+    claims.locationId ??
+      claims.location_id ??
+      claims.subAccountId ??
+      claims.sub_account_id ??
+      ""
+  ).trim();
+}
+
 export async function GET(
   req: Request,
   { params }: { params: Promise<{ locationId: string }> }
@@ -34,6 +63,19 @@ export async function GET(
       locationId,
       stored.access_token
     );
+
+    const tokenClaims = decodeJwtPayload(stored.access_token);
+    const tokenLocationId = extractTokenLocation(tokenClaims);
+    if (tokenLocationId && tokenLocationId !== locationId) {
+      console.warn(
+        "[workflows] token/location mismatch",
+        JSON.stringify({
+          requestedLocationId: locationId,
+          tokenLocationId,
+          companyId: stored.companyId ?? null,
+        })
+      );
+    }
 
     const filtered = allWorkflows
       .filter((workflow) =>
@@ -74,6 +116,8 @@ export async function GET(
           error:
             "Token is not authorized for this location. Please reconnect this location from Customizer.",
           needsAuth: true,
+          debugHint:
+            "If this persists after reconnect, token may be tied to a different sub-account than the URL location.",
         },
         { status: 401 }
       );
