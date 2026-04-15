@@ -62,11 +62,21 @@ function extractWorkflowArray(payload: unknown): unknown[] {
   return [];
 }
 
-async function fetchWorkflows(accessToken: string): Promise<GHLWorkflow[]> {
-  const endpoint = `${GHL_BASE}/workflows/`;
-  const res = await fetch(endpoint, {
+async function fetchWorkflows(
+  locationId: string,
+  accessToken: string
+): Promise<GHLWorkflow[]> {
+  const endpoint = new URL("/workflows/", GHL_BASE);
+  // Align with other location-scoped calls used by dashboard APIs.
+  endpoint.searchParams.set("locationId", locationId);
+  endpoint.searchParams.set("location_id", locationId);
+
+  const res = await fetch(endpoint.toString(), {
     method: "GET",
-    headers: ghlAuthHeaders(accessToken),
+    headers: {
+      ...ghlAuthHeaders(accessToken),
+      "Location-Id": locationId,
+    },
   });
 
   if (!res.ok) {
@@ -84,9 +94,9 @@ async function fetchWorkflows(accessToken: string): Promise<GHLWorkflow[]> {
 }
 
 export async function getWorkflowCampaigns(
-  _locationId: string,
+  locationId: string,
   accessToken: string
 ): Promise<GHLWorkflow[]> {
   // Per current GHL Workflows docs, use GET /workflows/ directly.
-  return await fetchWorkflows(accessToken);
+  return await fetchWorkflows(locationId, accessToken);
 }
