@@ -63,20 +63,14 @@ function extractWorkflowArray(payload: unknown): unknown[] {
 }
 
 async function fetchWorkflows(
-  locationId: string,
+  _locationId: string,
   accessToken: string
 ): Promise<GHLWorkflow[]> {
   const endpoint = new URL("/workflows/", GHL_BASE);
-  // Align with other location-scoped calls used by dashboard APIs.
-  endpoint.searchParams.set("locationId", locationId);
-  endpoint.searchParams.set("location_id", locationId);
 
   const res = await fetch(endpoint.toString(), {
     method: "GET",
-    headers: {
-      ...ghlAuthHeaders(accessToken),
-      "Location-Id": locationId,
-    },
+    headers: ghlAuthHeaders(accessToken),
   });
 
   if (!res.ok) {
