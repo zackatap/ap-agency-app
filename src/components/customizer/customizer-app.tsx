@@ -29,7 +29,14 @@ interface WorkflowItem {
   url: string;
 }
 
-interface GhlWorkflowAccessLog {
+interface FunnelItem {
+  id: string;
+  name: string;
+  status?: string;
+  url: string;
+}
+
+interface GhlListAccessLog {
   endpoint: string;
   docs: string;
   requestUrl: string;
@@ -112,10 +119,16 @@ interface CustomizerAppProps {
 
 export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
   const [active, setActive] = useState<CampaignKey>("base");
+  /** Cross-origin GHL forms can’t be styled from our page; invert+hue approximates a dark theme (images/colors may shift). */
+  const [darkFormEmbed, setDarkFormEmbed] = useState(true);
+  const [funnels, setFunnels] = useState<FunnelItem[]>([]);
+  const [funnelsLoading, setFunnelsLoading] = useState(false);
+  const [funnelsError, setFunnelsError] = useState<string | null>(null);
+  const [funnelGhlLog, setFunnelGhlLog] = useState<GhlListAccessLog | null>(null);
   const [workflows, setWorkflows] = useState<WorkflowItem[]>([]);
   const [workflowsLoading, setWorkflowsLoading] = useState(false);
   const [workflowsError, setWorkflowsError] = useState<string | null>(null);
-  const [workflowGhlLog, setWorkflowGhlLog] = useState<GhlWorkflowAccessLog | null>(
+  const [workflowGhlLog, setWorkflowGhlLog] = useState<GhlListAccessLog | null>(
     null
   );
 
@@ -125,6 +138,11 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
   useEffect(() => {
     if (active !== "base") return;
     if (!locationId) {
+      setFunnels([]);
+      setFunnelGhlLog(null);
+      setFunnelsError(
+        "No location connected for funnel lookup yet. Forms still work."
+      );
       setWorkflows([]);
       setWorkflowGhlLog(null);
       setWorkflowsError(
@@ -135,28 +153,67 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
 
     let isCancelled = false;
     const load = async () => {
+      setFunnelsLoading(true);
       setWorkflowsLoading(true);
+      setFunnelsError(null);
       setWorkflowsError(null);
+      setFunnelGhlLog(null);
       setWorkflowGhlLog(null);
       try {
-        const res = await fetch(
-          `/api/workflows/${encodeURIComponent(locationId)}?query=pain&debug=1`,
-          { cache: "no-store" }
-        );
-        const data = (await res.json()) as {
+        const [funnelsRes, workflowsRes] = await Promise.all([
+          fetch(
+            `/api/funnels/${encodeURIComponent(locationId)}?query=pain&debug=1`,
+            { cache: "no-store" }
+          ),
+          fetch(
+            `/api/workflows/${encodeURIComponent(locationId)}?query=pain&debug=1`,
+            { cache: "no-store" }
+          ),
+        ]);
+
+        const funnelsData = (await funnelsRes.json()) as {
+          funnels?: FunnelItem[];
+          error?: string;
+          ghlAccess?: GhlListAccessLog;
+        };
+        const workflowsData = (await workflowsRes.json()) as {
           workflows?: WorkflowItem[];
           error?: string;
-          ghlAccess?: GhlWorkflowAccessLog;
+          ghlAccess?: GhlListAccessLog;
         };
-        if (!res.ok) {
-          throw new Error(data.error ?? "Failed to load workflows");
-        }
+
         if (!isCancelled) {
-          setWorkflows(data.workflows ?? []);
-          setWorkflowGhlLog(data.ghlAccess ?? null);
+          if (funnelsRes.ok) {
+            setFunnels(funnelsData.funnels ?? []);
+            setFunnelGhlLog(funnelsData.ghlAccess ?? null);
+            setFunnelsError(null);
+          } else {
+            setFunnels([]);
+            setFunnelGhlLog(null);
+            setFunnelsError(
+              funnelsData.error ?? "Failed to load funnels (landing pages)"
+            );
+          }
+
+          if (workflowsRes.ok) {
+            setWorkflows(workflowsData.workflows ?? []);
+            setWorkflowGhlLog(workflowsData.ghlAccess ?? null);
+            setWorkflowsError(null);
+          } else {
+            setWorkflows([]);
+            setWorkflowGhlLog(null);
+            setWorkflowsError(
+              workflowsData.error ?? "Failed to load workflows"
+            );
+          }
         }
       } catch (error) {
         if (!isCancelled) {
+          setFunnels([]);
+          setFunnelGhlLog(null);
+          setFunnelsError(
+            error instanceof Error ? error.message : "Failed to load funnels"
+          );
           setWorkflows([]);
           setWorkflowGhlLog(null);
           setWorkflowsError(
@@ -164,7 +221,10 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
           );
         }
       } finally {
-        if (!isCancelled) setWorkflowsLoading(false);
+        if (!isCancelled) {
+          setFunnelsLoading(false);
+          setWorkflowsLoading(false);
+        }
       }
     };
 
@@ -226,12 +286,30 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
           </aside>
 
           <main className="rounded-2xl border border-white/10 bg-slate-900/60 p-4">
-            <div className="mb-3 border-b border-white/10 pb-3">
-              <h2 className="text-lg font-semibold text-white">
-                {activeCampaign.label} Campaign
-              </h2>
-              <p className="text-sm text-slate-400">{activeCampaign.formName}</p>
+            <div className="mb-3 flex flex-col gap-3 border-b border-white/10 pb-3 sm:flex-row sm:items-start sm:justify-between">
+              <div>
+                <h2 className="text-lg font-semibold text-white">
+                  {activeCampaign.label} Campaign
+                </h2>
+                <p className="text-sm text-slate-400">{activeCampaign.formName}</p>
+              </div>
+              <label className="flex shrink-0 cursor-pointer items-center gap-2 rounded-lg border border-white/10 bg-slate-950/50 px-3 py-2 text-xs text-slate-300">
+                <input
+                  type="checkbox"
+                  className="h-3.5 w-3.5 rounded border-white/30 bg-slate-900 text-sky-500"
+                  checked={darkFormEmbed}
+                  onChange={(e) => setDarkFormEmbed(e.target.checked)}
+                />
+                Dark-styled embed
+              </label>
             </div>
+
+            <p className="mb-2 text-[11px] leading-snug text-slate-500">
+              The form lives on another domain, so we can’t inject CSS inside it. With{" "}
+              <span className="text-slate-400">Dark-styled embed</span> on, we apply a
+              color inversion filter to the whole iframe so light backgrounds read as dark
+              (logos and images invert too—turn off if that’s distracting).
+            </p>
 
             <div className="rounded-xl border border-white/10 bg-slate-950/40 p-2">
               <iframe
@@ -241,6 +319,12 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
                   minHeight: `${activeCampaign.height}px`,
                   border: "none",
                   borderRadius: "10px",
+                  ...(darkFormEmbed
+                    ? {
+                        filter:
+                          "invert(1) hue-rotate(180deg) brightness(1.06) contrast(0.97)",
+                      }
+                    : {}),
                 }}
                 id={`inline-${activeCampaign.formId}`}
                 data-layout="{'id':'INLINE'}"
@@ -260,6 +344,95 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
           </main>
 
           <aside className="space-y-4">
+            <section className="rounded-2xl border border-white/10 bg-slate-900/60 p-4">
+              <h3 className="text-sm font-semibold text-white">
+                Landing pages (funnels)
+              </h3>
+              <p className="mt-1 text-xs text-slate-400">
+                From{" "}
+                <a
+                  href="https://marketplace.gohighlevel.com/docs/ghl/funnels/get-funnels"
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-sky-300/90 underline decoration-sky-400/40 underline-offset-2 hover:text-sky-200"
+                >
+                  GET /funnels/funnel/list
+                </a>
+                : funnels whose names contain{" "}
+                <span className="font-semibold text-sky-300">pain</span>, sorted
+                by name.
+              </p>
+              {!locationId && (
+                <p className="mt-3 rounded-lg border border-amber-300/20 bg-amber-400/10 px-3 py-2 text-xs text-amber-200">
+                  No location ID detected for funnel lookup.
+                </p>
+              )}
+              {locationId && active !== "base" && (
+                <p className="mt-3 text-xs text-slate-400">
+                  Switch to the Base tab to refresh funnel and workflow lists.
+                </p>
+              )}
+              {locationId && active === "base" && funnelsLoading && (
+                <p className="mt-3 text-sm text-slate-300">Loading funnels...</p>
+              )}
+              {locationId && active === "base" && funnelsError && (
+                <p className="mt-3 rounded-lg border border-rose-300/20 bg-rose-400/10 px-3 py-2 text-xs text-rose-200">
+                  {funnelsError}
+                </p>
+              )}
+              {locationId &&
+                active === "base" &&
+                !funnelsLoading &&
+                !funnelsError &&
+                funnels.length === 0 && (
+                  <p className="mt-3 text-sm text-slate-300">
+                    No matching funnels found.
+                  </p>
+                )}
+              {locationId && active === "base" && funnels.length > 0 && (
+                <ul className="mt-3 space-y-2">
+                  {funnels.map((funnel) => (
+                    <li
+                      key={funnel.id}
+                      className="rounded-lg border border-white/10 bg-white/5 px-3 py-2"
+                    >
+                      <a
+                        href={funnel.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-sm font-medium text-sky-300 transition hover:text-sky-200 hover:underline"
+                      >
+                        {funnel.name}
+                      </a>
+                      <p className="text-xs text-slate-400">
+                        {funnel.status || "Status unavailable"}
+                      </p>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {locationId &&
+                active === "base" &&
+                funnelGhlLog &&
+                !funnelsLoading &&
+                !funnelsError && (
+                  <details className="mt-3 rounded-lg border border-white/10 bg-slate-950/50 p-2 text-xs">
+                    <summary className="cursor-pointer font-medium text-slate-300">
+                      Funnels — GHL API (debug)
+                    </summary>
+                    <p className="mt-2 text-slate-500">
+                      Logged server-side as{" "}
+                      <code className="text-slate-400">[funnels] GHL list success</code>{" "}
+                      in Vercel. Below is the payload returned with{" "}
+                      <code className="text-slate-400">debug=1</code>.
+                    </p>
+                    <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all rounded border border-white/5 bg-black/30 p-2 text-[10px] leading-relaxed text-slate-400">
+                      {JSON.stringify(funnelGhlLog, null, 2)}
+                    </pre>
+                  </details>
+                )}
+            </section>
+
             <section className="rounded-2xl border border-white/10 bg-slate-900/60 p-4">
               <h3 className="text-sm font-semibold text-white">GHL Workflow</h3>
               <p className="mt-1 text-xs text-slate-400">
@@ -293,7 +466,7 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
               )}
               {locationId && active !== "base" && (
                 <p className="mt-3 text-xs text-slate-400">
-                  Switch to the Base tab to refresh workflow test results.
+                  Switch to the Base tab to refresh funnel and workflow lists.
                 </p>
               )}
               {locationId && active === "base" && workflowsLoading && (
@@ -342,7 +515,7 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
                 !workflowsError && (
                   <details className="mt-3 rounded-lg border border-white/10 bg-slate-950/50 p-2 text-xs">
                     <summary className="cursor-pointer font-medium text-slate-300">
-                      GHL API data (debug)
+                      Workflows — GHL API (debug)
                     </summary>
                     <p className="mt-2 text-slate-500">
                       Logged server-side as{" "}

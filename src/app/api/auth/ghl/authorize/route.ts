@@ -19,6 +19,7 @@ const SCOPES = [
   "opportunities.readonly",
   "contacts.readonly",
   "workflows.readonly",
+  "funnels/funnel.readonly",
   "oauth.readonly",
   "oauth.write",
 ].join(" ");
