@@ -39,8 +39,12 @@ export async function GET(
   req: Request,
   { params }: { params: Promise<{ locationId: string }> }
 ) {
+  let requestedLocationId = "";
+  let tokenLocationId = "";
+
   try {
     const { locationId } = await params;
+    requestedLocationId = locationId;
     const { searchParams } = new URL(req.url);
     const query = (searchParams.get("query") ?? "").trim().toLowerCase();
 
@@ -59,16 +63,11 @@ export async function GET(
       );
     }
 
-    const allWorkflows = await getWorkflowCampaigns(
-      locationId,
-      stored.access_token
-    );
-
     const tokenClaims = decodeJwtPayload(stored.access_token);
-    const tokenLocationId = extractTokenLocation(tokenClaims);
+    tokenLocationId = extractTokenLocation(tokenClaims);
     if (tokenLocationId && tokenLocationId !== locationId) {
       console.warn(
-        "[workflows] token/location mismatch",
+        "[workflows] token/location mismatch (pre-request)",
         JSON.stringify({
           requestedLocationId: locationId,
           tokenLocationId,
@@ -76,6 +75,11 @@ export async function GET(
         })
       );
     }
+
+    const allWorkflows = await getWorkflowCampaigns(
+      locationId,
+      stored.access_token
+    );
 
     const filtered = allWorkflows
       .filter((workflow) =>
@@ -118,6 +122,10 @@ export async function GET(
           needsAuth: true,
           debugHint:
             "If this persists after reconnect, token may be tied to a different sub-account than the URL location.",
+          debug: {
+            requestedLocationId: requestedLocationId || null,
+            tokenLocationId: tokenLocationId || null,
+          },
         },
         { status: 401 }
       );
