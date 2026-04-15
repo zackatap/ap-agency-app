@@ -40,6 +40,17 @@ function extractTokenLocation(claims: Record<string, unknown> | null): string {
   ).trim();
 }
 
+/** Match GHL workflow names like `[PART 1]` / `[PART 2]` (spacing/case tolerant). */
+function workflowPartOrder(name: string): number {
+  if (/\[PART\s*1\]/i.test(name)) return 1;
+  if (/\[PART\s*2\]/i.test(name)) return 2;
+  return 99;
+}
+
+function isPartOneOrTwoWorkflow(name: string): boolean {
+  return workflowPartOrder(name) <= 2;
+}
+
 export async function GET(
   req: Request,
   { params }: { params: Promise<{ locationId: string }> }
@@ -94,15 +105,31 @@ export async function GET(
       wantDebug ? { rawSampleLimit: 5 } : undefined
     );
 
-    const filtered = allWorkflows
-      .filter((workflow) =>
-        query ? workflow.name.toLowerCase().includes(query) : true
-      )
-      .sort((a, b) => a.name.localeCompare(b.name))
-      .map((workflow) => ({
-        ...workflow,
-        url: buildWorkflowUrl(locationId, workflow.id),
-      }));
+    const keywordMatched = allWorkflows.filter((workflow) =>
+      query ? workflow.name.toLowerCase().includes(query) : true
+    );
+
+    let rows: typeof keywordMatched;
+    if (query) {
+      const partMatched = keywordMatched.filter((workflow) =>
+        isPartOneOrTwoWorkflow(workflow.name)
+      );
+      rows = [...partMatched]
+        .sort((a, b) => {
+          const pa = workflowPartOrder(a.name);
+          const pb = workflowPartOrder(b.name);
+          if (pa !== pb) return pa - pb;
+          return a.name.localeCompare(b.name);
+        })
+        .slice(0, 2);
+    } else {
+      rows = [...keywordMatched].sort((a, b) => a.name.localeCompare(b.name));
+    }
+
+    const filtered = rows.map((workflow) => ({
+      ...workflow,
+      url: buildWorkflowUrl(locationId, workflow.id),
+    }));
 
     console.info(
       "[workflows] GHL list success",
@@ -110,8 +137,10 @@ export async function GET(
         locationId,
         query: query || null,
         totalFromGhl: allWorkflows.length,
-        returnedAfterFilter: filtered.length,
-        sampleNames: filtered.slice(0, 8).map((w) => w.name),
+        afterKeyword: keywordMatched.length,
+        partFilterApplied: Boolean(query),
+        returnedForClient: filtered.length,
+        sampleNames: filtered.map((w) => w.name),
         ghlResponseShape: ghlDebug
           ? {
               requestUrl: ghlDebug.requestUrl,

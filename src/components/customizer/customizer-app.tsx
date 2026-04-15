@@ -74,7 +74,7 @@ const CAMPAIGNS: CampaignConfig[] = [
   },
   {
     key: "pain",
-    label: "Pain",
+    label: "Pain/Device",
     subtitle: "Pain / device campaign",
     formId: "Mbk6jkCFZW6bc1IsujFp",
     formName: "SAAS OB - Pain/Device Campaign",
@@ -143,8 +143,6 @@ interface CustomizerAppProps {
 
 export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
   const [active, setActive] = useState<CampaignKey>("base");
-  /** Cross-origin GHL forms can’t be styled from our page; invert+hue approximates a dark theme (images/colors may shift). */
-  const [darkFormEmbed, setDarkFormEmbed] = useState(true);
   const [funnels, setFunnels] = useState<FunnelItem[]>([]);
   const [funnelsLoading, setFunnelsLoading] = useState(false);
   const [funnelsError, setFunnelsError] = useState<string | null>(null);
@@ -306,35 +304,14 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
           </aside>
 
           <main className="rounded-2xl border border-white/10 bg-slate-900/60 p-4">
-            <div className="mb-3 flex flex-col gap-3 border-b border-white/10 pb-3 sm:flex-row sm:items-start sm:justify-between">
-              <div>
-                <h2 className="text-lg font-semibold text-white">
-                  {activeCampaign.label} Campaign
-                </h2>
-                <p className="text-sm text-slate-400">{activeCampaign.formName}</p>
-              </div>
-              <label className="flex shrink-0 cursor-pointer items-center gap-2 rounded-lg border border-white/10 bg-slate-950/50 px-3 py-2 text-xs text-slate-300">
-                <input
-                  type="checkbox"
-                  className="h-3.5 w-3.5 rounded border-white/30 bg-slate-900 text-sky-500"
-                  checked={darkFormEmbed}
-                  onChange={(e) => setDarkFormEmbed(e.target.checked)}
-                />
-                Dark-styled embed
-              </label>
+            <div className="mb-3 border-b border-white/10 pb-3">
+              <h2 className="text-lg font-semibold text-white">
+                {activeCampaign.label} Campaign
+              </h2>
+              <p className="text-sm text-slate-400">{activeCampaign.formName}</p>
             </div>
 
-            <p className="mb-2 text-[11px] leading-snug text-slate-500">
-              The form lives on another domain, so we can’t inject CSS inside it. With{" "}
-              <span className="text-slate-400">Dark-styled embed</span> on, we invert
-              colors and blend so former white areas pick up this page’s background instead
-              of flat black (images still invert—turn off if that’s distracting).
-            </p>
-
-            <div
-              className="isolate rounded-xl border border-white/10 bg-slate-900/60 p-2"
-              style={{ backgroundColor: "rgb(15 23 42 / 0.72)" }}
-            >
+            <div className="isolate rounded-xl border border-white/10 bg-slate-900/60 p-2">
               <iframe
                 src={`https://link.automatedpractice.com/widget/form/${activeCampaign.formId}`}
                 style={{
@@ -344,13 +321,9 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
                   borderRadius: "10px",
                   display: "block",
                   backgroundColor: "transparent",
-                  ...(darkFormEmbed
-                    ? {
-                        filter:
-                          "invert(1) hue-rotate(180deg) brightness(1.06) contrast(0.97)",
-                        mixBlendMode: "lighten",
-                      }
-                    : {}),
+                  filter:
+                    "invert(1) hue-rotate(180deg) brightness(1.06) contrast(0.97)",
+                  mixBlendMode: "lighten",
                 }}
                 id={`inline-${activeCampaign.formId}`}
                 data-layout="{'id':'INLINE'}"
@@ -370,25 +343,28 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
           </main>
 
           <aside className="flex flex-col gap-3">
-            {locationId && (
-              <div className="flex flex-wrap gap-2 rounded-2xl border border-white/10 bg-slate-900/60 p-3 backdrop-blur-sm">
-                <a
-                  href={`/api/auth/ghl/reauthorize?locationId=${encodeURIComponent(locationId)}`}
-                  target="_top"
-                  className="inline-flex rounded-lg bg-sky-500/15 px-3 py-1.5 text-xs font-medium text-sky-200 ring-1 ring-sky-400/35 transition hover:bg-sky-500/25"
-                >
-                  Hard Reconnect GHL
-                </a>
-                <a
-                  href={`/api/debug/ghl-workflow-probe/${encodeURIComponent(locationId)}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex rounded-lg border border-white/10 bg-slate-950/40 px-3 py-1.5 text-xs text-slate-300 transition hover:bg-white/5"
-                >
-                  Workflow API probe
-                </a>
-              </div>
-            )}
+            {/*
+              Production: GHL maintenance shortcuts (uncomment if needed)
+              {locationId && (
+                <div className="flex flex-wrap gap-2 rounded-2xl border border-white/10 bg-slate-900/60 p-3 backdrop-blur-sm">
+                  <a
+                    href={`/api/auth/ghl/reauthorize?locationId=${encodeURIComponent(locationId)}`}
+                    target="_top"
+                    className="inline-flex rounded-lg bg-sky-500/15 px-3 py-1.5 text-xs font-medium text-sky-200 ring-1 ring-sky-400/35 transition hover:bg-sky-500/25"
+                  >
+                    Hard Reconnect GHL
+                  </a>
+                  <a
+                    href={`/api/debug/ghl-workflow-probe/${encodeURIComponent(locationId)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex rounded-lg border border-white/10 bg-slate-950/40 px-3 py-1.5 text-xs text-slate-300 transition hover:bg-white/5"
+                  >
+                    Workflow API probe
+                  </a>
+                </div>
+              )}
+            */}
 
             {!showGhlResources && (
               <section className="rounded-2xl border border-white/10 bg-slate-900/60 p-4 backdrop-blur-sm">
@@ -396,10 +372,9 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
                   GHL resources
                 </p>
                 <p className="mt-2 text-sm text-slate-300">
-                  Open <span className="text-slate-100">Pain</span>,{" "}
+                  Open <span className="text-slate-100">Pain/Device</span>,{" "}
                   <span className="text-slate-100">Wellness</span>, or another
-                  campaign tab to see funnels and workflows whose names match that
-                  campaign.
+                  campaign tab to see funnels and workflows for that campaign.
                 </p>
                 {!locationId && (
                   <p className="mt-3 rounded-lg border border-amber-400/15 bg-amber-400/10 px-3 py-2 text-xs text-amber-100/90">
@@ -504,7 +479,10 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
                     !workflowsError &&
                     workflows.length === 0 && (
                       <p className="mt-3 text-sm text-slate-400">
-                        No workflows matched this campaign keyword.
+                        No workflows with{" "}
+                        <span className="text-slate-300">[PART 1]</span> or{" "}
+                        <span className="text-slate-300">[PART 2]</span> in the name
+                        matched this campaign.
                       </p>
                     )}
                   {locationId && workflows.length > 0 && (
@@ -518,8 +496,7 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
                             className="block w-full rounded-xl border border-white/10 px-3 py-2.5 text-left transition hover:bg-white/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400/50"
                           >
                             <p className="text-sm font-semibold text-white">
-                              {activeCampaign.label} Workflow
-                              {workflows.length > 1 ? ` ${index + 1}` : ""}
+                              {activeCampaign.label} Workflow {index + 1}
                             </p>
                             <p className="mt-0.5 flex items-center gap-1.5 text-xs text-slate-400">
                               Open in new tab
