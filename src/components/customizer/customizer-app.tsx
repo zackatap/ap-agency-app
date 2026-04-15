@@ -249,6 +249,15 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
                 <span className="font-semibold text-sky-300">pain</span>, sorted
                 by name.
               </p>
+              {locationId && (
+                <a
+                  href={`/api/auth/ghl/authorize?locationId=${encodeURIComponent(locationId)}`}
+                  target="_top"
+                  className="mt-3 inline-flex rounded-lg bg-sky-500/20 px-3 py-1.5 text-xs font-medium text-sky-200 ring-1 ring-sky-400/40 transition hover:bg-sky-500/30"
+                >
+                  Reconnect GHL
+                </a>
+              )}
               {!locationId && (
                 <p className="mt-3 rounded-lg border border-amber-300/20 bg-amber-400/10 px-3 py-2 text-xs text-amber-200">
                   No location ID detected for workflow lookup.
