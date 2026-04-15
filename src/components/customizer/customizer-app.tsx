@@ -311,7 +311,8 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
               <p className="text-sm text-slate-400">{activeCampaign.formName}</p>
             </div>
 
-            <div className="isolate rounded-xl border border-white/10 bg-slate-900/60 p-2">
+            {/* Solid slate-900 behind the iframe so blend modes don’t composite against transparency (reads as black). */}
+            <div className="rounded-xl border border-white/10 bg-slate-900 p-2">
               <iframe
                 src={`https://link.automatedpractice.com/widget/form/${activeCampaign.formId}`}
                 style={{
@@ -321,9 +322,10 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
                   borderRadius: "10px",
                   display: "block",
                   backgroundColor: "transparent",
+                  /* Inverted embed: screen() lifts near-black toward the solid slate-900 behind the iframe */
                   filter:
-                    "invert(1) hue-rotate(180deg) brightness(1.06) contrast(0.97)",
-                  mixBlendMode: "lighten",
+                    "invert(1) hue-rotate(180deg) brightness(1.1) contrast(0.96)",
+                  mixBlendMode: "screen",
                 }}
                 id={`inline-${activeCampaign.formId}`}
                 data-layout="{'id':'INLINE'}"
