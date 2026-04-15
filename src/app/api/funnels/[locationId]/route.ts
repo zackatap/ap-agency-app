@@ -2,14 +2,17 @@ import { NextResponse } from "next/server";
 import { getToken } from "@/lib/oauth-tokens";
 import { getFunnelsForLocation } from "@/lib/ghl-funnels";
 
-/** White-label funnel builder link (parallel to workflow URLs). Override via NEXT_PUBLIC_GHL_FUNNEL_APP_BASE or NEXT_PUBLIC_GHL_WORKFLOW_APP_BASE. */
+/**
+ * White-label funnel editor URL (Automated Practice / GHL v2 shape).
+ * Override host with NEXT_PUBLIC_GHL_FUNNEL_APP_BASE or NEXT_PUBLIC_GHL_WORKFLOW_APP_BASE.
+ */
 function buildFunnelUrl(locationId: string, funnelId: string): string {
   const base = (
     process.env.NEXT_PUBLIC_GHL_FUNNEL_APP_BASE?.trim() ||
     process.env.NEXT_PUBLIC_GHL_WORKFLOW_APP_BASE?.trim() ||
     "https://app.automatedpractice.com"
   ).replace(/\/$/, "");
-  return `${base}/location/${encodeURIComponent(locationId)}/funnel/${encodeURIComponent(funnelId)}`;
+  return `${base}/v2/location/${encodeURIComponent(locationId)}/funnels-websites/funnels/${encodeURIComponent(funnelId)}/`;
 }
 
 function decodeJwtPayload(token: string): Record<string, unknown> | null {
@@ -94,15 +97,18 @@ export async function GET(
       wantDebug ? { rawSampleLimit: 5 } : undefined
     );
 
-    const filtered = allFunnels
-      .filter((funnel) =>
-        query ? funnel.name.toLowerCase().includes(query) : true
-      )
-      .sort((a, b) => a.name.localeCompare(b.name))
-      .map((funnel) => ({
-        ...funnel,
-        url: buildFunnelUrl(locationId, funnel.id),
-      }));
+    const matched = allFunnels.filter((funnel) =>
+      query ? funnel.name.toLowerCase().includes(query) : true
+    );
+    const noSpanish = matched.filter(
+      (funnel) => !funnel.name.toLowerCase().includes("spanish")
+    );
+    const sorted = [...noSpanish].sort((a, b) => a.name.localeCompare(b.name));
+    /** Product UI shows a single primary funnel; exclude Spanish variants above. */
+    const primary = sorted.slice(0, 1).map((funnel) => ({
+      ...funnel,
+      url: buildFunnelUrl(locationId, funnel.id),
+    }));
 
     console.info(
       "[funnels] GHL list success",
@@ -110,8 +116,10 @@ export async function GET(
         locationId,
         query: query || null,
         totalFromGhl: allFunnels.length,
-        returnedAfterFilter: filtered.length,
-        sampleNames: filtered.slice(0, 8).map((f) => f.name),
+        matchedKeyword: matched.length,
+        afterExcludeSpanish: noSpanish.length,
+        returnedForClient: primary.length,
+        sampleNames: primary.map((f) => f.name),
         ghlResponseShape: ghlDebug
           ? {
               requestUrl: ghlDebug.requestUrl,
@@ -134,8 +142,8 @@ export async function GET(
       {
         locationId,
         query,
-        count: filtered.length,
-        funnels: filtered,
+        count: primary.length,
+        funnels: primary,
         ...(wantDebug && ghlDebug
           ? {
               ghlAccess: {

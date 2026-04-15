@@ -41,14 +41,26 @@ interface FunnelItem {
   url: string;
 }
 
-interface GhlListAccessLog {
-  endpoint: string;
-  docs: string;
-  requestUrl: string;
-  totalRecordsFromApi: number;
-  responseTopLevelKeys: string[];
-  rawSamples: unknown[];
-  normalizedFieldsWeUse: string[];
+function IconExternalLink({ className }: { className?: string }) {
+  return (
+    <svg
+      className={className}
+      xmlns="http://www.w3.org/2000/svg"
+      width="14"
+      height="14"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden
+    >
+      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
+      <polyline points="15 3 21 3 21 9" />
+      <line x1="10" y1="14" x2="21" y2="3" />
+    </svg>
+  );
 }
 
 const CAMPAIGNS: CampaignConfig[] = [
@@ -136,13 +148,9 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
   const [funnels, setFunnels] = useState<FunnelItem[]>([]);
   const [funnelsLoading, setFunnelsLoading] = useState(false);
   const [funnelsError, setFunnelsError] = useState<string | null>(null);
-  const [funnelGhlLog, setFunnelGhlLog] = useState<GhlListAccessLog | null>(null);
   const [workflows, setWorkflows] = useState<WorkflowItem[]>([]);
   const [workflowsLoading, setWorkflowsLoading] = useState(false);
   const [workflowsError, setWorkflowsError] = useState<string | null>(null);
-  const [workflowGhlLog, setWorkflowGhlLog] = useState<GhlListAccessLog | null>(
-    null
-  );
 
   const activeCampaign =
     CAMPAIGNS.find((campaign) => campaign.key === active) ?? CAMPAIGNS[0];
@@ -152,10 +160,8 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
   useEffect(() => {
     if (!resourceQuery) {
       setFunnels([]);
-      setFunnelGhlLog(null);
       setFunnelsError(null);
       setWorkflows([]);
-      setWorkflowGhlLog(null);
       setWorkflowsError(null);
       setFunnelsLoading(false);
       setWorkflowsLoading(false);
@@ -164,12 +170,10 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
 
     if (!locationId) {
       setFunnels([]);
-      setFunnelGhlLog(null);
       setFunnelsError(
         "No location connected for GHL lookup yet. Forms still work."
       );
       setWorkflows([]);
-      setWorkflowGhlLog(null);
       setWorkflowsError(
         "No location connected for GHL lookup yet. Forms still work."
       );
@@ -184,15 +188,13 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
       setWorkflowsLoading(true);
       setFunnelsError(null);
       setWorkflowsError(null);
-      setFunnelGhlLog(null);
-      setWorkflowGhlLog(null);
       try {
         const [funnelsRes, workflowsRes] = await Promise.all([
-          fetch(`/api/funnels/${encodeURIComponent(locationId)}?query=${q}&debug=1`, {
+          fetch(`/api/funnels/${encodeURIComponent(locationId)}?query=${q}`, {
             cache: "no-store",
           }),
           fetch(
-            `/api/workflows/${encodeURIComponent(locationId)}?query=${q}&debug=1`,
+            `/api/workflows/${encodeURIComponent(locationId)}?query=${q}`,
             { cache: "no-store" }
           ),
         ]);
@@ -200,22 +202,18 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
         const funnelsData = (await funnelsRes.json()) as {
           funnels?: FunnelItem[];
           error?: string;
-          ghlAccess?: GhlListAccessLog;
         };
         const workflowsData = (await workflowsRes.json()) as {
           workflows?: WorkflowItem[];
           error?: string;
-          ghlAccess?: GhlListAccessLog;
         };
 
         if (!isCancelled) {
           if (funnelsRes.ok) {
             setFunnels(funnelsData.funnels ?? []);
-            setFunnelGhlLog(funnelsData.ghlAccess ?? null);
             setFunnelsError(null);
           } else {
             setFunnels([]);
-            setFunnelGhlLog(null);
             setFunnelsError(
               funnelsData.error ?? "Failed to load funnels (landing pages)"
             );
@@ -223,11 +221,9 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
 
           if (workflowsRes.ok) {
             setWorkflows(workflowsData.workflows ?? []);
-            setWorkflowGhlLog(workflowsData.ghlAccess ?? null);
             setWorkflowsError(null);
           } else {
             setWorkflows([]);
-            setWorkflowGhlLog(null);
             setWorkflowsError(
               workflowsData.error ?? "Failed to load workflows"
             );
@@ -236,12 +232,10 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
       } catch (error) {
         if (!isCancelled) {
           setFunnels([]);
-          setFunnelGhlLog(null);
           setFunnelsError(
             error instanceof Error ? error.message : "Failed to load funnels"
           );
           setWorkflows([]);
-          setWorkflowGhlLog(null);
           setWorkflowsError(
             error instanceof Error ? error.message : "Failed to load workflows"
           );
@@ -421,20 +415,15 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
                   <p className="text-[0.65rem] font-medium uppercase tracking-[0.18em] text-slate-400">
                     Landing pages
                   </p>
-                  <h3 className="mt-1 text-sm font-semibold text-white">
-                    Funnels matching “{resourceQuery}”
-                  </h3>
-                  <p className="mt-1 text-xs leading-relaxed text-slate-400">
-                    <a
-                      href="https://marketplace.gohighlevel.com/docs/ghl/funnels/get-funnels"
-                      target="_blank"
-                      rel="noreferrer"
-                      className="text-sky-300/90 underline decoration-sky-500/30 underline-offset-2 hover:text-sky-200"
-                    >
-                      GET /funnels/funnel/list
-                    </a>
-                    , filtered and sorted by name.
-                  </p>
+                  {/*
+                    Production: extra funnel context (uncomment if needed)
+                    <h3 className="mt-1 text-sm font-semibold text-white">
+                      Funnels matching “{resourceQuery}”
+                    </h3>
+                    <p className="mt-1 text-xs leading-relaxed text-slate-400">
+                      <a href="https://marketplace.gohighlevel.com/docs/ghl/funnels/get-funnels" target="_blank" rel="noreferrer" className="text-sky-300/90 underline decoration-sky-500/30 underline-offset-2 hover:text-sky-200">GET /funnels/funnel/list</a>, filtered and sorted by name.
+                    </p>
+                  */}
                   {!locationId && (
                     <p className="mt-3 rounded-lg border border-amber-400/15 bg-amber-400/10 px-3 py-2 text-xs text-amber-100/90">
                       No location ID — connect GHL to load funnels.
@@ -453,56 +442,50 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
                     !funnelsError &&
                     funnels.length === 0 && (
                       <p className="mt-3 text-sm text-slate-400">
-                        No funnels matched this campaign keyword.
+                        No landing page found for this campaign (Spanish-only
+                        matches are excluded).
                       </p>
                     )}
-                  {locationId && funnels.length > 0 && (
-                    <ul className="mt-3 space-y-2">
-                      {funnels.map((funnel) => (
-                        <li
-                          key={funnel.id}
-                          className="rounded-lg border border-white/10 bg-slate-950/45 px-3 py-2.5"
-                        >
-                          <a
-                            href={funnel.url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-sm font-medium text-sky-300 transition hover:text-sky-200 hover:underline"
-                          >
-                            {funnel.name}
-                          </a>
-                          <p className="mt-0.5 text-xs text-slate-500">
-                            {funnel.status || "—"}
-                          </p>
-                        </li>
-                      ))}
-                    </ul>
+                  {locationId && funnels[0] && (
+                    <a
+                      href={funnels[0].url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="mt-3 block w-full rounded-xl border border-white/10 px-3 py-2.5 text-left transition hover:bg-white/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400/50"
+                    >
+                      <p className="text-sm font-semibold text-white">
+                        {activeCampaign.label} Landing Page
+                      </p>
+                      <p className="mt-0.5 flex items-center gap-1.5 text-xs text-slate-400">
+                        Open in new tab
+                        <IconExternalLink className="text-slate-400" />
+                      </p>
+                    </a>
                   )}
-                  {locationId &&
-                    funnelGhlLog &&
-                    !funnelsLoading &&
-                    !funnelsError && (
+                  {/*
+                    Production: GHL raw response (re-enable client debug=1 + ghlAccess state)
+                    {locationId && funnelGhlLog && !funnelsLoading && !funnelsError && (
                       <details className="mt-3 rounded-lg border border-white/10 bg-slate-950/50 p-2 text-xs">
-                        <summary className="cursor-pointer font-medium text-slate-400">
-                          Funnels — API debug
-                        </summary>
-                        <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded border border-white/5 bg-black/25 p-2 text-[10px] leading-relaxed text-slate-500">
-                          {JSON.stringify(funnelGhlLog, null, 2)}
-                        </pre>
+                        <summary className="cursor-pointer font-medium text-slate-400">Funnels — API debug</summary>
+                        <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded border border-white/5 bg-black/25 p-2 text-[10px] leading-relaxed text-slate-500">{JSON.stringify(funnelGhlLog, null, 2)}</pre>
                       </details>
                     )}
+                  */}
                 </section>
 
                 <section className="rounded-2xl border border-white/10 bg-slate-900/60 p-4 backdrop-blur-sm">
                   <p className="text-[0.65rem] font-medium uppercase tracking-[0.18em] text-slate-400">
-                    Automation
+                    Workflows
                   </p>
-                  <h3 className="mt-1 text-sm font-semibold text-white">
-                    Workflows matching “{resourceQuery}”
-                  </h3>
-                  <p className="mt-1 text-xs text-slate-400">
-                    Same keyword as this tab’s campaign title, sorted by name.
-                  </p>
+                  {/*
+                    Production: extra workflow context (uncomment if needed)
+                    <h3 className="mt-1 text-sm font-semibold text-white">
+                      Workflows matching “{resourceQuery}”
+                    </h3>
+                    <p className="mt-1 text-xs text-slate-400">
+                      Same keyword as this tab’s campaign title, sorted by name.
+                    </p>
+                  */}
                   {!locationId && (
                     <p className="mt-3 rounded-lg border border-amber-400/15 bg-amber-400/10 px-3 py-2 text-xs text-amber-100/90">
                       No location ID — connect GHL to load workflows.
@@ -526,39 +509,36 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
                     )}
                   {locationId && workflows.length > 0 && (
                     <ul className="mt-3 space-y-2">
-                      {workflows.map((workflow) => (
-                        <li
-                          key={workflow.id}
-                          className="rounded-lg border border-white/10 bg-slate-950/45 px-3 py-2.5"
-                        >
+                      {workflows.map((workflow, index) => (
+                        <li key={workflow.id}>
                           <a
                             href={workflow.url}
                             target="_blank"
                             rel="noreferrer"
-                            className="text-sm font-medium text-sky-300 transition hover:text-sky-200 hover:underline"
+                            className="block w-full rounded-xl border border-white/10 px-3 py-2.5 text-left transition hover:bg-white/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400/50"
                           >
-                            {workflow.name}
+                            <p className="text-sm font-semibold text-white">
+                              {activeCampaign.label} Workflow
+                              {workflows.length > 1 ? ` ${index + 1}` : ""}
+                            </p>
+                            <p className="mt-0.5 flex items-center gap-1.5 text-xs text-slate-400">
+                              Open in new tab
+                              <IconExternalLink className="text-slate-400" />
+                            </p>
                           </a>
-                          <p className="mt-0.5 text-xs text-slate-500">
-                            {workflow.status || "—"}
-                          </p>
                         </li>
                       ))}
                     </ul>
                   )}
-                  {locationId &&
-                    workflowGhlLog &&
-                    !workflowsLoading &&
-                    !workflowsError && (
+                  {/*
+                    Production: GHL raw response (re-enable client debug=1 + ghlAccess state)
+                    {locationId && workflowGhlLog && !workflowsLoading && !workflowsError && (
                       <details className="mt-3 rounded-lg border border-white/10 bg-slate-950/50 p-2 text-xs">
-                        <summary className="cursor-pointer font-medium text-slate-400">
-                          Workflows — API debug
-                        </summary>
-                        <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded border border-white/5 bg-black/25 p-2 text-[10px] leading-relaxed text-slate-500">
-                          {JSON.stringify(workflowGhlLog, null, 2)}
-                        </pre>
+                        <summary className="cursor-pointer font-medium text-slate-400">Workflows — API debug</summary>
+                        <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded border border-white/5 bg-black/25 p-2 text-[10px] leading-relaxed text-slate-500">{JSON.stringify(workflowGhlLog, null, 2)}</pre>
                       </details>
                     )}
+                  */}
                 </section>
               </>
             )}
