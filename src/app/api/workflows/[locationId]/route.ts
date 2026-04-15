@@ -2,8 +2,13 @@ import { NextResponse } from "next/server";
 import { getToken } from "@/lib/oauth-tokens";
 import { getWorkflowCampaigns } from "@/lib/ghl-workflows";
 
+/** White-label app deep link (e.g. Automated Practice). Override with NEXT_PUBLIC_GHL_WORKFLOW_APP_BASE. */
 function buildWorkflowUrl(locationId: string, workflowId: string): string {
-  return `https://app.gohighlevel.com/v2/location/${encodeURIComponent(locationId)}/automation/workflows/${encodeURIComponent(workflowId)}`;
+  const base = (
+    process.env.NEXT_PUBLIC_GHL_WORKFLOW_APP_BASE?.trim() ||
+    "https://app.automatedpractice.com"
+  ).replace(/\/$/, "");
+  return `${base}/location/${encodeURIComponent(locationId)}/workflow/${encodeURIComponent(workflowId)}`;
 }
 
 function decodeJwtPayload(token: string): Record<string, unknown> | null {
@@ -96,7 +101,7 @@ export async function GET(
       .sort((a, b) => a.name.localeCompare(b.name))
       .map((workflow) => ({
         ...workflow,
-        url: workflow.url ?? buildWorkflowUrl(locationId, workflow.id),
+        url: buildWorkflowUrl(locationId, workflow.id),
       }));
 
     console.info(
