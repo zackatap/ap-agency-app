@@ -41,6 +41,8 @@ export async function GET(
 ) {
   let requestedLocationId = "";
   let tokenLocationId = "";
+  let tokenCompanyId: string | null = null;
+  let tokenFingerprint: string | null = null;
 
   try {
     const { locationId } = await params;
@@ -65,13 +67,16 @@ export async function GET(
 
     const tokenClaims = decodeJwtPayload(stored.access_token);
     tokenLocationId = extractTokenLocation(tokenClaims);
+    tokenCompanyId = stored.companyId ?? null;
+    tokenFingerprint = stored.access_token.slice(-8);
     if (tokenLocationId && tokenLocationId !== locationId) {
       console.warn(
         "[workflows] token/location mismatch (pre-request)",
         JSON.stringify({
           requestedLocationId: locationId,
           tokenLocationId,
-          companyId: stored.companyId ?? null,
+          tokenFingerprint,
+          companyId: tokenCompanyId,
         })
       );
     }
@@ -125,6 +130,8 @@ export async function GET(
           debug: {
             requestedLocationId: requestedLocationId || null,
             tokenLocationId: tokenLocationId || null,
+            companyId: tokenCompanyId,
+            tokenFingerprint,
           },
         },
         { status: 401 }

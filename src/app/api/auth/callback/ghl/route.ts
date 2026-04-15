@@ -94,6 +94,7 @@ export async function GET(req: Request) {
     companyId?: string;
     expires_in?: number;
     userType?: string;
+    scope?: string;
   };
 
   const accessToken = tokenData.access_token;
@@ -104,7 +105,14 @@ export async function GET(req: Request) {
       JSON.stringify({
         stateLocationId: locationId,
         tokenLocationId,
+        userType: tokenData.userType ?? null,
+        companyId: tokenData.companyId ?? null,
       })
+    );
+    return NextResponse.redirect(
+      errorUrl(
+        "OAuth returned a token for a different location. Please reconnect from the exact location sidebar menu."
+      )
     );
   }
 
@@ -117,6 +125,16 @@ export async function GET(req: Request) {
   }
 
   const expiresIn = tokenData.expires_in ?? 86400;
+  console.info(
+    "[oauth-callback] storing token",
+    JSON.stringify({
+      storageLocationId: resolvedLocationId,
+      tokenLocationId: tokenLocationId || null,
+      userType: tokenData.userType ?? null,
+      companyId: tokenData.companyId ?? null,
+      scope: tokenData.scope ?? null,
+    })
+  );
   await setToken(resolvedLocationId, {
     access_token: accessToken,
     refresh_token: tokenData.refresh_token ?? "",
