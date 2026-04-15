@@ -167,9 +167,9 @@ export async function setToken(
   }
 }
 
-export async function deleteToken(locationId: string): Promise<void> {
+export async function deleteToken(locationId: string): Promise<number> {
   const sql = getDb();
-  if (!sql) return;
+  if (!sql) return 0;
 
   try {
     await sql`
@@ -182,10 +182,11 @@ export async function deleteToken(locationId: string): Promise<void> {
         updated_at TIMESTAMPTZ DEFAULT NOW()
       )
     `;
-    await sql`
+    const result = await sql`
       DELETE FROM ghl_oauth_tokens
       WHERE location_id = ${locationId}
     `;
+    return Array.isArray(result) ? result.length : 0;
   } catch (err) {
     console.error("[oauth-tokens] deleteToken error:", err);
     throw err;

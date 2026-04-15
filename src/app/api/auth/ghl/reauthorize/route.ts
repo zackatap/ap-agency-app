@@ -9,11 +9,11 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "locationId is required" }, { status: 400 });
   }
 
-  try {
-    await deleteToken(locationId);
-  } catch {
-    // Continue into auth flow even if delete fails; OAuth callback can still overwrite.
-  }
+  const deletedRows = await deleteToken(locationId);
+  console.info(
+    "[oauth-reauthorize] token reset",
+    JSON.stringify({ locationId, deletedRows })
+  );
 
   const target = new URL(`/api/auth/ghl/authorize?locationId=${encodeURIComponent(locationId)}`, url.origin);
   return NextResponse.redirect(target);
