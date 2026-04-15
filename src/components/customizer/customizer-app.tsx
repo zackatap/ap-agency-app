@@ -251,11 +251,11 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
               </p>
               {locationId && (
                 <a
-                  href={`/api/auth/ghl/authorize?locationId=${encodeURIComponent(locationId)}`}
+                  href={`/api/auth/ghl/reauthorize?locationId=${encodeURIComponent(locationId)}`}
                   target="_top"
                   className="mt-3 inline-flex rounded-lg bg-sky-500/20 px-3 py-1.5 text-xs font-medium text-sky-200 ring-1 ring-sky-400/40 transition hover:bg-sky-500/30"
                 >
-                  Reconnect GHL
+                  Hard Reconnect GHL
                 </a>
               )}
               {!locationId && (
