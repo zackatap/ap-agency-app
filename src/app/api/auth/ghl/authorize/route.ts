@@ -18,6 +18,8 @@ const GHL_CHOOSE_LOCATION = "https://marketplace.gohighlevel.com/oauth/chooseloc
 const SCOPES = [
   "opportunities.readonly",
   "contacts.readonly",
+  "campaigns.readonly",
+  "workflows.readonly",
   "oauth.readonly",
   "oauth.write",
 ].join(" ");
