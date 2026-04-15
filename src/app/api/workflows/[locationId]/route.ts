@@ -61,11 +61,26 @@ export async function GET(
     );
   } catch (err) {
     console.error("[workflows] Error:", err);
+    const message =
+      err instanceof Error ? err.message : "Failed to fetch workflows";
+    const lowered = message.toLowerCase();
+    const tokenLocationDenied =
+      lowered.includes("does not have access to this location") ||
+      lowered.includes("token does not have access to this location");
+
+    if (tokenLocationDenied) {
+      return NextResponse.json(
+        {
+          error:
+            "Token is not authorized for this location. Please reconnect this location from Customizer.",
+          needsAuth: true,
+        },
+        { status: 401 }
+      );
+    }
+
     return NextResponse.json(
-      {
-        error:
-          err instanceof Error ? err.message : "Failed to fetch workflows",
-      },
+      { error: message },
       { status: 500 }
     );
   }

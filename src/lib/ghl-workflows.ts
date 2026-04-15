@@ -62,42 +62,7 @@ function extractWorkflowArray(payload: unknown): unknown[] {
   return [];
 }
 
-function isScopeError(status: number, text: string): boolean {
-  if (status !== 401 && status !== 403) return false;
-  const normalized = text.toLowerCase();
-  return (
-    normalized.includes("not authorized for this scope") ||
-    normalized.includes("insufficient scope")
-  );
-}
-
-async function fetchCampaignWorkflows(
-  locationId: string,
-  accessToken: string
-): Promise<GHLWorkflow[]> {
-  const endpoint = `${GHL_BASE}/emails/public/v2/locations/${encodeURIComponent(locationId)}/campaigns/workflows`;
-  const res = await fetch(endpoint, {
-    method: "GET",
-    headers: ghlAuthHeaders(accessToken),
-  });
-
-  if (!res.ok) {
-    const errText = await res.text();
-    throw new Error(
-      `GHL list workflows failed: ${res.status} ${errText.slice(0, 300)}`
-    );
-  }
-
-  const payload = await res.json();
-  const rows = extractWorkflowArray(payload);
-  return rows
-    .map((item) => normalizeWorkflow(item))
-    .filter((item): item is GHLWorkflow => item !== null);
-}
-
-async function fetchCoreWorkflows(
-  accessToken: string
-): Promise<GHLWorkflow[]> {
+async function fetchWorkflows(accessToken: string): Promise<GHLWorkflow[]> {
   const endpoint = `${GHL_BASE}/workflows/`;
   const res = await fetch(endpoint, {
     method: "GET",
@@ -119,27 +84,9 @@ async function fetchCoreWorkflows(
 }
 
 export async function getWorkflowCampaigns(
-  locationId: string,
+  _locationId: string,
   accessToken: string
 ): Promise<GHLWorkflow[]> {
-  try {
-    return await fetchCampaignWorkflows(locationId, accessToken);
-  } catch (err) {
-    if (!(err instanceof Error)) throw err;
-
-    const m = err.message;
-    const match = m.match(
-      /^GHL list workflows failed:\s*(\d+)\s*([\s\S]*)$/
-    );
-    const status = match ? Number(match[1]) : 0;
-    const errText = match?.[2] ?? "";
-
-    if (!isScopeError(status, errText)) {
-      throw err;
-    }
-
-    // Some installs expose only workflows.readonly at consent time.
-    // Fallback to the core workflows endpoint to keep customizer usable.
-    return await fetchCoreWorkflows(accessToken);
-  }
+  // Per current GHL Workflows docs, use GET /workflows/ directly.
+  return await fetchWorkflows(accessToken);
 }
