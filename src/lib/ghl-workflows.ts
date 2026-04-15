@@ -67,10 +67,22 @@ function extractWorkflowArray(payload: unknown): unknown[] {
  * Docs: https://marketplace.gohighlevel.com/docs/ghl/workflows/get-workflow
  * Scopes: https://marketplace.gohighlevel.com/docs/Authorization/Scopes (workflows.readonly → GET /workflows/)
  */
+export interface GhlWorkflowsFetchDebug {
+  requestUrl: string;
+  totalRecordsFromApi: number;
+  responseTopLevelKeys: string[];
+  /** First N raw workflow objects as returned by GHL (before normalization). */
+  rawSamples: unknown[];
+}
+
 async function fetchWorkflowsOnce(
   accessToken: string,
-  searchParams?: URLSearchParams
-): Promise<{ ok: true; workflows: GHLWorkflow[] } | { ok: false; status: number; body: string }> {
+  searchParams?: URLSearchParams,
+  options?: { rawSampleLimit?: number }
+): Promise<
+  | { ok: true; workflows: GHLWorkflow[]; ghlDebug?: GhlWorkflowsFetchDebug }
+  | { ok: false; status: number; body: string }
+> {
   const url = new URL("/workflows/", GHL_BASE);
   if (searchParams) {
     searchParams.forEach((v, k) => url.searchParams.set(k, v));
@@ -94,24 +106,51 @@ async function fetchWorkflowsOnce(
   const workflows = rows
     .map((item) => normalizeWorkflow(item))
     .filter((item): item is GHLWorkflow => item !== null);
-  return { ok: true, workflows };
+
+  const limit = options?.rawSampleLimit ?? 0;
+  const ghlDebug: GhlWorkflowsFetchDebug | undefined =
+    limit > 0
+      ? {
+          requestUrl: url.toString(),
+          totalRecordsFromApi: rows.length,
+          responseTopLevelKeys: Object.keys(asRecord(payload)).sort(),
+          rawSamples: rows.slice(0, limit),
+        }
+      : undefined;
+
+  return { ok: true, workflows, ghlDebug };
 }
 
 export async function getWorkflowCampaigns(
   locationId: string,
-  accessToken: string
-): Promise<GHLWorkflow[]> {
+  accessToken: string,
+  options?: { rawSampleLimit?: number }
+): Promise<{
+  workflows: GHLWorkflow[];
+  ghlDebug?: GhlWorkflowsFetchDebug;
+}> {
   const withLoc = new URLSearchParams();
   withLoc.set("locationId", locationId);
 
-  const tryWithQuery = await fetchWorkflowsOnce(accessToken, withLoc);
+  const tryWithQuery = await fetchWorkflowsOnce(
+    accessToken,
+    withLoc,
+    options?.rawSampleLimit ? { rawSampleLimit: options.rawSampleLimit } : undefined
+  );
   if (tryWithQuery.ok) {
-    return tryWithQuery.workflows;
+    return {
+      workflows: tryWithQuery.workflows,
+      ghlDebug: tryWithQuery.ghlDebug,
+    };
   }
 
-  const plain = await fetchWorkflowsOnce(accessToken);
+  const plain = await fetchWorkflowsOnce(
+    accessToken,
+    undefined,
+    options?.rawSampleLimit ? { rawSampleLimit: options.rawSampleLimit } : undefined
+  );
   if (plain.ok) {
-    return plain.workflows;
+    return { workflows: plain.workflows, ghlDebug: plain.ghlDebug };
   }
 
   throw new Error(

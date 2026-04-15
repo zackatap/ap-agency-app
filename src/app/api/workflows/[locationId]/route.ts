@@ -49,6 +49,8 @@ export async function GET(
     requestedLocationId = locationId;
     const { searchParams } = new URL(req.url);
     const query = (searchParams.get("query") ?? "").trim().toLowerCase();
+    const wantDebug =
+      searchParams.get("debug") === "1" || searchParams.get("debug") === "true";
 
     if (!locationId) {
       return NextResponse.json(
@@ -81,9 +83,10 @@ export async function GET(
       );
     }
 
-    const allWorkflows = await getWorkflowCampaigns(
+    const { workflows: allWorkflows, ghlDebug } = await getWorkflowCampaigns(
       locationId,
-      stored.access_token
+      stored.access_token,
+      wantDebug ? { rawSampleLimit: 5 } : undefined
     );
 
     const filtered = allWorkflows
@@ -96,12 +99,51 @@ export async function GET(
         url: workflow.url ?? buildWorkflowUrl(locationId, workflow.id),
       }));
 
+    console.info(
+      "[workflows] GHL list success",
+      JSON.stringify({
+        locationId,
+        query: query || null,
+        totalFromGhl: allWorkflows.length,
+        returnedAfterFilter: filtered.length,
+        sampleNames: filtered.slice(0, 8).map((w) => w.name),
+        ghlResponseShape: ghlDebug
+          ? {
+              requestUrl: ghlDebug.requestUrl,
+              totalRecordsFromApi: ghlDebug.totalRecordsFromApi,
+              topLevelKeys: ghlDebug.responseTopLevelKeys,
+              rawSampleFieldKeys:
+                ghlDebug.rawSamples[0] &&
+                typeof ghlDebug.rawSamples[0] === "object" &&
+                ghlDebug.rawSamples[0] !== null
+                  ? Object.keys(
+                      ghlDebug.rawSamples[0] as Record<string, unknown>
+                    ).sort()
+                  : [],
+            }
+          : undefined,
+      })
+    );
+
     return NextResponse.json(
       {
         locationId,
         query,
         count: filtered.length,
         workflows: filtered,
+        ...(wantDebug && ghlDebug
+          ? {
+              ghlAccess: {
+                endpoint: "GET /workflows/",
+                docs: "https://marketplace.gohighlevel.com/docs/ghl/workflows/get-workflow",
+                requestUrl: ghlDebug.requestUrl,
+                totalRecordsFromApi: ghlDebug.totalRecordsFromApi,
+                responseTopLevelKeys: ghlDebug.responseTopLevelKeys,
+                rawSamples: ghlDebug.rawSamples,
+                normalizedFieldsWeUse: ["id", "name", "status", "url"],
+              },
+            }
+          : {}),
       },
       {
         headers: {

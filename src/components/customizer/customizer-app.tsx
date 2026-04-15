@@ -29,6 +29,16 @@ interface WorkflowItem {
   url: string;
 }
 
+interface GhlWorkflowAccessLog {
+  endpoint: string;
+  docs: string;
+  requestUrl: string;
+  totalRecordsFromApi: number;
+  responseTopLevelKeys: string[];
+  rawSamples: unknown[];
+  normalizedFieldsWeUse: string[];
+}
+
 const CAMPAIGNS: CampaignConfig[] = [
   {
     key: "base",
@@ -105,6 +115,9 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
   const [workflows, setWorkflows] = useState<WorkflowItem[]>([]);
   const [workflowsLoading, setWorkflowsLoading] = useState(false);
   const [workflowsError, setWorkflowsError] = useState<string | null>(null);
+  const [workflowGhlLog, setWorkflowGhlLog] = useState<GhlWorkflowAccessLog | null>(
+    null
+  );
 
   const activeCampaign =
     CAMPAIGNS.find((campaign) => campaign.key === active) ?? CAMPAIGNS[0];
@@ -113,6 +126,7 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
     if (active !== "base") return;
     if (!locationId) {
       setWorkflows([]);
+      setWorkflowGhlLog(null);
       setWorkflowsError(
         "No location connected for workflow lookup yet. Forms still work."
       );
@@ -123,24 +137,28 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
     const load = async () => {
       setWorkflowsLoading(true);
       setWorkflowsError(null);
+      setWorkflowGhlLog(null);
       try {
         const res = await fetch(
-          `/api/workflows/${encodeURIComponent(locationId)}?query=pain`,
+          `/api/workflows/${encodeURIComponent(locationId)}?query=pain&debug=1`,
           { cache: "no-store" }
         );
         const data = (await res.json()) as {
           workflows?: WorkflowItem[];
           error?: string;
+          ghlAccess?: GhlWorkflowAccessLog;
         };
         if (!res.ok) {
           throw new Error(data.error ?? "Failed to load workflows");
         }
         if (!isCancelled) {
           setWorkflows(data.workflows ?? []);
+          setWorkflowGhlLog(data.ghlAccess ?? null);
         }
       } catch (error) {
         if (!isCancelled) {
           setWorkflows([]);
+          setWorkflowGhlLog(null);
           setWorkflowsError(
             error instanceof Error ? error.message : "Failed to load workflows"
           );
@@ -317,6 +335,26 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
                   ))}
                 </ul>
               )}
+              {locationId &&
+                active === "base" &&
+                workflowGhlLog &&
+                !workflowsLoading &&
+                !workflowsError && (
+                  <details className="mt-3 rounded-lg border border-white/10 bg-slate-950/50 p-2 text-xs">
+                    <summary className="cursor-pointer font-medium text-slate-300">
+                      GHL API data (debug)
+                    </summary>
+                    <p className="mt-2 text-slate-500">
+                      Logged server-side as{" "}
+                      <code className="text-slate-400">[workflows] GHL list success</code>{" "}
+                      in Vercel. Below is the same payload shape returned with{" "}
+                      <code className="text-slate-400">debug=1</code>.
+                    </p>
+                    <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-all rounded border border-white/5 bg-black/30 p-2 text-[10px] leading-relaxed text-slate-400">
+                      {JSON.stringify(workflowGhlLog, null, 2)}
+                    </pre>
+                  </details>
+                )}
             </section>
           </aside>
         </div>
