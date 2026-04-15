@@ -117,7 +117,10 @@ export async function GET(
     const lowered = message.toLowerCase();
     const tokenLocationDenied =
       lowered.includes("does not have access to this location") ||
-      lowered.includes("token does not have access to this location");
+      lowered.includes("token does not have access to this location") ||
+      (lowered.includes("ghl workflows:") &&
+        lowered.includes("403") &&
+        lowered.includes("access to this location"));
 
     if (tokenLocationDenied) {
       return NextResponse.json(

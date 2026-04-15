@@ -250,13 +250,23 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
                 by name.
               </p>
               {locationId && (
-                <a
-                  href={`/api/auth/ghl/reauthorize?locationId=${encodeURIComponent(locationId)}`}
-                  target="_top"
-                  className="mt-3 inline-flex rounded-lg bg-sky-500/20 px-3 py-1.5 text-xs font-medium text-sky-200 ring-1 ring-sky-400/40 transition hover:bg-sky-500/30"
-                >
-                  Hard Reconnect GHL
-                </a>
+                <div className="mt-3 flex flex-wrap gap-2">
+                  <a
+                    href={`/api/auth/ghl/reauthorize?locationId=${encodeURIComponent(locationId)}`}
+                    target="_top"
+                    className="inline-flex rounded-lg bg-sky-500/20 px-3 py-1.5 text-xs font-medium text-sky-200 ring-1 ring-sky-400/40 transition hover:bg-sky-500/30"
+                  >
+                    Hard Reconnect GHL
+                  </a>
+                  <a
+                    href={`/api/debug/ghl-workflow-probe/${encodeURIComponent(locationId)}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex rounded-lg border border-white/15 px-3 py-1.5 text-xs text-slate-300 transition hover:bg-white/5"
+                  >
+                    API probe (diagnostics)
+                  </a>
+                </div>
               )}
               {!locationId && (
                 <p className="mt-3 rounded-lg border border-amber-300/20 bg-amber-400/10 px-3 py-2 text-xs text-amber-200">
