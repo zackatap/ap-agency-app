@@ -2000,15 +2000,28 @@ function CalcNumberInput({
   );
 }
 
+/** Like ROAS "X:1" but tolerates zero and negative values (losing ROI). */
+function formatSignedRatio(ratio: number | null): string {
+  if (ratio == null || !Number.isFinite(ratio)) return "—";
+  if (ratio === 0) return "0:1";
+  const abs = Math.abs(ratio);
+  const rounded = abs >= 100 ? Math.round(abs) : Math.round(abs * 10) / 10;
+  const s = Number.isInteger(rounded)
+    ? String(Math.round(rounded))
+    : rounded.toFixed(1).replace(/\.0$/, "");
+  return `${ratio < 0 ? "-" : ""}${s}:1`;
+}
+
 function formatCalcValue(
   value: number | null,
-  format: "number" | "percent" | "currency" | "roas"
+  format: "number" | "percent" | "currency" | "roas" | "ratio"
 ): string {
   if (value == null || !Number.isFinite(value)) return "—";
   if (format === "currency")
     return `$${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   if (format === "percent") return `${value}%`;
   if (format === "roas") return formatRoasRatio(value);
+  if (format === "ratio") return formatSignedRatio(value);
   return String(value);
 }
 
@@ -2043,7 +2056,7 @@ function CalcDerivedRow({
 }: {
   label: string;
   value: number | null;
-  format?: "number" | "percent" | "currency" | "roas";
+  format?: "number" | "percent" | "currency" | "roas" | "ratio";
   emphasize?: boolean;
 }) {
   const text = formatCalcValue(value, format);
@@ -2203,7 +2216,7 @@ function CalculatorPanel({
                 format="currency"
               />
               <CalcDerivedRow label="Net Profit" value={netProfit} format="currency" />
-              <CalcDerivedRow label="ROI" value={derived.roiRatio} format="roas" emphasize />
+              <CalcDerivedRow label="ROI" value={derived.roiRatio} format="ratio" emphasize />
             </div>
           </section>
         </div>
