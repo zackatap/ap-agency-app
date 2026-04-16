@@ -178,6 +178,10 @@ export async function getOpportunityCountsByStage(
   const limit = 100;
   let page = 1;
   let hasMore = true;
+  // GHL /opportunities/search can return the same opp on multiple pages (default
+  // sort isn't stable under concurrent updates). Dedupe by id so counts match
+  // getOpportunityNamesForCell and ghl-attribution's by-ad aggregation.
+  const seenOpp = new Set<string>();
 
   while (hasMore) {
     if (page > 1) await ghlDelay(GHL_DELAY_MS);
@@ -209,6 +213,9 @@ export async function getOpportunityCountsByStage(
     const total = data.total ?? data.totalCount ?? 0;
 
     for (const opp of opportunities) {
+      if (seenOpp.has(opp.id)) continue;
+      seenOpp.add(opp.id);
+
       if (dateRange) {
         const created =
           (opp.dateCreated as string) ??
@@ -285,6 +292,10 @@ export async function getOpportunityCountsByStagePerMonth(
   for (const range of monthRanges) {
     byMonth.set(range.monthKey, { counts: {}, values: {} });
   }
+  // GHL /opportunities/search can return the same opp on multiple pages (default
+  // sort isn't stable under concurrent updates). Dedupe by id so monthly counts
+  // match getOpportunityNamesForCell's deduped drill-down.
+  const seenOpp = new Set<string>();
 
   const getMonthForDate = (dateStr: string) => {
     for (const range of monthRanges) {
@@ -329,6 +340,9 @@ export async function getOpportunityCountsByStagePerMonth(
     let minDateInPage: string | null = null;
 
     for (const opp of opportunities) {
+      if (seenOpp.has(opp.id)) continue;
+      seenOpp.add(opp.id);
+
       const dateStr = getOpportunityAttributionLocalDate(opp, attributionMode);
       if (dateStr) {
         if (!minDateInPage || dateStr < minDateInPage) minDateInPage = dateStr;

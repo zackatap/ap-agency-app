@@ -37,12 +37,21 @@ function sumStages(
   let count = 0;
   let value = 0;
   for (const [stageName, c] of Object.entries(counts)) {
-    // Custom mapping takes precedence (exact stage name match)
-    if (customMappings && targetStage && customMappings[stageName] === targetStage) {
-      count += c;
-      value += values[stageName] ?? 0;
+    // Won opps are bucketed under STATUS_WON_KEY; calculateFunnelMetrics adds them via
+    // statusWonCount only. The key string contains "closed", so built-in SUCCESS matching
+    // would double-count won if we did not skip it here.
+    if (stageName === STATUS_WON_KEY) continue;
+
+    // When summing a specific funnel stage, a stage with any custom mapping belongs only
+    // to that mapping (aligns with classifyOpportunityFunnelBucket).
+    if (targetStage && customMappings?.[stageName] != null) {
+      if (customMappings[stageName] === targetStage) {
+        count += c;
+        value += values[stageName] ?? 0;
+      }
       continue;
     }
+
     // Exclude stages that match the exclude list (e.g. "Show" matches both showed and noShow)
     if (excludeStageNames?.length && stageMatches(stageName, excludeStageNames)) continue;
     // Built-in matching
