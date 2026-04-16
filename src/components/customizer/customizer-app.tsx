@@ -1,7 +1,11 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Image from "next/image";
 import Script from "next/script";
+
+/** Hide duplicate GHL heading inside the cross-origin embed (see Step 1 title). */
+const GHL_EMBED_TITLE_CROP_PX = 56;
 
 type CampaignKey =
   | "base"
@@ -297,10 +301,7 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
           </aside>
 
           <div className="min-w-0 space-y-3">
-            <details
-              className="group rounded-2xl border border-white/10 bg-slate-900/60 open:bg-slate-900/70"
-              open
-            >
+            <details className="group rounded-2xl border border-white/10 bg-slate-900/60 open:bg-slate-900/70">
               <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-2xl px-4 py-3.5 text-left [&::-webkit-details-marker]:hidden">
                 <span className="text-base font-semibold text-white">
                   {step1Title}
@@ -308,46 +309,49 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
                 <AccordionChevron />
               </summary>
               <div className="border-t border-white/10 px-4 pb-4 pt-1">
-                <p className="mb-3 text-sm text-slate-400">
-                  {activeCampaign.formName}
-                </p>
+                {/*
+                  {activeCampaign.formName} — hidden: duplicate of Step 1 title; GHL title inside iframe is cropped below.
+                */}
                 <div className="rounded-xl border border-white/10 bg-slate-900 p-2">
-                  <iframe
-                    src={`https://link.automatedpractice.com/widget/form/${activeCampaign.formId}`}
-                    style={{
-                      width: "100%",
-                      minHeight: `${activeCampaign.height}px`,
-                      border: "none",
-                      borderRadius: "10px",
-                      display: "block",
-                      backgroundColor: "transparent",
-                      filter:
-                        "invert(1) hue-rotate(180deg) brightness(1.1) contrast(0.96)",
-                      mixBlendMode: "screen",
-                    }}
-                    id={`inline-${activeCampaign.formId}`}
-                    data-layout="{'id':'INLINE'}"
-                    data-trigger-type="alwaysShow"
-                    data-trigger-value=""
-                    data-activation-type="alwaysActivated"
-                    data-activation-value=""
-                    data-deactivation-type="neverDeactivate"
-                    data-deactivation-value=""
-                    data-form-name={activeCampaign.formName}
-                    data-height={String(activeCampaign.height)}
-                    data-layout-iframe-id={`inline-${activeCampaign.formId}`}
-                    data-form-id={activeCampaign.formId}
-                    title={activeCampaign.formName}
-                  />
+                  <div
+                    className="overflow-hidden rounded-lg"
+                    style={{ height: `${activeCampaign.height}px` }}
+                  >
+                    <iframe
+                      src={`https://link.automatedpractice.com/widget/form/${activeCampaign.formId}`}
+                      style={{
+                        width: "100%",
+                        height: `${activeCampaign.height + GHL_EMBED_TITLE_CROP_PX}px`,
+                        marginTop: `-${GHL_EMBED_TITLE_CROP_PX}px`,
+                        border: "none",
+                        borderRadius: "10px",
+                        display: "block",
+                        backgroundColor: "transparent",
+                        filter:
+                          "invert(1) hue-rotate(180deg) brightness(1.1) contrast(0.96)",
+                        mixBlendMode: "screen",
+                      }}
+                      id={`inline-${activeCampaign.formId}`}
+                      data-layout="{'id':'INLINE'}"
+                      data-trigger-type="alwaysShow"
+                      data-trigger-value=""
+                      data-activation-type="alwaysActivated"
+                      data-activation-value=""
+                      data-deactivation-type="neverDeactivate"
+                      data-deactivation-value=""
+                      data-form-name={activeCampaign.formName}
+                      data-height={String(activeCampaign.height)}
+                      data-layout-iframe-id={`inline-${activeCampaign.formId}`}
+                      data-form-id={activeCampaign.formId}
+                      title={activeCampaign.formName}
+                    />
+                  </div>
                 </div>
               </div>
             </details>
 
             {isBase ? (
-              <details
-                className="group rounded-2xl border border-white/10 bg-slate-900/60 open:bg-slate-900/70"
-                open
-              >
+              <details className="group rounded-2xl border border-white/10 bg-slate-900/60 open:bg-slate-900/70">
                 <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-2xl px-4 py-3.5 text-left [&::-webkit-details-marker]:hidden">
                   <span className="text-base font-semibold text-white">
                     Step 2) Pick Campaign(s)
@@ -363,10 +367,7 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
                 </div>
               </details>
             ) : (
-              <details
-                className="group rounded-2xl border border-white/10 bg-slate-900/60 open:bg-slate-900/70"
-                open
-              >
+              <details className="group rounded-2xl border border-white/10 bg-slate-900/60 open:bg-slate-900/70">
                 <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-2xl px-4 py-3.5 text-left [&::-webkit-details-marker]:hidden">
                   <span className="text-base font-semibold text-white">
                     Step 2) Landing Page
@@ -376,11 +377,44 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
                 <div className="space-y-4 border-t border-white/10 px-4 pb-4 pt-3">
                   <div>
                     <p className="text-sm font-semibold text-white">Instructions</p>
-                    <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-sm leading-relaxed text-slate-300">
-                      <li>Click the Landing Page link.</li>
-                      <li>Connect a domain.</li>
-                      <li>Customize if needed.</li>
-                      <li>Copy link to paste into Ad.</li>
+                    <ol className="mt-3 list-decimal space-y-6 pl-5 text-sm leading-relaxed text-slate-300">
+                      <li>
+                        Open your funnel in GHL using the{" "}
+                        <span className="text-slate-200">Landing Page</span> link
+                        below (when connected).
+                      </li>
+                      <li>
+                        <span className="text-slate-200">Connect a domain</span> to
+                        your funnel (Sites → Funnels → your funnel → domain /
+                        publishing settings). Example:
+                        <span className="mt-3 block overflow-hidden rounded-lg border border-white/10 bg-slate-950/50">
+                          <Image
+                            src="/domain.png"
+                            alt="Where to connect a domain for your funnel in GHL"
+                            width={960}
+                            height={540}
+                            className="h-auto w-full max-w-2xl"
+                            sizes="(max-width: 768px) 100vw, 672px"
+                          />
+                        </span>
+                      </li>
+                      <li>Customize the page if needed.</li>
+                      <li>
+                        To use the page in ads: open the funnel preview, click the{" "}
+                        <span className="text-slate-200">share</span> button, then{" "}
+                        <span className="text-slate-200">copy the URL</span> from the
+                        dialog and paste it into your ad.
+                        <span className="mt-3 block overflow-hidden rounded-lg border border-white/10 bg-slate-950/50">
+                          <Image
+                            src="/preview.png"
+                            alt="Share button and copy URL for your funnel preview"
+                            width={960}
+                            height={540}
+                            className="h-auto w-full max-w-2xl"
+                            sizes="(max-width: 768px) 100vw, 672px"
+                          />
+                        </span>
+                      </li>
                     </ol>
                   </div>
                   {showGhlResources && (
