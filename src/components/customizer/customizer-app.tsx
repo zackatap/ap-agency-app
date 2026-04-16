@@ -153,11 +153,31 @@ interface CustomizerAppProps {
   locationId?: string;
 }
 
+interface Lightbox {
+  src: string;
+  alt: string;
+}
+
 export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
   const [active, setActive] = useState<CampaignKey>("base");
   const [funnels, setFunnels] = useState<FunnelItem[]>([]);
   const [funnelsLoading, setFunnelsLoading] = useState(false);
   const [funnelsError, setFunnelsError] = useState<string | null>(null);
+  const [lightbox, setLightbox] = useState<Lightbox | null>(null);
+
+  useEffect(() => {
+    if (!lightbox) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setLightbox(null);
+    };
+    window.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [lightbox]);
 
   const activeCampaign =
     CAMPAIGNS.find((campaign) => campaign.key === active) ?? CAMPAIGNS[0];
@@ -429,19 +449,28 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
                       </li>
                       <li>
                         <span className="text-slate-200">Connect a domain</span> to
-                        your funnel (Sites → Funnels → your funnel → domain /
-                        publishing settings). Example:
-                        <span className="mt-3 block overflow-hidden rounded-lg border border-white/10 bg-slate-950/50">
+                        your landing page.
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setLightbox({
+                              src: "/domain.png",
+                              alt: "Where to connect a domain for your funnel in GHL",
+                            })
+                          }
+                          className="group mt-3 block overflow-hidden rounded-lg border border-white/10 bg-slate-950/50 transition hover:border-white/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400/50"
+                          aria-label="Open domain screenshot at full size"
+                        >
                           {/* eslint-disable-next-line @next/next/no-img-element -- static public assets; avoids /_next/image optimizer issues on large PNGs */}
                           <img
                             src="/domain.png"
                             alt="Where to connect a domain for your funnel in GHL"
                             width={2448}
                             height={1340}
-                            className="h-auto w-full max-w-2xl"
+                            className="h-auto w-full max-w-xs transition group-hover:opacity-90 sm:max-w-sm"
                             loading="lazy"
                           />
-                        </span>
+                        </button>
                       </li>
                       <li>Customize the page if needed.</li>
                       <li>
@@ -449,17 +478,27 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
                         <span className="text-slate-200">share</span> button, then{" "}
                         <span className="text-slate-200">copy the URL</span> from the
                         dialog and paste it into your ad.
-                        <span className="mt-3 block overflow-hidden rounded-lg border border-white/10 bg-slate-950/50">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setLightbox({
+                              src: "/preview.png",
+                              alt: "Share button and copy URL for your funnel preview",
+                            })
+                          }
+                          className="group mt-3 block overflow-hidden rounded-lg border border-white/10 bg-slate-950/50 transition hover:border-white/20 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400/50"
+                          aria-label="Open preview screenshot at full size"
+                        >
                           {/* eslint-disable-next-line @next/next/no-img-element -- static public assets; avoids /_next/image optimizer issues on large PNGs */}
                           <img
                             src="/preview.png"
                             alt="Share button and copy URL for your funnel preview"
                             width={2448}
                             height={1664}
-                            className="h-auto w-full max-w-2xl"
+                            className="h-auto w-full max-w-xs transition group-hover:opacity-90 sm:max-w-sm"
                             loading="lazy"
                           />
-                        </span>
+                        </button>
                       </li>
                     </ol>
                   </div>
@@ -487,6 +526,35 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
           </div>
         </div>
       </div>
+
+      {lightbox && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label={lightbox.alt}
+          onClick={() => setLightbox(null)}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+        >
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setLightbox(null);
+            }}
+            aria-label="Close image preview"
+            className="absolute right-4 top-4 rounded-full border border-white/20 bg-slate-900/80 px-3 py-1.5 text-xs font-medium text-slate-200 shadow-lg transition hover:bg-slate-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400/50"
+          >
+            Close (Esc)
+          </button>
+          {/* eslint-disable-next-line @next/next/no-img-element -- static public asset */}
+          <img
+            src={lightbox.src}
+            alt={lightbox.alt}
+            onClick={(e) => e.stopPropagation()}
+            className="max-h-[90vh] max-w-[90vw] rounded-lg border border-white/10 object-contain shadow-2xl"
+          />
+        </div>
+      )}
     </div>
   );
 }
