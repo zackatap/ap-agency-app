@@ -1898,13 +1898,13 @@ function CalcNumberInput({
   onChange,
   placeholder = "0",
   step,
-  width = "w-20",
+  ariaLabel,
 }: {
   value: number | null;
   onChange: (v: number | null) => void;
   placeholder?: string;
   step?: number;
-  width?: string;
+  ariaLabel?: string;
 }) {
   return (
     <input
@@ -1919,33 +1919,222 @@ function CalcNumberInput({
         onChange(Number.isFinite(n) && n >= 0 ? n : null);
       }}
       placeholder={placeholder}
-      className={`${width} rounded border border-sky-400/40 bg-sky-500/5 px-2 py-1 text-center text-sm text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none`}
+      aria-label={ariaLabel}
+      className="w-28 rounded-md border border-white/15 bg-white/5 px-2.5 py-1 text-right text-sm tabular-nums text-white placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500/40"
     />
   );
 }
 
-/** Display a computed number in the calculator column (em-dash when not derivable). */
-function CalcDisplay({
+function formatCalcValue(
+  value: number | null,
+  format: "number" | "percent" | "currency" | "roas"
+): string {
+  if (value == null || !Number.isFinite(value)) return "—";
+  if (format === "currency")
+    return `$${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  if (format === "percent") return `${value}%`;
+  if (format === "roas") return formatRoasRatio(value);
+  return String(value);
+}
+
+/** Label/value row inside the Calculator sidebar. */
+function CalcRow({
+  label,
+  children,
+  emphasize,
+}: {
+  label: string;
+  children: React.ReactNode;
+  emphasize?: boolean;
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <span
+        className={`text-sm ${emphasize ? "font-medium text-slate-200" : "text-slate-400"}`}
+      >
+        {label}
+      </span>
+      {children}
+    </div>
+  );
+}
+
+/** Derived / read-only value row inside the Calculator sidebar. */
+function CalcDerivedRow({
+  label,
   value,
   format = "number",
+  emphasize,
 }: {
+  label: string;
   value: number | null;
   format?: "number" | "percent" | "currency" | "roas";
+  emphasize?: boolean;
 }) {
-  if (value == null || !Number.isFinite(value)) {
-    return <span className="text-sm text-slate-500">—</span>;
-  }
-  let text: string;
-  if (format === "currency") {
-    text = `$${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-  } else if (format === "percent") {
-    text = `${value}%`;
-  } else if (format === "roas") {
-    text = formatRoasRatio(value);
-  } else {
-    text = String(value);
-  }
-  return <span className="text-sm tabular-nums text-white">{text}</span>;
+  const text = formatCalcValue(value, format);
+  const dash = text === "—";
+  return (
+    <CalcRow label={label} emphasize={emphasize}>
+      <span
+        className={`text-sm tabular-nums ${dash ? "text-slate-500" : emphasize ? "font-semibold text-white" : "text-white"}`}
+      >
+        {text}
+      </span>
+    </CalcRow>
+  );
+}
+
+interface CalcDerived {
+  cpl: number | null;
+  bookingRate: number | null;
+  showRate: number | null;
+  cps: number | null;
+  cpClose: number | null;
+  revenue: number;
+  totalInvestment: number;
+  netProfit: number;
+  roiPct: number | null;
+  roas: number | null;
+  hasAny: boolean;
+}
+
+/** Sticky right-hand scratchpad for what-if funnel math. */
+function CalculatorPanel({
+  calc,
+  setCalc,
+  derived,
+}: {
+  calc: CalcInputs;
+  setCalc: React.Dispatch<React.SetStateAction<CalcInputs>>;
+  derived: CalcDerived;
+}) {
+  const update = <K extends keyof CalcInputs>(key: K, value: number | null) =>
+    setCalc((prev) => ({ ...prev, [key]: value }));
+
+  // Only surface ROI numbers once inputs make them meaningful.
+  const hasInvestment = derived.totalInvestment > 0 && derived.hasAny;
+  const totalInvestment = hasInvestment ? derived.totalInvestment : null;
+  const netProfit = hasInvestment ? derived.netProfit : null;
+
+  return (
+    <aside className="lg:sticky lg:top-4 lg:self-start">
+      <div className="overflow-hidden rounded-xl border border-white/10 bg-white/5">
+        <header className="flex items-center justify-between border-b border-white/10 px-4 py-3">
+          <div>
+            <h3 className="text-sm font-semibold text-white">Calculator</h3>
+            <p className="text-xs text-slate-500">Scratchpad for what-if math</p>
+          </div>
+          {derived.hasAny && (
+            <button
+              type="button"
+              onClick={() => setCalc(DEFAULT_CALC_INPUTS)}
+              className="rounded-md border border-white/10 bg-white/5 px-2 py-1 text-xs text-slate-300 transition hover:bg-white/10 hover:text-white"
+            >
+              Reset
+            </button>
+          )}
+        </header>
+
+        <div className="space-y-5 p-4">
+          <section>
+            <p className="mb-2 text-xs font-medium uppercase tracking-wider text-slate-400">
+              Inputs
+            </p>
+            <div className="space-y-2">
+              <CalcRow label="Expenses">
+                <CalcNumberInput
+                  value={calc.expenses}
+                  onChange={(v) => update("expenses", v)}
+                  step={0.01}
+                  ariaLabel="Expenses"
+                />
+              </CalcRow>
+              <CalcRow label="Ad Spend">
+                <CalcNumberInput
+                  value={calc.adSpend}
+                  onChange={(v) => update("adSpend", v)}
+                  step={0.01}
+                  ariaLabel="Ad Spend"
+                />
+              </CalcRow>
+              <CalcRow label="Leads">
+                <CalcNumberInput
+                  value={calc.leads}
+                  onChange={(v) => update("leads", v)}
+                  ariaLabel="Leads"
+                />
+              </CalcRow>
+              <CalcRow label="Appointments">
+                <CalcNumberInput
+                  value={calc.appts}
+                  onChange={(v) => update("appts", v)}
+                  ariaLabel="Appointments"
+                />
+              </CalcRow>
+              <CalcRow label="Shows">
+                <CalcNumberInput
+                  value={calc.showed}
+                  onChange={(v) => update("showed", v)}
+                  ariaLabel="Shows"
+                />
+              </CalcRow>
+              <CalcRow label="No Show">
+                <CalcNumberInput
+                  value={calc.noShow}
+                  onChange={(v) => update("noShow", v)}
+                  ariaLabel="No Show"
+                />
+              </CalcRow>
+              <CalcRow label="Closed">
+                <CalcNumberInput
+                  value={calc.closed}
+                  onChange={(v) => update("closed", v)}
+                  ariaLabel="Closed"
+                />
+              </CalcRow>
+              <CalcRow label="Total Value Closed">
+                <CalcNumberInput
+                  value={calc.totalValueClosed}
+                  onChange={(v) => update("totalValueClosed", v)}
+                  step={0.01}
+                  ariaLabel="Total Value Closed"
+                />
+              </CalcRow>
+            </div>
+          </section>
+
+          <section className="border-t border-white/5 pt-4">
+            <p className="mb-2 text-xs font-medium uppercase tracking-wider text-slate-400">
+              Rates &amp; Cost
+            </p>
+            <div className="space-y-1.5">
+              <CalcDerivedRow label="Cost Per Lead" value={derived.cpl} format="currency" />
+              <CalcDerivedRow label="Booking %" value={derived.bookingRate} format="percent" />
+              <CalcDerivedRow label="Show %" value={derived.showRate} format="percent" />
+              <CalcDerivedRow label="Cost Per Show" value={derived.cps} format="currency" />
+              <CalcDerivedRow label="Cost Per Close" value={derived.cpClose} format="currency" />
+            </div>
+          </section>
+
+          <section className="border-t border-white/5 pt-4">
+            <p className="mb-2 text-xs font-medium uppercase tracking-wider text-slate-400">
+              ROI
+            </p>
+            <div className="space-y-1.5">
+              <CalcDerivedRow
+                label="Total Investment"
+                value={totalInvestment}
+                format="currency"
+              />
+              <CalcDerivedRow label="Net Profit" value={netProfit} format="currency" />
+              <CalcDerivedRow label="ROI %" value={derived.roiPct} format="percent" emphasize />
+              <CalcDerivedRow label="ROAS" value={derived.roas} format="roas" />
+            </div>
+          </section>
+        </div>
+      </div>
+    </aside>
+  );
 }
 
 function MonthToMonthTable({
@@ -1984,8 +2173,6 @@ function MonthToMonthTable({
   const [appointmentsExpanded, setAppointmentsExpanded] = useState(false);
   const [roiExpanded, setRoiExpanded] = useState(false);
   const [calc, setCalc] = useState<CalcInputs>(DEFAULT_CALC_INPUTS);
-  const updateCalc = <K extends keyof CalcInputs>(key: K, value: number | null) =>
-    setCalc((prev) => ({ ...prev, [key]: value }));
 
   const calcDerived = useMemo(() => {
     const { adSpend, leads, appts, showed, noShow, closed, totalValueClosed, expenses } = calc;
@@ -2060,309 +2247,214 @@ function MonthToMonthTable({
   };
 
   return (
-    <div className="rounded-xl border border-white/10 bg-white/5 overflow-hidden">
-      <div className="px-5 py-4">
-        <h2 className="text-lg font-semibold text-white">
-          Month to Month Overview
-        </h2>
-        <p className="mt-0.5 text-xs text-slate-500">
-          Attribution: {attributionMode === "lastUpdated" ? "Last Updated" : "Created"}
-        </p>
-      </div>
-      <div className="overflow-x-auto pb-5">
-        <table className="w-full min-w-[720px]">
-          <thead>
-            <tr className="border-b border-white/10">
-              <th className="sticky left-0 z-10 min-w-[180px] bg-slate-900/95 px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-400">
-                Metric
-              </th>
-              {months.map((m) => (
-                <th
-                  key={m.monthKey}
-                  className="min-w-[90px] px-4 py-3 text-center text-xs font-medium text-slate-400"
-                >
-                  {monthLabel(m.monthKey)}
+    <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(260px,300px)] lg:items-start">
+      <div className="min-w-0 overflow-hidden rounded-xl border border-white/10 bg-white/5">
+        <div className="px-5 py-4">
+          <h2 className="text-lg font-semibold text-white">
+            Month to Month Overview
+          </h2>
+          <p className="mt-0.5 text-xs text-slate-500">
+            Attribution: {attributionMode === "lastUpdated" ? "Last Updated" : "Created"}
+          </p>
+        </div>
+        <div className="overflow-x-auto pb-5">
+          <table className="w-full min-w-[600px]">
+            <thead>
+              <tr className="border-b border-white/10">
+                <th className="sticky left-0 z-10 min-w-[180px] bg-slate-900/95 px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-400">
+                  Metric
                 </th>
-              ))}
-              <th className="min-w-[110px] border-l-2 border-sky-400/30 bg-sky-500/10 px-4 py-3 text-center text-xs font-semibold uppercase tracking-wider text-sky-300">
-                Calculator
-              </th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-white/5">
-            <tr>
-              <td className="sticky left-0 z-10 bg-slate-900/95 px-4 py-3 text-sm text-slate-300">
-                Ad Spend
-              </td>
-              {months.map((m) => (
-                <td key={m.monthKey} className="px-4 py-2 text-center">
-                  {adSpendFromFacebook ? (
-                    <span className="inline-flex w-20 items-center justify-center text-sm text-white">
-                      {adSpendLoading ? (
-                        <span
-                          className="inline-block h-4 w-4 border-2 border-slate-500 border-t-transparent rounded-full animate-spin"
-                          aria-hidden
-                        />
-                      ) : (adSpend[m.monthKey] ?? 0) > 0
-                        ? "$" + Number(adSpend[m.monthKey]).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })
-                        : "—"}
-                    </span>
-                  ) : (
-                    <input
-                      type="number"
-                      min={0}
-                      step={0.01}
-                      value={adSpend[m.monthKey] ?? ""}
-                      onChange={(e) => setSpend(m.monthKey, parseFloat(e.target.value) || 0)}
-                      onBlur={(e) => setSpend(m.monthKey, parseFloat((e.target as HTMLInputElement).value) || 0)}
-                      placeholder="0"
-                      className="w-20 rounded border border-white/20 bg-white/5 px-2 py-1 text-center text-sm text-white placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none"
-                    />
-                  )}
+                {months.map((m) => (
+                  <th
+                    key={m.monthKey}
+                    className="min-w-[90px] px-4 py-3 text-center text-xs font-medium text-slate-400"
+                  >
+                    {monthLabel(m.monthKey)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-white/5">
+              <tr>
+                <td className="sticky left-0 z-10 bg-slate-900/95 px-4 py-3 text-sm text-slate-300">
+                  Ad Spend
                 </td>
-              ))}
-              <td className="border-l-2 border-sky-400/30 bg-sky-500/5 px-4 py-2 text-center">
-                <CalcNumberInput
-                  value={calc.adSpend}
-                  onChange={(v) => updateCalc("adSpend", v)}
-                  step={0.01}
-                />
-              </td>
-            </tr>
-            <MetricRow
-              label="Leads"
-              values={months.map((m) => getMetrics(m).leads)}
-              metric="leads"
-              monthKeys={months.map((m) => m.monthKey)}
-              onCellClick={handleCellClick}
-              calcCell={
-                <CalcNumberInput
-                  value={calc.leads}
-                  onChange={(v) => updateCalc("leads", v)}
-                />
-              }
-            />
-            <MetricRow
-              label="Cost Per Lead"
-              values={months.map((m) => {
-                const spend = adSpend[m.monthKey] ?? 0;
-                const leads = getMetrics(m).leads;
-                return leads > 0 && spend > 0 ? spend / leads : null;
-              })}
-              format="currency"
-              calcCell={<CalcDisplay value={calcDerived.cpl} format="currency" />}
-            />
-            <MetricRow
-              label="Booking %"
-              values={months.map((m) => getMetrics(m).bookingRate)}
-              format="percent"
-              calcCell={<CalcDisplay value={calcDerived.bookingRate} format="percent" />}
-            />
-            <TotalAppointmentsRow
-              months={months}
-              getMetrics={getMetrics}
-              expanded={appointmentsExpanded}
-              onToggle={() => setAppointmentsExpanded((e) => !e)}
-              metric="totalAppts"
-              onCellClick={handleCellClick}
-              calcCell={
-                <CalcNumberInput
-                  value={calc.appts}
-                  onChange={(v) => updateCalc("appts", v)}
-                />
-              }
-            />
-            {appointmentsExpanded && (
-              <>
-                <MetricRow
-                  label="Appt Requested"
-                  values={months.map((m) => getMetrics(m).requested)}
-                  subRow
-                  metric="requested"
-                  monthKeys={months.map((m) => m.monthKey)}
-                  onCellClick={handleCellClick}
-                  calcCell={<span className="text-sm text-slate-500">—</span>}
-                />
-                <MetricRow
-                  label="Appt Confirmed"
-                  values={months.map((m) => getMetrics(m).confirmed)}
-                  subRow
-                  metric="confirmed"
-                  monthKeys={months.map((m) => m.monthKey)}
-                  onCellClick={handleCellClick}
-                  calcCell={<span className="text-sm text-slate-500">—</span>}
-                />
-                <MetricRow
-                  label="Show"
-                  values={months.map((m) => getMetrics(m).showed)}
-                  subRow
-                  metric="showed"
-                  monthKeys={months.map((m) => m.monthKey)}
-                  onCellClick={handleCellClick}
-                  calcCell={
-                    <CalcNumberInput
-                      value={calc.showed}
-                      onChange={(v) => updateCalc("showed", v)}
-                    />
-                  }
-                />
-              </>
-            )}
-            <MetricRow
-              label="No Show"
-              values={months.map((m) => getMetrics(m).noShow)}
-              metric="noShow"
-              monthKeys={months.map((m) => m.monthKey)}
-              onCellClick={handleCellClick}
-              calcCell={
-                <CalcNumberInput
-                  value={calc.noShow}
-                  onChange={(v) => updateCalc("noShow", v)}
-                />
-              }
-            />
-            <MetricRow
-              label="Show %"
-              values={months.map((m) => getMetrics(m).showRate)}
-              format="percent"
-              calcCell={<CalcDisplay value={calcDerived.showRate} format="percent" />}
-            />
-            <MetricRow
-              label="Cost Per Show"
-              values={months.map((m) => {
-                const spend = adSpend[m.monthKey] ?? 0;
-                const showed = getMetrics(m).showed;
-                return showed > 0 && spend > 0 ? spend / showed : null;
-              })}
-              format="currency"
-              calcCell={<CalcDisplay value={calcDerived.cps} format="currency" />}
-            />
-            <MetricRow
-              label="Closed"
-              values={months.map((m) => getMetrics(m).closed)}
-              metric="closed"
-              monthKeys={months.map((m) => m.monthKey)}
-              onCellClick={handleCellClick}
-              calcCell={
-                <CalcNumberInput
-                  value={calc.closed}
-                  onChange={(v) => updateCalc("closed", v)}
-                />
-              }
-            />
-            <MetricRow
-              label="Cost Per Close"
-              values={months.map((m) => {
-                const spend = adSpend[m.monthKey] ?? 0;
-                const closed = getMetrics(m).closed;
-                return closed > 0 && spend > 0 ? spend / closed : null;
-              })}
-              format="currency"
-              calcCell={<CalcDisplay value={calcDerived.cpClose} format="currency" />}
-            />
-            <MetricRow
-              label="Expenses"
-              values={months.map(() => null)}
-              calcCell={
-                <CalcNumberInput
-                  value={calc.expenses}
-                  onChange={(v) => updateCalc("expenses", v)}
-                  step={0.01}
-                />
-              }
-            />
-            {/* ROI accordion — replaces standalone "Total Value Closed" row. */}
-            <tr className="border-t border-white/10">
-              <td className="sticky left-0 z-10 bg-slate-900/95 px-4 py-2">
-                <button
-                  type="button"
-                  onClick={() => setRoiExpanded((e) => !e)}
-                  className="flex items-center gap-2 text-left text-sm font-medium text-slate-200 hover:text-white"
-                >
-                  <span className="tabular-nums text-slate-400">{roiExpanded ? "▼" : "▶"}</span>
-                  ROI
-                </button>
-              </td>
-              {months.map((m) => (
-                <td
-                  key={m.monthKey}
-                  className="px-4 py-2 text-center text-sm tabular-nums text-slate-500"
-                >
-                  —
+                {months.map((m) => (
+                  <td key={m.monthKey} className="px-4 py-2 text-center">
+                    {adSpendFromFacebook ? (
+                      <span className="inline-flex w-20 items-center justify-center text-sm text-white">
+                        {adSpendLoading ? (
+                          <span
+                            className="inline-block h-4 w-4 border-2 border-slate-500 border-t-transparent rounded-full animate-spin"
+                            aria-hidden
+                          />
+                        ) : (adSpend[m.monthKey] ?? 0) > 0
+                          ? "$" + Number(adSpend[m.monthKey]).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 })
+                          : "—"}
+                      </span>
+                    ) : (
+                      <input
+                        type="number"
+                        min={0}
+                        step={0.01}
+                        value={adSpend[m.monthKey] ?? ""}
+                        onChange={(e) => setSpend(m.monthKey, parseFloat(e.target.value) || 0)}
+                        onBlur={(e) => setSpend(m.monthKey, parseFloat((e.target as HTMLInputElement).value) || 0)}
+                        placeholder="0"
+                        className="w-20 rounded border border-white/20 bg-white/5 px-2 py-1 text-center text-sm text-white placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none"
+                      />
+                    )}
+                  </td>
+                ))}
+              </tr>
+              <MetricRow
+                label="Leads"
+                values={months.map((m) => getMetrics(m).leads)}
+                metric="leads"
+                monthKeys={months.map((m) => m.monthKey)}
+                onCellClick={handleCellClick}
+              />
+              <MetricRow
+                label="Cost Per Lead"
+                values={months.map((m) => {
+                  const spend = adSpend[m.monthKey] ?? 0;
+                  const leads = getMetrics(m).leads;
+                  return leads > 0 && spend > 0 ? spend / leads : null;
+                })}
+                format="currency"
+              />
+              <MetricRow
+                label="Booking %"
+                values={months.map((m) => getMetrics(m).bookingRate)}
+                format="percent"
+              />
+              <TotalAppointmentsRow
+                months={months}
+                getMetrics={getMetrics}
+                expanded={appointmentsExpanded}
+                onToggle={() => setAppointmentsExpanded((e) => !e)}
+                metric="totalAppts"
+                onCellClick={handleCellClick}
+              />
+              {appointmentsExpanded && (
+                <>
+                  <MetricRow
+                    label="Appt Requested"
+                    values={months.map((m) => getMetrics(m).requested)}
+                    subRow
+                    metric="requested"
+                    monthKeys={months.map((m) => m.monthKey)}
+                    onCellClick={handleCellClick}
+                  />
+                  <MetricRow
+                    label="Appt Confirmed"
+                    values={months.map((m) => getMetrics(m).confirmed)}
+                    subRow
+                    metric="confirmed"
+                    monthKeys={months.map((m) => m.monthKey)}
+                    onCellClick={handleCellClick}
+                  />
+                  <MetricRow
+                    label="Show"
+                    values={months.map((m) => getMetrics(m).showed)}
+                    subRow
+                    metric="showed"
+                    monthKeys={months.map((m) => m.monthKey)}
+                    onCellClick={handleCellClick}
+                  />
+                </>
+              )}
+              <MetricRow
+                label="No Show"
+                values={months.map((m) => getMetrics(m).noShow)}
+                metric="noShow"
+                monthKeys={months.map((m) => m.monthKey)}
+                onCellClick={handleCellClick}
+              />
+              <MetricRow
+                label="Show %"
+                values={months.map((m) => getMetrics(m).showRate)}
+                format="percent"
+              />
+              <MetricRow
+                label="Cost Per Show"
+                values={months.map((m) => {
+                  const spend = adSpend[m.monthKey] ?? 0;
+                  const showed = getMetrics(m).showed;
+                  return showed > 0 && spend > 0 ? spend / showed : null;
+                })}
+                format="currency"
+              />
+              <MetricRow
+                label="Closed"
+                values={months.map((m) => getMetrics(m).closed)}
+                metric="closed"
+                monthKeys={months.map((m) => m.monthKey)}
+                onCellClick={handleCellClick}
+              />
+              <MetricRow
+                label="Cost Per Close"
+                values={months.map((m) => {
+                  const spend = adSpend[m.monthKey] ?? 0;
+                  const closed = getMetrics(m).closed;
+                  return closed > 0 && spend > 0 ? spend / closed : null;
+                })}
+                format="currency"
+              />
+              {/* ROI accordion — replaces standalone "Total Value Closed" row. */}
+              <tr className="border-t border-white/10">
+                <td className="sticky left-0 z-10 bg-slate-900/95 px-4 py-2">
+                  <button
+                    type="button"
+                    onClick={() => setRoiExpanded((e) => !e)}
+                    className="flex items-center gap-2 text-left text-sm font-medium text-slate-200 hover:text-white"
+                  >
+                    <span className="tabular-nums text-slate-400">{roiExpanded ? "▼" : "▶"}</span>
+                    ROI
+                  </button>
                 </td>
-              ))}
-              <td className="border-l-2 border-sky-400/30 bg-sky-500/5 px-4 py-2 text-center text-sm tabular-nums text-slate-500">
-                —
-              </td>
-            </tr>
-            {roiExpanded && (
-              <>
-                <MetricRow
-                  label="Total Value Closed"
-                  subRow
-                  values={months.map((m) => {
-                    const v = getMetrics(m).successValue;
-                    return v > 0 ? v : null;
-                  })}
-                  format="currency"
-                  calcCell={
-                    <CalcNumberInput
-                      value={calc.totalValueClosed}
-                      onChange={(v) => updateCalc("totalValueClosed", v)}
-                      step={0.01}
-                    />
-                  }
-                />
-                <MetricRow
-                  label="ROAS"
-                  subRow
-                  values={months.map((m) => {
-                    const spend = adSpend[m.monthKey] ?? 0;
-                    const closedValue = getMetrics(m).successValue;
-                    if (spend <= 0 || closedValue <= 0) return null;
-                    return closedValue / spend;
-                  })}
-                  format="roas"
-                  calcCell={<CalcDisplay value={calcDerived.roas} format="roas" />}
-                />
-                <MetricRow
-                  label="Total Investment"
-                  subRow
-                  values={months.map(() => null)}
-                  format="currency"
-                  calcCell={
-                    calcDerived.hasAny && calcDerived.totalInvestment > 0 ? (
-                      <CalcDisplay value={calcDerived.totalInvestment} format="currency" />
-                    ) : (
-                      <span className="text-sm text-slate-500">—</span>
-                    )
-                  }
-                />
-                <MetricRow
-                  label="Net Profit"
-                  subRow
-                  values={months.map(() => null)}
-                  format="currency"
-                  calcCell={
-                    calcDerived.hasAny && calcDerived.totalInvestment > 0 ? (
-                      <CalcDisplay value={calcDerived.netProfit} format="currency" />
-                    ) : (
-                      <span className="text-sm text-slate-500">—</span>
-                    )
-                  }
-                />
-                <MetricRow
-                  label="ROI %"
-                  subRow
-                  values={months.map(() => null)}
-                  format="percent"
-                  calcCell={<CalcDisplay value={calcDerived.roiPct} format="percent" />}
-                />
-              </>
-            )}
-          </tbody>
-        </table>
+                {months.map((m) => (
+                  <td
+                    key={m.monthKey}
+                    className="px-4 py-2 text-center text-sm tabular-nums text-slate-500"
+                  >
+                    —
+                  </td>
+                ))}
+              </tr>
+              {roiExpanded && (
+                <>
+                  <MetricRow
+                    label="Total Value Closed"
+                    subRow
+                    values={months.map((m) => {
+                      const v = getMetrics(m).successValue;
+                      return v > 0 ? v : null;
+                    })}
+                    format="currency"
+                  />
+                  <MetricRow
+                    label="ROAS"
+                    subRow
+                    values={months.map((m) => {
+                      const spend = adSpend[m.monthKey] ?? 0;
+                      const closedValue = getMetrics(m).successValue;
+                      if (spend <= 0 || closedValue <= 0) return null;
+                      return closedValue / spend;
+                    })}
+                    format="roas"
+                  />
+                </>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
+      <CalculatorPanel
+        calc={calc}
+        setCalc={setCalc}
+        derived={calcDerived}
+      />
 
       {drillDown && (
         <div
@@ -2433,7 +2525,6 @@ function TotalAppointmentsRow({
   onToggle,
   metric,
   onCellClick,
-  calcCell,
 }: {
   months: MonthlyData[];
   getMetrics?: (m: MonthlyData) => FunnelMetrics;
@@ -2441,7 +2532,6 @@ function TotalAppointmentsRow({
   onToggle?: () => void;
   metric?: string;
   onCellClick?: (monthKey: string, metric: string, label: string) => void;
-  calcCell?: React.ReactNode;
 }) {
   const values = months.map((m) => {
     const metrics = getMetrics ? getMetrics(m) : m.metrics;
@@ -2474,11 +2564,6 @@ function TotalAppointmentsRow({
           )}
         </td>
       ))}
-      {calcCell !== undefined && (
-        <td className="border-l-2 border-sky-400/30 bg-sky-500/5 px-4 py-2 text-center tabular-nums">
-          {calcCell}
-        </td>
-      )}
     </tr>
   );
 }
@@ -2507,7 +2592,6 @@ function MetricRow({
   onCellClick,
   trClassName,
   labelClassName,
-  calcCell,
 }: {
   label: string;
   values: (number | null)[];
@@ -2518,7 +2602,6 @@ function MetricRow({
   onCellClick?: (monthKey: string, metric: string, label: string) => void;
   trClassName?: string;
   labelClassName?: string;
-  calcCell?: React.ReactNode;
 }) {
   const fmt = (v: number | null) => {
     if (v == null) return "—";
@@ -2554,13 +2637,6 @@ function MetricRow({
           )}
         </td>
       ))}
-      {calcCell !== undefined && (
-        <td
-          className={`border-l-2 border-sky-400/30 px-4 py-2 text-center tabular-nums ${subRow ? "bg-sky-500/10" : "bg-sky-500/5"}`}
-        >
-          {calcCell}
-        </td>
-      )}
     </tr>
   );
 }
