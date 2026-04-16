@@ -258,7 +258,15 @@ export function getBreakdownGroupsForMetric(
   } else {
     keys = getStageKeysForMetric(metric, stageKeys, customMappings, pipelineStages);
   }
-  return keys.map((key) => ({ label: key, stageKeys: [key] }));
+  return keys.map((key) => ({ label: labelForStageKey(key), stageKeys: [key] }));
+}
+
+/** Human-readable label for a stage bucket key. STATUS_WON_KEY is an internal
+ * sentinel for "opportunity.status === won" (not a real GHL stage), so surface
+ * it as "Won (by status)" in drill-downs instead of leaking "__closed_by_status". */
+function labelForStageKey(key: string): string {
+  if (key === STATUS_WON_KEY) return "Won (by status)";
+  return key;
 }
 
 export function getUnmappedStages(
