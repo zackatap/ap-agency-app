@@ -11,6 +11,14 @@ import {
   applyRollup,
   applyRollupToAttributionRow,
 } from "@/lib/funnel-metrics";
+import { ClientBenchmark } from "@/components/agency/client-benchmark";
+import type { ClientRollupView } from "@/components/agency/types";
+
+interface AgencyBenchmarkResponse {
+  view: ClientRollupView | null;
+  locationId: string;
+  present: boolean;
+}
 
 interface FunnelMetrics {
   leads: number;
@@ -104,7 +112,14 @@ export default function ConversionsDashboard() {
   const [dateRangePreset, setDateRangePreset] = useState<DateRangePreset>("last_30");
   const [customDateFrom, setCustomDateFrom] = useState("");
   const [customDateTo, setCustomDateTo] = useState("");
-  const [activeTab, setActiveTab] = useState<"funnel" | "monthly" | "attribution">("funnel");
+  const [activeTab, setActiveTab] = useState<
+    "funnel" | "monthly" | "attribution" | "benchmark"
+  >("funnel");
+  // Benchmark tab appears only when the agency session cookie is present —
+  // probed once on mount via the same /api/agency endpoint the middleware guards.
+  const [benchmarkAvailable, setBenchmarkAvailable] = useState(false);
+  const [benchmarkView, setBenchmarkView] = useState<AgencyBenchmarkResponse | null>(null);
+  const [benchmarkLoading, setBenchmarkLoading] = useState(false);
   const [monthlyData, setMonthlyData] = useState<MonthlyData[] | null>(null);
   const [monthlyLoading, setMonthlyLoading] = useState(false);
   const [rollupAssumptions, setRollupAssumptions] = useState(true); // "On Totals" default
@@ -305,6 +320,34 @@ export default function ConversionsDashboard() {
         }
       })
       .catch(() => {});
+  }, [locationId]);
+
+  useEffect(() => {
+    if (!locationId) return;
+    let cancelled = false;
+    setBenchmarkLoading(true);
+    fetch(`/api/agency/benchmark/${locationId}`, { cache: "no-store" })
+      .then(async (res) => {
+        if (!res.ok) return null;
+        return (await res.json()) as AgencyBenchmarkResponse;
+      })
+      .then((body) => {
+        if (cancelled) return;
+        if (body && body.view && body.present) {
+          setBenchmarkAvailable(true);
+          setBenchmarkView(body);
+        } else {
+          setBenchmarkAvailable(false);
+          setBenchmarkView(null);
+        }
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled) setBenchmarkLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [locationId]);
 
   // Fetch Ad Account ID & Campaign options from Google Sheet
@@ -981,6 +1024,19 @@ export default function ConversionsDashboard() {
             >
               Month to Month
             </button>
+            {benchmarkAvailable && (
+              <button
+                onClick={() => setActiveTab("benchmark")}
+                className={`rounded-lg px-4 py-2 text-sm font-medium transition-colors ${
+                  activeTab === "benchmark"
+                    ? "bg-indigo-600 text-white"
+                    : "bg-white/5 text-slate-400 hover:bg-white/10 hover:text-white"
+                }`}
+                title="How this location compares to other active clients"
+              >
+                Benchmark
+              </button>
+            )}
             </div>
             {(activeTab === "funnel" ||
               activeTab === "monthly" ||
@@ -1094,7 +1150,26 @@ export default function ConversionsDashboard() {
         )}
 
         {/* Content */}
-        {activeTab === "attribution" ? (
+        {activeTab === "benchmark" ? (
+          benchmarkLoading ? (
+            <div className="flex items-center justify-center rounded-2xl border border-white/10 bg-white/5 px-12 py-24">
+              <div className="flex flex-col items-center gap-4">
+                <div className="h-10 w-10 animate-spin rounded-full border-2 border-indigo-500 border-t-transparent" />
+                <p className="text-slate-400">Loading benchmark…</p>
+              </div>
+            </div>
+          ) : benchmarkView?.view ? (
+            <ClientBenchmark
+              view={benchmarkView.view}
+              locationId={locationId ?? ""}
+            />
+          ) : (
+            <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-6 text-sm text-amber-200">
+              No benchmark data for this location yet. Run a rollup refresh from
+              the agency dashboard first.
+            </div>
+          )
+        ) : activeTab === "attribution" ? (
           attributionLoading ? (
             <div className="flex items-center justify-center rounded-2xl border border-white/10 bg-white/5 px-12 py-24">
               <div className="flex flex-col items-center gap-4">
@@ -1993,7 +2068,7 @@ interface CalcDerived {
   revenue: number;
   totalInvestment: number;
   netProfit: number;
-  roiPct: number | null;
+  roiRatio: number | null;
   roas: number | null;
   hasAny: boolean;
 }
@@ -2113,6 +2188,7 @@ function CalculatorPanel({
               <CalcDerivedRow label="Show %" value={derived.showRate} format="percent" />
               <CalcDerivedRow label="Cost Per Show" value={derived.cps} format="currency" />
               <CalcDerivedRow label="Cost Per Close" value={derived.cpClose} format="currency" />
+              <CalcDerivedRow label="ROAS" value={derived.roas} format="roas" />
             </div>
           </section>
 
@@ -2127,8 +2203,7 @@ function CalculatorPanel({
                 format="currency"
               />
               <CalcDerivedRow label="Net Profit" value={netProfit} format="currency" />
-              <CalcDerivedRow label="ROI %" value={derived.roiPct} format="percent" emphasize />
-              <CalcDerivedRow label="ROAS" value={derived.roas} format="roas" />
+              <CalcDerivedRow label="ROI" value={derived.roiRatio} format="roas" emphasize />
             </div>
           </section>
         </div>
@@ -2189,7 +2264,10 @@ function MonthToMonthTable({
     const expensesV = expenses ?? 0;
     const totalInvestment = adSpendV + expensesV;
     const netProfit = revenue - totalInvestment;
-    const roiPct = totalInvestment > 0 ? r1((netProfit / totalInvestment) * 100) : null;
+    // ROI as a ratio (net profit ÷ total investment). Same metric as the old
+    // roiPct, just rendered like ROAS (e.g., "2:1"). Zero / negative investment
+    // collapses to null so we can show an em-dash.
+    const roiRatio = totalInvestment > 0 ? netProfit / totalInvestment : null;
     const roas = adSpendV > 0 && revenue > 0 ? revenue / adSpendV : null;
     // Light signal flag: at least one input touched. Used to decide whether to
     // show derived/computed outputs vs. em-dash placeholder.
@@ -2211,7 +2289,7 @@ function MonthToMonthTable({
       revenue,
       totalInvestment,
       netProfit,
-      roiPct,
+      roiRatio,
       roas,
       hasAny,
     };

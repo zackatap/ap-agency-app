@@ -17,12 +17,20 @@ export default function Home() {
             /v2/location/[locationId]/dashboard
           </code>
         </p>
-        <Link
-          href="/v2/location/Yl8c8Rmoh5TsTfVN5q5F/dashboard"
-          className="mt-10 inline-block rounded-xl bg-indigo-600 px-8 py-3 font-medium text-white transition-colors hover:bg-indigo-500"
-        >
-          Try Demo Dashboard →
-        </Link>
+        <div className="mt-10 flex flex-wrap items-center justify-center gap-3">
+          <Link
+            href="/v2/location/Yl8c8Rmoh5TsTfVN5q5F/dashboard"
+            className="inline-block rounded-xl bg-indigo-600 px-6 py-3 font-medium text-white transition-colors hover:bg-indigo-500"
+          >
+            Try Demo Dashboard →
+          </Link>
+          <Link
+            href="/agency/dashboard"
+            className="inline-block rounded-xl border border-white/20 bg-white/5 px-6 py-3 font-medium text-white transition-colors hover:bg-white/10"
+          >
+            Agency Rollup →
+          </Link>
+        </div>
       </main>
     </div>
   );
