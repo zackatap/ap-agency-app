@@ -493,8 +493,8 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
                           <img
                             src="/preview.png"
                             alt="Share button and copy URL for your funnel preview"
-                            width={2448}
-                            height={1664}
+                            width={2440}
+                            height={1358}
                             className="h-auto w-full max-w-xs transition group-hover:opacity-90 sm:max-w-sm"
                             loading="lazy"
                           />
