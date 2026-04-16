@@ -1,77 +1,89 @@
 /**
- * GHL OAuth 2.0 Callback - Single Location Flow
+ * GHL OAuth 2.0 Callback.
  *
- * Exchange authorization code for a Location-level access token.
- * Uses user_type=Location only (sub-account token) - no agency/Company handling.
+ * We don't force user_type at exchange time — GHL issues the code for a
+ * specific installer type (Agency vs Sub-account) based on what the user
+ * picked at /oauth/chooselocation. We try Company first (matches the common
+ * "agency bulk install" case) and fall back to Location for legacy sub-account
+ * installs.
  *
- * Docs: https://marketplace.gohighlevel.com/docs/ghl/oauth/get-access-token
+ * Per-scenario storage:
+ *   userType=Company, isBulkInstallation=true  → agency token (ghl_agency_tokens)
+ *   userType=Company, isBulkInstallation=false → agency token AND best-effort
+ *                                                 exchange for state.locationId
+ *   userType=Location                          → location token (ghl_oauth_tokens)
+ *
+ * Docs:
+ *  - https://marketplace.gohighlevel.com/docs/ghl/oauth/get-access-token
+ *  - https://marketplace.gohighlevel.com/docs/oauth/AppDistribution
  */
 
 import { NextResponse } from "next/server";
-import { setToken } from "@/lib/oauth-tokens";
+import {
+  setAgencyToken,
+  setToken,
+  getAgencyToken,
+  type StoredAgencyToken,
+  type StoredToken,
+} from "@/lib/oauth-tokens";
 
 const GHL_BASE = "https://services.leadconnectorhq.com";
+const GHL_TOKEN_URL = `${GHL_BASE}/oauth/token`;
+const GHL_LOCATION_TOKEN_URL = `${GHL_BASE}/oauth/locationToken`;
+const API_VERSION = "2021-07-28";
 
-function decodeState(state: string | null): string {
-  if (!state) return "";
-  try {
-    const decoded = Buffer.from(state, "base64url").toString("utf-8");
-    const parsed = JSON.parse(decoded) as { locationId?: string };
-    return String(parsed?.locationId ?? "").trim();
-  } catch {
-    try {
-      const decoded = Buffer.from(state.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf-8");
-      const parsed = JSON.parse(decoded) as { locationId?: string };
-      return String(parsed?.locationId ?? "").trim();
-    } catch {
-      return "";
-    }
-  }
+interface TokenResponse {
+  access_token?: string;
+  refresh_token?: string;
+  locationId?: string;
+  companyId?: string;
+  expires_in?: number;
+  userType?: "Location" | "Company" | string;
+  isBulkInstallation?: boolean;
+  scope?: string;
 }
 
-export async function GET(req: Request) {
-  const { searchParams } = new URL(req.url);
-  const code = searchParams.get("code");
-  const state = searchParams.get("state");
-  const error = searchParams.get("error");
+interface DecodedState {
+  locationId?: string;
+  returnTo?: string;
+}
 
-  const base = new URL(req.url).origin;
-  const errorUrl = (msg: string) => new URL(`/v2/error?msg=${encodeURIComponent(msg)}`, base);
+function decodeState(state: string | null): DecodedState {
+  if (!state) return {};
+  const tryParse = (encoded: string, variant: "base64url" | "base64") => {
+    try {
+      const decoded = Buffer.from(encoded, variant).toString("utf-8");
+      return JSON.parse(decoded) as DecodedState;
+    } catch {
+      return null;
+    }
+  };
+  return (
+    tryParse(state, "base64url") ??
+    tryParse(state.replace(/-/g, "+").replace(/_/g, "/"), "base64") ??
+    {}
+  );
+}
 
-  if (error) {
-    return NextResponse.redirect(errorUrl(error));
-  }
-
-  if (!code) {
-    return NextResponse.redirect(errorUrl("Missing authorization code"));
-  }
-
-  const locationId = decodeState(state);
-  if (!locationId) {
-    return NextResponse.redirect(
-      errorUrl("Invalid state — open the app from a GHL sub-account custom menu and try Connect again.")
-    );
-  }
-
+async function exchangeCode(
+  code: string,
+  userType: "Company" | "Location"
+): Promise<TokenResponse | null> {
   const clientId = process.env.GHL_CLIENT_ID?.trim();
   const clientSecret = process.env.GHL_CLIENT_SECRET?.trim();
   const redirectUri = process.env.GHL_REDIRECT_URI?.trim();
+  if (!clientId || !clientSecret || !redirectUri) return null;
 
-  if (!clientId || !clientSecret || !redirectUri) {
-    return NextResponse.redirect(errorUrl("OAuth not configured"));
-  }
-
-  // Single path: user_type=Location only (sub-account token)
   const body = new URLSearchParams({
     client_id: clientId,
     client_secret: clientSecret,
     grant_type: "authorization_code",
     code,
-    user_type: "Location",
+    user_type: userType,
     redirect_uri: redirectUri,
   });
 
-  const tokenRes = await fetch(`${GHL_BASE}/oauth/token`, {
+  const res = await fetch(GHL_TOKEN_URL, {
     method: "POST",
     headers: {
       Accept: "application/json",
@@ -80,70 +92,156 @@ export async function GET(req: Request) {
     body: body.toString(),
   });
 
-  if (!tokenRes.ok) {
-    const errText = await tokenRes.text();
-    return NextResponse.redirect(
-      errorUrl(`Token exchange failed: ${errText.slice(0, 120)}`)
+  if (!res.ok) {
+    const text = await res.text().catch(() => "");
+    console.info(
+      "[oauth-callback] exchange miss",
+      JSON.stringify({ userType, status: res.status, body: text.slice(0, 200) })
     );
+    return null;
+  }
+  return (await res.json()) as TokenResponse;
+}
+
+async function mintLocationFromAgency(
+  agency: StoredAgencyToken,
+  locationId: string
+): Promise<StoredToken | null> {
+  const body = new URLSearchParams({
+    companyId: agency.companyId,
+    locationId,
+  });
+  const res = await fetch(GHL_LOCATION_TOKEN_URL, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/x-www-form-urlencoded",
+      Authorization: `Bearer ${agency.access_token}`,
+      Version: API_VERSION,
+    },
+    body: body.toString(),
+  });
+  if (!res.ok) return null;
+  const data = (await res.json()) as TokenResponse;
+  if (!data.access_token) return null;
+  const expiresIn = data.expires_in ?? 86400;
+  return {
+    access_token: data.access_token,
+    refresh_token: data.refresh_token ?? "",
+    locationId: data.locationId ?? locationId,
+    companyId: data.companyId ?? agency.companyId,
+    expires_at: Math.floor(Date.now() / 1000) + expiresIn,
+  };
+}
+
+export async function GET(req: Request) {
+  const { searchParams } = new URL(req.url);
+  const code = searchParams.get("code");
+  const error = searchParams.get("error");
+  const state = decodeState(searchParams.get("state"));
+
+  const base = new URL(req.url).origin;
+  const errorUrl = (msg: string) =>
+    new URL(`/v2/error?msg=${encodeURIComponent(msg)}`, base);
+
+  if (error) return NextResponse.redirect(errorUrl(error));
+  if (!code) return NextResponse.redirect(errorUrl("Missing authorization code"));
+
+  // Try Company first (covers both "Agency & Sub-account" agency installs and
+  // "Agency Only" flows, with or without bulk). Fall back to Location for
+  // direct sub-account installs.
+  let token = await exchangeCode(code, "Company");
+  let triedLocationFallback = false;
+  if (!token) {
+    triedLocationFallback = true;
+    token = await exchangeCode(code, "Location");
   }
 
-  const tokenData = (await tokenRes.json()) as {
-    access_token?: string;
-    refresh_token?: string;
-    locationId?: string;
-    companyId?: string;
-    expires_in?: number;
-    userType?: string;
-    scope?: string;
-  };
-
-  const accessToken = tokenData.access_token;
-  const tokenLocationId = String(tokenData.locationId ?? "").trim();
-  if (tokenLocationId && tokenLocationId !== locationId) {
-    console.warn(
-      "[oauth-callback] Token location mismatch",
-      JSON.stringify({
-        stateLocationId: locationId,
-        tokenLocationId,
-        userType: tokenData.userType ?? null,
-        companyId: tokenData.companyId ?? null,
-      })
-    );
+  if (!token || !token.access_token) {
     return NextResponse.redirect(
       errorUrl(
-        "OAuth returned a token for a different location. Please reconnect from the exact location sidebar menu."
+        "Token exchange failed. Please try connecting again from the HighLevel custom menu."
       )
     );
   }
 
-  // Bind token storage to the location passed in OAuth state (the location where
-  // the user clicked Connect) so subsequent API calls use the same key.
-  const resolvedLocationId = locationId;
+  const userType = token.userType ?? (triedLocationFallback ? "Location" : "Company");
+  const companyId = String(token.companyId ?? "").trim();
+  const tokenLocationId = String(token.locationId ?? "").trim();
+  const expiresIn = token.expires_in ?? 86400;
+  const expiresAt = Math.floor(Date.now() / 1000) + expiresIn;
 
-  if (!accessToken) {
-    return NextResponse.redirect(errorUrl("Token response missing access_token"));
-  }
-
-  const expiresIn = tokenData.expires_in ?? 86400;
   console.info(
-    "[oauth-callback] storing token",
+    "[oauth-callback] exchange ok",
     JSON.stringify({
-      storageLocationId: resolvedLocationId,
+      userType,
+      isBulkInstallation: token.isBulkInstallation ?? null,
+      companyId: companyId || null,
       tokenLocationId: tokenLocationId || null,
-      userType: tokenData.userType ?? null,
-      companyId: tokenData.companyId ?? null,
-      scope: tokenData.scope ?? null,
+      stateLocationId: state.locationId ?? null,
+      scope: token.scope ?? null,
     })
   );
-  await setToken(resolvedLocationId, {
-    access_token: accessToken,
-    refresh_token: tokenData.refresh_token ?? "",
-    locationId: tokenLocationId || resolvedLocationId,
-    companyId: tokenData.companyId,
-    expires_at: Math.floor(Date.now() / 1000) + expiresIn,
-  });
+
+  // ---------- Company (agency) token path ----------
+  if (userType === "Company") {
+    if (!companyId) {
+      return NextResponse.redirect(
+        errorUrl("Agency token missing companyId — cannot store agency access.")
+      );
+    }
+    await setAgencyToken({
+      access_token: token.access_token,
+      refresh_token: token.refresh_token ?? "",
+      companyId,
+      isBulkInstallation: Boolean(token.isBulkInstallation),
+      expires_at: expiresAt,
+    });
+
+    // If the user kicked off OAuth from a specific location dashboard, mint
+    // that location's token right now so they land on a ready page. Other
+    // locations will lazy-mint on first open.
+    if (state.locationId) {
+      const agency = await getAgencyToken(companyId);
+      if (agency) {
+        const minted = await mintLocationFromAgency(agency, state.locationId);
+        if (minted) await setToken(state.locationId, minted);
+      }
+    }
+
+    const destination = state.locationId
+      ? `/v2/location/${state.locationId}/dashboard?connected=1&installedAs=agency`
+      : (state.returnTo || `/?connected=1&installedAs=agency`);
+    return NextResponse.redirect(new URL(destination, base));
+  }
+
+  // ---------- Location token path ----------
+  if (userType === "Location") {
+    const resolvedLocationId = tokenLocationId || state.locationId || "";
+    if (!resolvedLocationId) {
+      return NextResponse.redirect(
+        errorUrl(
+          "Sub-account token response missing locationId — reconnect from the location custom menu."
+        )
+      );
+    }
+    await setToken(resolvedLocationId, {
+      access_token: token.access_token,
+      refresh_token: token.refresh_token ?? "",
+      locationId: resolvedLocationId,
+      companyId: companyId || undefined,
+      expires_at: expiresAt,
+    });
+
+    return NextResponse.redirect(
+      new URL(
+        `/v2/location/${resolvedLocationId}/dashboard?connected=1&installedAs=location`,
+        base
+      )
+    );
+  }
 
   return NextResponse.redirect(
-    `${base}/v2/location/${resolvedLocationId}/dashboard?connected=1`
+    errorUrl(`Unsupported userType returned by GHL: ${userType}`)
   );
 }

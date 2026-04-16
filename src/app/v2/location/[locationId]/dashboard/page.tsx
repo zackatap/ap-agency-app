@@ -1426,13 +1426,15 @@ export default function ConversionsDashboard() {
         {error === "NEEDS_AUTH" && (
           <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 px-8 py-10">
             <p className="text-lg font-medium text-amber-200">
-              Connect to GoHighLevel
+              Install AP Internal for your agency
             </p>
             <p className="mt-2 text-amber-200/90">
-              Authorize this app to read pipeline and opportunity data for this location.
+              Install this app once at the agency level to authorize every sub-account automatically.
+              Sub-account users can also install it just for their own location.
             </p>
             <p className="mt-1 text-xs text-amber-200/70">
-              If embedded in GHL, Connect opens the auth flow in the main window.
+              Opens the HighLevel install screen in the top window. Pick your
+              agency (recommended) or this specific location.
             </p>
             <a
               href={`/api/auth/ghl/authorize?locationId=${encodeURIComponent(locationId)}`}
@@ -1440,7 +1442,7 @@ export default function ConversionsDashboard() {
               rel="noopener noreferrer"
               className="mt-6 inline-block rounded-xl bg-indigo-600 px-6 py-3 font-medium text-white transition-colors hover:bg-indigo-500"
             >
-              Connect with GoHighLevel →
+              Install with HighLevel →
             </a>
           </div>
         )}

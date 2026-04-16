@@ -1,20 +1,31 @@
 /**
- * GHL OAuth 2.0 - Single Location Authorization
+ * GHL OAuth 2.0 - Authorization entry point.
  *
- * This app is designed for single-location (sub-account) use:
- * - Embed via GHL Custom Menu with URL: /v2/location/{{location.id}}/dashboard
- * - User opens app from a specific location → we have locationId
- * - Connect flow redirects here with locationId, then to GHL chooselocation
+ * Supports both installer types returned by the GHL marketplace:
+ *  - Agency user (bulk install) → user_type=Company, isBulkInstallation=true
+ *    Exchanged token authorizes /oauth/locationToken for every installed sub-account.
+ *  - Sub-account user → user_type=Location (legacy per-location flow).
  *
- * GHL Docs: https://marketplace.gohighlevel.com/docs/ghl/oauth/o-auth-2-0
- * Target User Sub-Account: https://marketplace.gohighlevel.com/docs/Authorization/TargetUserSubAccount
+ * We send the user to the white-label chooselocation URL
+ * (marketplace.leadconnectorhq.com) so WL-domain session cookies are reused and
+ * the user isn't prompted to log in again. Using marketplace.gohighlevel.com on
+ * a white-label agency causes the "Please login to HighLevel to continue" loop.
+ *
+ * Docs:
+ *  - https://marketplace.gohighlevel.com/docs/Authorization/OAuth2.0
+ *  - https://marketplace.gohighlevel.com/docs/oauth/AppDistribution
  */
 
 import { NextResponse } from "next/server";
 
-const GHL_CHOOSE_LOCATION = "https://marketplace.gohighlevel.com/oauth/chooselocation";
+// Default to the white-label host (works for WL + non-WL agencies).
+// Override via GHL_OAUTH_BASE if the app is listed as a non-WL public app.
+const DEFAULT_CHOOSE_LOCATION =
+  "https://marketplace.leadconnectorhq.com/oauth/chooselocation";
 
-// Single-location OAuth only - no agency/locations API needed
+// Scopes requested by the consent screen. Keep this minimal — what we actually
+// use for dashboards, funnels, workflows, opportunities, plus the agency OAuth
+// exchange scopes needed to trade the Company token for Location tokens.
 const SCOPES = [
   "opportunities.readonly",
   "contacts.readonly",
@@ -26,14 +37,12 @@ const SCOPES = [
 
 export async function GET(req: Request) {
   const { searchParams } = new URL(req.url);
+  // locationId is optional now. When present (Connect clicked from a location
+  // dashboard) we use it to redirect back to that dashboard after install.
+  // When absent (agency installing standalone), we redirect to a generic post-
+  // install page.
   const locationId = searchParams.get("locationId")?.trim() ?? "";
-
-  if (!locationId) {
-    return NextResponse.json(
-      { error: "locationId is required. Open the app from a GHL sub-account custom menu." },
-      { status: 400 }
-    );
-  }
+  const returnTo = searchParams.get("returnTo")?.trim() ?? "";
 
   const clientId = process.env.GHL_CLIENT_ID?.trim();
   const redirectUri = process.env.GHL_REDIRECT_URI?.trim();
@@ -45,8 +54,10 @@ export async function GET(req: Request) {
     );
   }
 
-  // State: base64url-encoded JSON so callback can recover locationId
-  const state = Buffer.from(JSON.stringify({ locationId })).toString("base64url");
+  // State carries routing info for the callback. Base64url-encoded JSON.
+  const state = Buffer.from(
+    JSON.stringify({ locationId, returnTo })
+  ).toString("base64url");
 
   const params = new URLSearchParams({
     client_id: clientId,
@@ -54,10 +65,8 @@ export async function GET(req: Request) {
     response_type: "code",
     scope: SCOPES,
     state,
-    // Hint to pre-select this location (not documented by GHL; may be ignored)
-    locationId,
   });
 
-  const authUrl = `${process.env.GHL_OAUTH_BASE ?? GHL_CHOOSE_LOCATION}?${params.toString()}`;
+  const authUrl = `${process.env.GHL_OAUTH_BASE ?? DEFAULT_CHOOSE_LOCATION}?${params.toString()}`;
   return NextResponse.redirect(authUrl);
 }
