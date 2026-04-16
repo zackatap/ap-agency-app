@@ -1870,6 +1870,84 @@ function formatCurrency(n: number): string {
   return Math.round(n).toLocaleString();
 }
 
+/** Right-hand calculator scratchpad inputs. All optional — null means "not entered". */
+interface CalcInputs {
+  adSpend: number | null;
+  leads: number | null;
+  appts: number | null;
+  showed: number | null;
+  noShow: number | null;
+  closed: number | null;
+  totalValueClosed: number | null;
+  expenses: number | null;
+}
+
+const DEFAULT_CALC_INPUTS: CalcInputs = {
+  adSpend: null,
+  leads: null,
+  appts: null,
+  showed: null,
+  noShow: null,
+  closed: null,
+  totalValueClosed: null,
+  expenses: null,
+};
+
+function CalcNumberInput({
+  value,
+  onChange,
+  placeholder = "0",
+  step,
+  width = "w-20",
+}: {
+  value: number | null;
+  onChange: (v: number | null) => void;
+  placeholder?: string;
+  step?: number;
+  width?: string;
+}) {
+  return (
+    <input
+      type="number"
+      min={0}
+      step={step}
+      value={value ?? ""}
+      onChange={(e) => {
+        const raw = (e.target as HTMLInputElement).value;
+        if (raw === "") return onChange(null);
+        const n = Number(raw);
+        onChange(Number.isFinite(n) && n >= 0 ? n : null);
+      }}
+      placeholder={placeholder}
+      className={`${width} rounded border border-sky-400/40 bg-sky-500/5 px-2 py-1 text-center text-sm text-white placeholder:text-slate-500 focus:border-sky-400 focus:outline-none`}
+    />
+  );
+}
+
+/** Display a computed number in the calculator column (em-dash when not derivable). */
+function CalcDisplay({
+  value,
+  format = "number",
+}: {
+  value: number | null;
+  format?: "number" | "percent" | "currency" | "roas";
+}) {
+  if (value == null || !Number.isFinite(value)) {
+    return <span className="text-sm text-slate-500">—</span>;
+  }
+  let text: string;
+  if (format === "currency") {
+    text = `$${value.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  } else if (format === "percent") {
+    text = `${value}%`;
+  } else if (format === "roas") {
+    text = formatRoasRatio(value);
+  } else {
+    text = String(value);
+  }
+  return <span className="text-sm tabular-nums text-white">{text}</span>;
+}
+
 function MonthToMonthTable({
   months,
   locationId,
@@ -1904,7 +1982,53 @@ function MonthToMonthTable({
     rollupAssumptions ? applyRollup(m.metrics) : m.metrics;
 
   const [appointmentsExpanded, setAppointmentsExpanded] = useState(false);
-  const [totalValueClosedExpanded, setTotalValueClosedExpanded] = useState(false);
+  const [roiExpanded, setRoiExpanded] = useState(false);
+  const [calc, setCalc] = useState<CalcInputs>(DEFAULT_CALC_INPUTS);
+  const updateCalc = <K extends keyof CalcInputs>(key: K, value: number | null) =>
+    setCalc((prev) => ({ ...prev, [key]: value }));
+
+  const calcDerived = useMemo(() => {
+    const { adSpend, leads, appts, showed, noShow, closed, totalValueClosed, expenses } = calc;
+    const r1 = (n: number) => Math.round(n * 10) / 10;
+    const cpl = adSpend != null && leads != null && leads > 0 ? adSpend / leads : null;
+    const bookingRate =
+      leads != null && leads > 0 && appts != null ? r1((appts / leads) * 100) : null;
+    const showRate =
+      appts != null && appts > 0 && showed != null ? r1((showed / appts) * 100) : null;
+    const cps = adSpend != null && showed != null && showed > 0 ? adSpend / showed : null;
+    const cpClose = adSpend != null && closed != null && closed > 0 ? adSpend / closed : null;
+    const revenue = totalValueClosed ?? 0;
+    const adSpendV = adSpend ?? 0;
+    const expensesV = expenses ?? 0;
+    const totalInvestment = adSpendV + expensesV;
+    const netProfit = revenue - totalInvestment;
+    const roiPct = totalInvestment > 0 ? r1((netProfit / totalInvestment) * 100) : null;
+    const roas = adSpendV > 0 && revenue > 0 ? revenue / adSpendV : null;
+    // Light signal flag: at least one input touched. Used to decide whether to
+    // show derived/computed outputs vs. em-dash placeholder.
+    const hasAny =
+      adSpend != null ||
+      leads != null ||
+      appts != null ||
+      showed != null ||
+      noShow != null ||
+      closed != null ||
+      totalValueClosed != null ||
+      expenses != null;
+    return {
+      cpl,
+      bookingRate,
+      showRate,
+      cps,
+      cpClose,
+      revenue,
+      totalInvestment,
+      netProfit,
+      roiPct,
+      roas,
+      hasAny,
+    };
+  }, [calc]);
   const [drillDown, setDrillDown] = useState<{ label: string; monthKey: string; metric: string } | null>(null);
   const [drillDownNames, setDrillDownNames] = useState<string[]>([]);
   const [drillDownNamesByStage, setDrillDownNamesByStage] = useState<Record<string, string[]> | null>(null);
@@ -1946,7 +2070,7 @@ function MonthToMonthTable({
         </p>
       </div>
       <div className="overflow-x-auto pb-5">
-        <table className="w-full min-w-[600px]">
+        <table className="w-full min-w-[720px]">
           <thead>
             <tr className="border-b border-white/10">
               <th className="sticky left-0 z-10 min-w-[180px] bg-slate-900/95 px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-slate-400">
@@ -1960,6 +2084,9 @@ function MonthToMonthTable({
                   {monthLabel(m.monthKey)}
                 </th>
               ))}
+              <th className="min-w-[110px] border-l-2 border-sky-400/30 bg-sky-500/10 px-4 py-3 text-center text-xs font-semibold uppercase tracking-wider text-sky-300">
+                Calculator
+              </th>
             </tr>
           </thead>
           <tbody className="divide-y divide-white/5">
@@ -1994,6 +2121,13 @@ function MonthToMonthTable({
                   )}
                 </td>
               ))}
+              <td className="border-l-2 border-sky-400/30 bg-sky-500/5 px-4 py-2 text-center">
+                <CalcNumberInput
+                  value={calc.adSpend}
+                  onChange={(v) => updateCalc("adSpend", v)}
+                  step={0.01}
+                />
+              </td>
             </tr>
             <MetricRow
               label="Leads"
@@ -2001,6 +2135,12 @@ function MonthToMonthTable({
               metric="leads"
               monthKeys={months.map((m) => m.monthKey)}
               onCellClick={handleCellClick}
+              calcCell={
+                <CalcNumberInput
+                  value={calc.leads}
+                  onChange={(v) => updateCalc("leads", v)}
+                />
+              }
             />
             <MetricRow
               label="Cost Per Lead"
@@ -2010,11 +2150,13 @@ function MonthToMonthTable({
                 return leads > 0 && spend > 0 ? spend / leads : null;
               })}
               format="currency"
+              calcCell={<CalcDisplay value={calcDerived.cpl} format="currency" />}
             />
             <MetricRow
               label="Booking %"
               values={months.map((m) => getMetrics(m).bookingRate)}
               format="percent"
+              calcCell={<CalcDisplay value={calcDerived.bookingRate} format="percent" />}
             />
             <TotalAppointmentsRow
               months={months}
@@ -2023,6 +2165,12 @@ function MonthToMonthTable({
               onToggle={() => setAppointmentsExpanded((e) => !e)}
               metric="totalAppts"
               onCellClick={handleCellClick}
+              calcCell={
+                <CalcNumberInput
+                  value={calc.appts}
+                  onChange={(v) => updateCalc("appts", v)}
+                />
+              }
             />
             {appointmentsExpanded && (
               <>
@@ -2033,6 +2181,7 @@ function MonthToMonthTable({
                   metric="requested"
                   monthKeys={months.map((m) => m.monthKey)}
                   onCellClick={handleCellClick}
+                  calcCell={<span className="text-sm text-slate-500">—</span>}
                 />
                 <MetricRow
                   label="Appt Confirmed"
@@ -2041,6 +2190,7 @@ function MonthToMonthTable({
                   metric="confirmed"
                   monthKeys={months.map((m) => m.monthKey)}
                   onCellClick={handleCellClick}
+                  calcCell={<span className="text-sm text-slate-500">—</span>}
                 />
                 <MetricRow
                   label="Show"
@@ -2049,6 +2199,12 @@ function MonthToMonthTable({
                   metric="showed"
                   monthKeys={months.map((m) => m.monthKey)}
                   onCellClick={handleCellClick}
+                  calcCell={
+                    <CalcNumberInput
+                      value={calc.showed}
+                      onChange={(v) => updateCalc("showed", v)}
+                    />
+                  }
                 />
               </>
             )}
@@ -2058,11 +2214,18 @@ function MonthToMonthTable({
               metric="noShow"
               monthKeys={months.map((m) => m.monthKey)}
               onCellClick={handleCellClick}
+              calcCell={
+                <CalcNumberInput
+                  value={calc.noShow}
+                  onChange={(v) => updateCalc("noShow", v)}
+                />
+              }
             />
             <MetricRow
               label="Show %"
               values={months.map((m) => getMetrics(m).showRate)}
               format="percent"
+              calcCell={<CalcDisplay value={calcDerived.showRate} format="percent" />}
             />
             <MetricRow
               label="Cost Per Show"
@@ -2072,6 +2235,7 @@ function MonthToMonthTable({
                 return showed > 0 && spend > 0 ? spend / showed : null;
               })}
               format="currency"
+              calcCell={<CalcDisplay value={calcDerived.cps} format="currency" />}
             />
             <MetricRow
               label="Closed"
@@ -2079,6 +2243,12 @@ function MonthToMonthTable({
               metric="closed"
               monthKeys={months.map((m) => m.monthKey)}
               onCellClick={handleCellClick}
+              calcCell={
+                <CalcNumberInput
+                  value={calc.closed}
+                  onChange={(v) => updateCalc("closed", v)}
+                />
+              }
             />
             <MetricRow
               label="Cost Per Close"
@@ -2088,14 +2258,108 @@ function MonthToMonthTable({
                 return closed > 0 && spend > 0 ? spend / closed : null;
               })}
               format="currency"
+              calcCell={<CalcDisplay value={calcDerived.cpClose} format="currency" />}
             />
-            <TotalValueClosedRow
-              months={months}
-              getMetrics={getMetrics}
-              adSpend={adSpend}
-              expanded={totalValueClosedExpanded}
-              onToggle={() => setTotalValueClosedExpanded((e) => !e)}
+            <MetricRow
+              label="Expenses"
+              values={months.map(() => null)}
+              calcCell={
+                <CalcNumberInput
+                  value={calc.expenses}
+                  onChange={(v) => updateCalc("expenses", v)}
+                  step={0.01}
+                />
+              }
             />
+            {/* ROI accordion — replaces standalone "Total Value Closed" row. */}
+            <tr className="border-t border-white/10">
+              <td className="sticky left-0 z-10 bg-slate-900/95 px-4 py-2">
+                <button
+                  type="button"
+                  onClick={() => setRoiExpanded((e) => !e)}
+                  className="flex items-center gap-2 text-left text-sm font-medium text-slate-200 hover:text-white"
+                >
+                  <span className="tabular-nums text-slate-400">{roiExpanded ? "▼" : "▶"}</span>
+                  ROI
+                </button>
+              </td>
+              {months.map((m) => (
+                <td
+                  key={m.monthKey}
+                  className="px-4 py-2 text-center text-sm tabular-nums text-slate-500"
+                >
+                  —
+                </td>
+              ))}
+              <td className="border-l-2 border-sky-400/30 bg-sky-500/5 px-4 py-2 text-center text-sm tabular-nums text-slate-500">
+                —
+              </td>
+            </tr>
+            {roiExpanded && (
+              <>
+                <MetricRow
+                  label="Total Value Closed"
+                  subRow
+                  values={months.map((m) => {
+                    const v = getMetrics(m).successValue;
+                    return v > 0 ? v : null;
+                  })}
+                  format="currency"
+                  calcCell={
+                    <CalcNumberInput
+                      value={calc.totalValueClosed}
+                      onChange={(v) => updateCalc("totalValueClosed", v)}
+                      step={0.01}
+                    />
+                  }
+                />
+                <MetricRow
+                  label="ROAS"
+                  subRow
+                  values={months.map((m) => {
+                    const spend = adSpend[m.monthKey] ?? 0;
+                    const closedValue = getMetrics(m).successValue;
+                    if (spend <= 0 || closedValue <= 0) return null;
+                    return closedValue / spend;
+                  })}
+                  format="roas"
+                  calcCell={<CalcDisplay value={calcDerived.roas} format="roas" />}
+                />
+                <MetricRow
+                  label="Total Investment"
+                  subRow
+                  values={months.map(() => null)}
+                  format="currency"
+                  calcCell={
+                    calcDerived.hasAny && calcDerived.totalInvestment > 0 ? (
+                      <CalcDisplay value={calcDerived.totalInvestment} format="currency" />
+                    ) : (
+                      <span className="text-sm text-slate-500">—</span>
+                    )
+                  }
+                />
+                <MetricRow
+                  label="Net Profit"
+                  subRow
+                  values={months.map(() => null)}
+                  format="currency"
+                  calcCell={
+                    calcDerived.hasAny && calcDerived.totalInvestment > 0 ? (
+                      <CalcDisplay value={calcDerived.netProfit} format="currency" />
+                    ) : (
+                      <span className="text-sm text-slate-500">—</span>
+                    )
+                  }
+                />
+                <MetricRow
+                  label="ROI %"
+                  subRow
+                  values={months.map(() => null)}
+                  format="percent"
+                  calcCell={<CalcDisplay value={calcDerived.roiPct} format="percent" />}
+                />
+              </>
+            )}
           </tbody>
         </table>
       </div>
@@ -2169,6 +2433,7 @@ function TotalAppointmentsRow({
   onToggle,
   metric,
   onCellClick,
+  calcCell,
 }: {
   months: MonthlyData[];
   getMetrics?: (m: MonthlyData) => FunnelMetrics;
@@ -2176,6 +2441,7 @@ function TotalAppointmentsRow({
   onToggle?: () => void;
   metric?: string;
   onCellClick?: (monthKey: string, metric: string, label: string) => void;
+  calcCell?: React.ReactNode;
 }) {
   const values = months.map((m) => {
     const metrics = getMetrics ? getMetrics(m) : m.metrics;
@@ -2208,6 +2474,11 @@ function TotalAppointmentsRow({
           )}
         </td>
       ))}
+      {calcCell !== undefined && (
+        <td className="border-l-2 border-sky-400/30 bg-sky-500/5 px-4 py-2 text-center tabular-nums">
+          {calcCell}
+        </td>
+      )}
     </tr>
   );
 }
@@ -2226,67 +2497,6 @@ function formatRoasRatio(multiplier: number): string {
   return `${s}:1`;
 }
 
-function TotalValueClosedRow({
-  months,
-  getMetrics,
-  adSpend,
-  expanded,
-  onToggle,
-}: {
-  months: MonthlyData[];
-  getMetrics: (m: MonthlyData) => FunnelMetrics;
-  adSpend: Record<string, number>;
-  expanded: boolean;
-  onToggle: () => void;
-}) {
-  const closedValues = months.map((m) => {
-    const v = getMetrics(m).successValue;
-    return v > 0 ? v : null;
-  });
-  return (
-    <>
-      <tr className="border-t border-white/10">
-        <td className="sticky left-0 z-10 bg-slate-900/95 px-4 py-2">
-          <button
-            type="button"
-            onClick={onToggle}
-            className="flex items-center gap-2 text-left text-sm font-medium text-slate-200 hover:text-white"
-          >
-            <span className="tabular-nums text-slate-400">{expanded ? "▼" : "▶"}</span>
-            Total Value Closed
-          </button>
-        </td>
-        {closedValues.map((v, i) => (
-          <td
-            key={months[i]!.monthKey}
-            className="px-4 py-2 text-center text-sm tabular-nums text-white"
-          >
-            {v != null
-              ? `$${v.toLocaleString("en-US", {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 2,
-                })}`
-              : "—"}
-          </td>
-        ))}
-      </tr>
-      {expanded && (
-        <MetricRow
-          label="ROAS"
-          subRow
-          values={months.map((m) => {
-            const spend = adSpend[m.monthKey] ?? 0;
-            const closedValue = getMetrics(m).successValue;
-            if (spend <= 0 || closedValue <= 0) return null;
-            return closedValue / spend;
-          })}
-          format="roas"
-        />
-      )}
-    </>
-  );
-}
-
 function MetricRow({
   label,
   values,
@@ -2297,6 +2507,7 @@ function MetricRow({
   onCellClick,
   trClassName,
   labelClassName,
+  calcCell,
 }: {
   label: string;
   values: (number | null)[];
@@ -2307,6 +2518,7 @@ function MetricRow({
   onCellClick?: (monthKey: string, metric: string, label: string) => void;
   trClassName?: string;
   labelClassName?: string;
+  calcCell?: React.ReactNode;
 }) {
   const fmt = (v: number | null) => {
     if (v == null) return "—";
@@ -2342,6 +2554,13 @@ function MetricRow({
           )}
         </td>
       ))}
+      {calcCell !== undefined && (
+        <td
+          className={`border-l-2 border-sky-400/30 px-4 py-2 text-center tabular-nums ${subRow ? "bg-sky-500/10" : "bg-sky-500/5"}`}
+        >
+          {calcCell}
+        </td>
+      )}
     </tr>
   );
 }
