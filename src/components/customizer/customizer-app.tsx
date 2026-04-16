@@ -154,6 +154,8 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
     CAMPAIGNS.find((campaign) => campaign.key === active) ?? CAMPAIGNS[0];
   const resourceQuery = activeCampaign.resourceSearchQuery;
   const showGhlResources = Boolean(resourceQuery);
+  const baseCampaignNav = CAMPAIGNS.find((c) => c.key === "base");
+  const campaignsAfterBase = CAMPAIGNS.filter((c) => c.key !== "base");
 
   useEffect(() => {
     if (!resourceQuery) {
@@ -278,11 +280,25 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
 
         <div className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)_340px]">
           <aside className="rounded-2xl border border-white/10 bg-slate-900/60 p-3">
-            <p className="px-2 pb-2 text-xs font-medium uppercase tracking-[0.18em] text-slate-400">
+            {baseCampaignNav ? (
+              <button
+                type="button"
+                onClick={() => setActive(baseCampaignNav.key)}
+                className={`w-full rounded-xl px-3 py-2.5 text-left transition ${
+                  active === baseCampaignNav.key
+                    ? "bg-sky-500/20 text-sky-200 ring-1 ring-sky-400/40"
+                    : "text-slate-300 hover:bg-white/5 hover:text-white"
+                }`}
+              >
+                <p className="text-sm font-semibold">{baseCampaignNav.label}</p>
+                <p className="text-xs text-slate-400">{baseCampaignNav.subtitle}</p>
+              </button>
+            ) : null}
+            <p className="mt-3 px-2 pb-2 pt-1 text-xs font-medium uppercase tracking-[0.18em] text-slate-400">
               Campaigns
             </p>
             <nav className="space-y-1">
-              {CAMPAIGNS.map((campaign) => {
+              {campaignsAfterBase.map((campaign) => {
                 const isActive = campaign.key === active;
                 return (
                   <button
