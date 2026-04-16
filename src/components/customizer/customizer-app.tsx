@@ -302,7 +302,7 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
 
           <div className="min-w-0 space-y-3">
             <details className="group rounded-2xl border border-white/10 bg-slate-900/60 open:bg-slate-900/70">
-              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-2xl px-4 py-3.5 text-left [&::-webkit-details-marker]:hidden">
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-2xl px-5 py-5 text-left [&::-webkit-details-marker]:hidden">
                 <span className="text-base font-semibold text-white">
                   {step1Title}
                 </span>
@@ -352,7 +352,7 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
 
             {isBase ? (
               <details className="group rounded-2xl border border-white/10 bg-slate-900/60 open:bg-slate-900/70">
-                <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-2xl px-4 py-3.5 text-left [&::-webkit-details-marker]:hidden">
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-2xl px-5 py-5 text-left [&::-webkit-details-marker]:hidden">
                   <span className="text-base font-semibold text-white">
                     Step 2) Pick Campaign(s)
                   </span>
@@ -368,7 +368,7 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
               </details>
             ) : (
               <details className="group rounded-2xl border border-white/10 bg-slate-900/60 open:bg-slate-900/70">
-                <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-2xl px-4 py-3.5 text-left [&::-webkit-details-marker]:hidden">
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-2xl px-5 py-5 text-left [&::-webkit-details-marker]:hidden">
                   <span className="text-base font-semibold text-white">
                     Step 2) Landing Page
                   </span>
