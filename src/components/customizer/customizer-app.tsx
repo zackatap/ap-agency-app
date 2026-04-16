@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Image from "next/image";
 import Script from "next/script";
 
 /** Hide duplicate GHL heading inside the cross-origin embed (see Step 1 title). */
@@ -388,13 +387,14 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
                         your funnel (Sites → Funnels → your funnel → domain /
                         publishing settings). Example:
                         <span className="mt-3 block overflow-hidden rounded-lg border border-white/10 bg-slate-950/50">
-                          <Image
+                          {/* eslint-disable-next-line @next/next/no-img-element -- static public assets; avoids /_next/image optimizer issues on large PNGs */}
+                          <img
                             src="/domain.png"
                             alt="Where to connect a domain for your funnel in GHL"
-                            width={960}
-                            height={540}
+                            width={2448}
+                            height={1340}
                             className="h-auto w-full max-w-2xl"
-                            sizes="(max-width: 768px) 100vw, 672px"
+                            loading="lazy"
                           />
                         </span>
                       </li>
@@ -405,13 +405,14 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
                         <span className="text-slate-200">copy the URL</span> from the
                         dialog and paste it into your ad.
                         <span className="mt-3 block overflow-hidden rounded-lg border border-white/10 bg-slate-950/50">
-                          <Image
+                          {/* eslint-disable-next-line @next/next/no-img-element -- static public assets; avoids /_next/image optimizer issues on large PNGs */}
+                          <img
                             src="/preview.png"
                             alt="Share button and copy URL for your funnel preview"
-                            width={960}
-                            height={540}
+                            width={2448}
+                            height={1664}
                             className="h-auto w-full max-w-2xl"
-                            sizes="(max-width: 768px) 100vw, 672px"
+                            loading="lazy"
                           />
                         </span>
                       </li>
