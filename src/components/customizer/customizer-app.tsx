@@ -21,17 +21,10 @@ interface CampaignConfig {
   formName: string;
   height: number;
   /**
-   * When set, the right column loads GHL funnels + workflows whose names contain this
+   * When set, the right column loads GHL funnels whose names contain this
    * substring (API lowercases for matching). Omitted on Base — no GHL lists there.
    */
   resourceSearchQuery?: string;
-}
-
-interface WorkflowItem {
-  id: string;
-  name: string;
-  status?: string;
-  url: string;
 }
 
 interface FunnelItem {
@@ -59,6 +52,22 @@ function IconExternalLink({ className }: { className?: string }) {
       <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
       <polyline points="15 3 21 3 21 9" />
       <line x1="10" y1="14" x2="21" y2="3" />
+    </svg>
+  );
+}
+
+function AccordionChevron() {
+  return (
+    <svg
+      className="h-4 w-4 shrink-0 text-slate-400 transition-transform group-open:rotate-180"
+      xmlns="http://www.w3.org/2000/svg"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      aria-hidden
+    >
+      <path d="M6 9l6 6 6-6" />
     </svg>
   );
 }
@@ -146,14 +155,12 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
   const [funnels, setFunnels] = useState<FunnelItem[]>([]);
   const [funnelsLoading, setFunnelsLoading] = useState(false);
   const [funnelsError, setFunnelsError] = useState<string | null>(null);
-  const [workflows, setWorkflows] = useState<WorkflowItem[]>([]);
-  const [workflowsLoading, setWorkflowsLoading] = useState(false);
-  const [workflowsError, setWorkflowsError] = useState<string | null>(null);
 
   const activeCampaign =
     CAMPAIGNS.find((campaign) => campaign.key === active) ?? CAMPAIGNS[0];
   const resourceQuery = activeCampaign.resourceSearchQuery;
   const showGhlResources = Boolean(resourceQuery);
+  const isBase = activeCampaign.key === "base";
   const baseCampaignNav = CAMPAIGNS.find((c) => c.key === "base");
   const campaignsAfterBase = CAMPAIGNS.filter((c) => c.key !== "base");
 
@@ -161,20 +168,13 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
     if (!resourceQuery) {
       setFunnels([]);
       setFunnelsError(null);
-      setWorkflows([]);
-      setWorkflowsError(null);
       setFunnelsLoading(false);
-      setWorkflowsLoading(false);
       return;
     }
 
     if (!locationId) {
       setFunnels([]);
       setFunnelsError(
-        "No location connected for GHL lookup yet. Forms still work."
-      );
-      setWorkflows([]);
-      setWorkflowsError(
         "No location connected for GHL lookup yet. Forms still work."
       );
       return;
@@ -185,26 +185,15 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
     let isCancelled = false;
     const load = async () => {
       setFunnelsLoading(true);
-      setWorkflowsLoading(true);
       setFunnelsError(null);
-      setWorkflowsError(null);
       try {
-        const [funnelsRes, workflowsRes] = await Promise.all([
-          fetch(`/api/funnels/${encodeURIComponent(locationId)}?query=${q}`, {
-            cache: "no-store",
-          }),
-          fetch(
-            `/api/workflows/${encodeURIComponent(locationId)}?query=${q}`,
-            { cache: "no-store" }
-          ),
-        ]);
+        const funnelsRes = await fetch(
+          `/api/funnels/${encodeURIComponent(locationId)}?query=${q}`,
+          { cache: "no-store" }
+        );
 
         const funnelsData = (await funnelsRes.json()) as {
           funnels?: FunnelItem[];
-          error?: string;
-        };
-        const workflowsData = (await workflowsRes.json()) as {
-          workflows?: WorkflowItem[];
           error?: string;
         };
 
@@ -218,16 +207,6 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
               funnelsData.error ?? "Failed to load funnels (landing pages)"
             );
           }
-
-          if (workflowsRes.ok) {
-            setWorkflows(workflowsData.workflows ?? []);
-            setWorkflowsError(null);
-          } else {
-            setWorkflows([]);
-            setWorkflowsError(
-              workflowsData.error ?? "Failed to load workflows"
-            );
-          }
         }
       } catch (error) {
         if (!isCancelled) {
@@ -235,16 +214,9 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
           setFunnelsError(
             error instanceof Error ? error.message : "Failed to load funnels"
           );
-          setWorkflows([]);
-          setWorkflowsError(
-            error instanceof Error ? error.message : "Failed to load workflows"
-          );
         }
       } finally {
-        if (!isCancelled) {
-          setFunnelsLoading(false);
-          setWorkflowsLoading(false);
-        }
+        if (!isCancelled) setFunnelsLoading(false);
       }
     };
 
@@ -253,6 +225,8 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
       isCancelled = true;
     };
   }, [active, locationId, resourceQuery]);
+
+  const step1Title = `Step 1) ${activeCampaign.label} Settings`;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-slate-100">
@@ -265,7 +239,7 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
         strategy="afterInteractive"
       />
 
-      <div className="mx-auto max-w-[1600px] px-4 py-6 lg:px-8">
+      <div className="mx-auto max-w-5xl px-4 py-6 lg:max-w-6xl lg:px-8">
         <header className="mb-6 rounded-2xl border border-white/10 bg-white/5 p-5 backdrop-blur">
           <p className="text-xs uppercase tracking-[0.2em] text-sky-300/90">
             SaaS Customizer
@@ -278,8 +252,11 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
           </p>
         </header>
 
-        <div className="grid gap-4 lg:grid-cols-[280px_minmax(0,1fr)_340px]">
-          <aside className="rounded-2xl border border-white/10 bg-slate-900/60 p-3">
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,260px)_minmax(0,1fr)] lg:items-start">
+          <aside className="rounded-2xl border border-white/10 bg-slate-900/60 p-3 lg:sticky lg:top-6">
+            <p className="px-2 pb-2 text-xs font-medium uppercase tracking-[0.18em] text-slate-400">
+              Start here
+            </p>
             {baseCampaignNav ? (
               <button
                 type="button"
@@ -319,225 +296,158 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
             </nav>
           </aside>
 
-          <main className="rounded-2xl border border-white/10 bg-slate-900/60 p-4">
-            <div className="mb-3 border-b border-white/10 pb-3">
-              <h2 className="text-lg font-semibold text-white">
-                {activeCampaign.label} Campaign
-              </h2>
-              <p className="text-sm text-slate-400">{activeCampaign.formName}</p>
-            </div>
+          <div className="min-w-0 space-y-3">
+            <details
+              className="group rounded-2xl border border-white/10 bg-slate-900/60 open:bg-slate-900/70"
+              open
+            >
+              <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-2xl px-4 py-3.5 text-left [&::-webkit-details-marker]:hidden">
+                <span className="text-base font-semibold text-white">
+                  {step1Title}
+                </span>
+                <AccordionChevron />
+              </summary>
+              <div className="border-t border-white/10 px-4 pb-4 pt-1">
+                <p className="mb-3 text-sm text-slate-400">
+                  {activeCampaign.formName}
+                </p>
+                <div className="rounded-xl border border-white/10 bg-slate-900 p-2">
+                  <iframe
+                    src={`https://link.automatedpractice.com/widget/form/${activeCampaign.formId}`}
+                    style={{
+                      width: "100%",
+                      minHeight: `${activeCampaign.height}px`,
+                      border: "none",
+                      borderRadius: "10px",
+                      display: "block",
+                      backgroundColor: "transparent",
+                      filter:
+                        "invert(1) hue-rotate(180deg) brightness(1.1) contrast(0.96)",
+                      mixBlendMode: "screen",
+                    }}
+                    id={`inline-${activeCampaign.formId}`}
+                    data-layout="{'id':'INLINE'}"
+                    data-trigger-type="alwaysShow"
+                    data-trigger-value=""
+                    data-activation-type="alwaysActivated"
+                    data-activation-value=""
+                    data-deactivation-type="neverDeactivate"
+                    data-deactivation-value=""
+                    data-form-name={activeCampaign.formName}
+                    data-height={String(activeCampaign.height)}
+                    data-layout-iframe-id={`inline-${activeCampaign.formId}`}
+                    data-form-id={activeCampaign.formId}
+                    title={activeCampaign.formName}
+                  />
+                </div>
+              </div>
+            </details>
 
-            {/* Solid slate-900 behind the iframe so blend modes don’t composite against transparency (reads as black). */}
-            <div className="rounded-xl border border-white/10 bg-slate-900 p-2">
-              <iframe
-                src={`https://link.automatedpractice.com/widget/form/${activeCampaign.formId}`}
-                style={{
-                  width: "100%",
-                  minHeight: `${activeCampaign.height}px`,
-                  border: "none",
-                  borderRadius: "10px",
-                  display: "block",
-                  backgroundColor: "transparent",
-                  /* Inverted embed: screen() lifts near-black toward the solid slate-900 behind the iframe */
-                  filter:
-                    "invert(1) hue-rotate(180deg) brightness(1.1) contrast(0.96)",
-                  mixBlendMode: "screen",
-                }}
-                id={`inline-${activeCampaign.formId}`}
-                data-layout="{'id':'INLINE'}"
-                data-trigger-type="alwaysShow"
-                data-trigger-value=""
-                data-activation-type="alwaysActivated"
-                data-activation-value=""
-                data-deactivation-type="neverDeactivate"
-                data-deactivation-value=""
-                data-form-name={activeCampaign.formName}
-                data-height={String(activeCampaign.height)}
-                data-layout-iframe-id={`inline-${activeCampaign.formId}`}
-                data-form-id={activeCampaign.formId}
-                title={activeCampaign.formName}
-              />
-            </div>
-          </main>
+            {isBase ? (
+              <details
+                className="group rounded-2xl border border-white/10 bg-slate-900/60 open:bg-slate-900/70"
+                open
+              >
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-2xl px-4 py-3.5 text-left [&::-webkit-details-marker]:hidden">
+                  <span className="text-base font-semibold text-white">
+                    Step 2) Pick Campaign(s)
+                  </span>
+                  <AccordionChevron />
+                </summary>
+                <div className="border-t border-white/10 px-4 pb-4 pt-3">
+                  <p className="text-sm leading-relaxed text-slate-300">
+                    Fill out your desired campaign settings by clicking one of the
+                    items in the left panel under{" "}
+                    <span className="font-medium text-slate-200">Campaigns</span>.
+                  </p>
+                </div>
+              </details>
+            ) : (
+              <details
+                className="group rounded-2xl border border-white/10 bg-slate-900/60 open:bg-slate-900/70"
+                open
+              >
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-2xl px-4 py-3.5 text-left [&::-webkit-details-marker]:hidden">
+                  <span className="text-base font-semibold text-white">
+                    Step 2) Landing Page
+                  </span>
+                  <AccordionChevron />
+                </summary>
+                <div className="space-y-4 border-t border-white/10 px-4 pb-4 pt-3">
+                  <div>
+                    <p className="text-sm font-semibold text-white">Instructions</p>
+                    <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-sm leading-relaxed text-slate-300">
+                      <li>Click the Landing Page link.</li>
+                      <li>Connect a domain.</li>
+                      <li>Customize if needed.</li>
+                      <li>Copy link to paste into Ad.</li>
+                    </ol>
+                  </div>
+                  {showGhlResources && (
+                    <div className="rounded-xl border border-white/10 bg-slate-950/40 p-3">
+                      {!locationId && (
+                        <p className="rounded-lg border border-amber-400/15 bg-amber-400/10 px-3 py-2 text-xs text-amber-100/90">
+                          No location ID — connect GHL to load your landing page
+                          link.
+                        </p>
+                      )}
+                      {locationId && funnelsLoading && (
+                        <p className="text-sm text-slate-400">Loading…</p>
+                      )}
+                      {locationId && funnelsError && (
+                        <p className="rounded-lg border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-xs text-rose-100/95">
+                          {funnelsError}
+                        </p>
+                      )}
+                      {locationId &&
+                        !funnelsLoading &&
+                        !funnelsError &&
+                        funnels.length === 0 && (
+                          <p className="text-sm text-slate-400">
+                            No landing page found for this campaign (Spanish-only
+                            matches are excluded).
+                          </p>
+                        )}
+                      {locationId && funnels[0] && (
+                        <a
+                          href={funnels[0].url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="mt-2 flex w-full flex-col rounded-xl border border-white/10 px-3 py-2.5 text-left transition hover:bg-white/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400/50"
+                        >
+                          <p className="text-sm font-semibold text-white">
+                            {activeCampaign.label} Landing Page
+                          </p>
+                          <p className="mt-0.5 flex items-center gap-1.5 text-xs text-slate-400">
+                            Open in new tab
+                            <IconExternalLink className="text-slate-400" />
+                          </p>
+                        </a>
+                      )}
+                    </div>
+                  )}
+                </div>
+              </details>
+            )}
 
-          <aside className="flex flex-col gap-3">
             {/*
               Production: GHL maintenance shortcuts (uncomment if needed)
               {locationId && (
-                <div className="flex flex-wrap gap-2 rounded-2xl border border-white/10 bg-slate-900/60 p-3 backdrop-blur-sm">
-                  <a
-                    href={`/api/auth/ghl/reauthorize?locationId=${encodeURIComponent(locationId)}`}
-                    target="_top"
-                    className="inline-flex rounded-lg bg-sky-500/15 px-3 py-1.5 text-xs font-medium text-sky-200 ring-1 ring-sky-400/35 transition hover:bg-sky-500/25"
-                  >
-                    Hard Reconnect GHL
-                  </a>
-                  <a
-                    href={`/api/debug/ghl-workflow-probe/${encodeURIComponent(locationId)}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="inline-flex rounded-lg border border-white/10 bg-slate-950/40 px-3 py-1.5 text-xs text-slate-300 transition hover:bg-white/5"
-                  >
-                    Workflow API probe
-                  </a>
+                <div className="flex flex-wrap gap-2 rounded-2xl border border-white/10 bg-slate-900/60 p-3">
+                  <a href={`/api/auth/ghl/reauthorize?locationId=...`}>Hard Reconnect GHL</a>
+                  <a href={`/api/debug/ghl-workflow-probe/...`}>Workflow API probe</a>
                 </div>
               )}
             */}
 
-            {!showGhlResources && (
-              <section className="rounded-2xl border border-white/10 bg-slate-900/60 p-4 backdrop-blur-sm">
-                <p className="text-[0.65rem] font-medium uppercase tracking-[0.18em] text-slate-400">
-                  GHL resources
-                </p>
-                <p className="mt-2 text-sm text-slate-300">
-                  Open <span className="text-slate-100">Pain/Device</span>,{" "}
-                  <span className="text-slate-100">Wellness</span>, or another
-                  campaign tab to see funnels and workflows for that campaign.
-                </p>
-                {!locationId && (
-                  <p className="mt-3 rounded-lg border border-amber-400/15 bg-amber-400/10 px-3 py-2 text-xs text-amber-100/90">
-                    No location ID in the URL — GHL lists need a connected sub-account.
-                  </p>
-                )}
-              </section>
-            )}
-
-            {showGhlResources && (
-              <>
-                <section className="rounded-2xl border border-white/10 bg-slate-900/60 p-4 backdrop-blur-sm">
-                  <p className="text-[0.65rem] font-medium uppercase tracking-[0.18em] text-slate-400">
-                    Landing pages
-                  </p>
-                  {/*
-                    Production: extra funnel context (uncomment if needed)
-                    <h3 className="mt-1 text-sm font-semibold text-white">
-                      Funnels matching “{resourceQuery}”
-                    </h3>
-                    <p className="mt-1 text-xs leading-relaxed text-slate-400">
-                      <a href="https://marketplace.gohighlevel.com/docs/ghl/funnels/get-funnels" target="_blank" rel="noreferrer" className="text-sky-300/90 underline decoration-sky-500/30 underline-offset-2 hover:text-sky-200">GET /funnels/funnel/list</a>, filtered and sorted by name.
-                    </p>
-                  */}
-                  {!locationId && (
-                    <p className="mt-3 rounded-lg border border-amber-400/15 bg-amber-400/10 px-3 py-2 text-xs text-amber-100/90">
-                      No location ID — connect GHL to load funnels.
-                    </p>
-                  )}
-                  {locationId && funnelsLoading && (
-                    <p className="mt-3 text-sm text-slate-400">Loading funnels…</p>
-                  )}
-                  {locationId && funnelsError && (
-                    <p className="mt-3 rounded-lg border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-xs text-rose-100/95">
-                      {funnelsError}
-                    </p>
-                  )}
-                  {locationId &&
-                    !funnelsLoading &&
-                    !funnelsError &&
-                    funnels.length === 0 && (
-                      <p className="mt-3 text-sm text-slate-400">
-                        No landing page found for this campaign (Spanish-only
-                        matches are excluded).
-                      </p>
-                    )}
-                  {locationId && funnels[0] && (
-                    <a
-                      href={funnels[0].url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="mt-3 block w-full rounded-xl border border-white/10 px-3 py-2.5 text-left transition hover:bg-white/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400/50"
-                    >
-                      <p className="text-sm font-semibold text-white">
-                        {activeCampaign.label} Landing Page
-                      </p>
-                      <p className="mt-0.5 flex items-center gap-1.5 text-xs text-slate-400">
-                        Open in new tab
-                        <IconExternalLink className="text-slate-400" />
-                      </p>
-                    </a>
-                  )}
-                  {/*
-                    Production: GHL raw response (re-enable client debug=1 + ghlAccess state)
-                    {locationId && funnelGhlLog && !funnelsLoading && !funnelsError && (
-                      <details className="mt-3 rounded-lg border border-white/10 bg-slate-950/50 p-2 text-xs">
-                        <summary className="cursor-pointer font-medium text-slate-400">Funnels — API debug</summary>
-                        <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded border border-white/5 bg-black/25 p-2 text-[10px] leading-relaxed text-slate-500">{JSON.stringify(funnelGhlLog, null, 2)}</pre>
-                      </details>
-                    )}
-                  */}
-                </section>
-
-                <section className="rounded-2xl border border-white/10 bg-slate-900/60 p-4 backdrop-blur-sm">
-                  <p className="text-[0.65rem] font-medium uppercase tracking-[0.18em] text-slate-400">
-                    Workflows
-                  </p>
-                  {/*
-                    Production: extra workflow context (uncomment if needed)
-                    <h3 className="mt-1 text-sm font-semibold text-white">
-                      Workflows matching “{resourceQuery}”
-                    </h3>
-                    <p className="mt-1 text-xs text-slate-400">
-                      Same keyword as this tab’s campaign title, sorted by name.
-                    </p>
-                  */}
-                  {!locationId && (
-                    <p className="mt-3 rounded-lg border border-amber-400/15 bg-amber-400/10 px-3 py-2 text-xs text-amber-100/90">
-                      No location ID — connect GHL to load workflows.
-                    </p>
-                  )}
-                  {locationId && workflowsLoading && (
-                    <p className="mt-3 text-sm text-slate-400">Loading workflows…</p>
-                  )}
-                  {locationId && workflowsError && (
-                    <p className="mt-3 rounded-lg border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-xs text-rose-100/95">
-                      {workflowsError}
-                    </p>
-                  )}
-                  {locationId &&
-                    !workflowsLoading &&
-                    !workflowsError &&
-                    workflows.length === 0 && (
-                      <p className="mt-3 text-sm text-slate-400">
-                        No workflows with{" "}
-                        <span className="text-slate-300">[PART 1]</span> or{" "}
-                        <span className="text-slate-300">[PART 2]</span> in the name
-                        matched this campaign.
-                      </p>
-                    )}
-                  {locationId && workflows.length > 0 && (
-                    <ul className="mt-3 space-y-2">
-                      {workflows.map((workflow, index) => (
-                        <li key={workflow.id}>
-                          <a
-                            href={workflow.url}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="block w-full rounded-xl border border-white/10 px-3 py-2.5 text-left transition hover:bg-white/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400/50"
-                          >
-                            <p className="text-sm font-semibold text-white">
-                              {activeCampaign.label} Workflow {index + 1}
-                            </p>
-                            <p className="mt-0.5 flex items-center gap-1.5 text-xs text-slate-400">
-                              Open in new tab
-                              <IconExternalLink className="text-slate-400" />
-                            </p>
-                          </a>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                  {/*
-                    Production: GHL raw response (re-enable client debug=1 + ghlAccess state)
-                    {locationId && workflowGhlLog && !workflowsLoading && !workflowsError && (
-                      <details className="mt-3 rounded-lg border border-white/10 bg-slate-950/50 p-2 text-xs">
-                        <summary className="cursor-pointer font-medium text-slate-400">Workflows — API debug</summary>
-                        <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap break-all rounded border border-white/5 bg-black/25 p-2 text-[10px] leading-relaxed text-slate-500">{JSON.stringify(workflowGhlLog, null, 2)}</pre>
-                      </details>
-                    )}
-                  */}
-                </section>
-              </>
-            )}
-          </aside>
+            {/*
+              Production: workflows (PART 1 / PART 2) — uncomment to restore
+              <details className="...">
+                <summary>Workflows</summary>
+                ... fetch /api/workflows + list ...
+              </details>
+            */}
+          </div>
         </div>
       </div>
     </div>
