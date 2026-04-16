@@ -163,6 +163,7 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
   const [funnels, setFunnels] = useState<FunnelItem[]>([]);
   const [funnelsLoading, setFunnelsLoading] = useState(false);
   const [funnelsError, setFunnelsError] = useState<string | null>(null);
+  const [funnelsNeedsAuth, setFunnelsNeedsAuth] = useState(false);
   const [lightbox, setLightbox] = useState<Lightbox | null>(null);
 
   useEffect(() => {
@@ -191,15 +192,15 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
     if (!resourceQuery) {
       setFunnels([]);
       setFunnelsError(null);
+      setFunnelsNeedsAuth(false);
       setFunnelsLoading(false);
       return;
     }
 
     if (!locationId) {
       setFunnels([]);
-      setFunnelsError(
-        "No location connected for GHL lookup yet. Forms still work."
-      );
+      setFunnelsError(null);
+      setFunnelsNeedsAuth(true);
       return;
     }
 
@@ -209,6 +210,7 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
     const load = async () => {
       setFunnelsLoading(true);
       setFunnelsError(null);
+      setFunnelsNeedsAuth(false);
       try {
         const funnelsRes = await fetch(
           `/api/funnels/${encodeURIComponent(locationId)}?query=${q}`,
@@ -218,17 +220,24 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
         const funnelsData = (await funnelsRes.json()) as {
           funnels?: FunnelItem[];
           error?: string;
+          needsAuth?: boolean;
         };
 
         if (!isCancelled) {
           if (funnelsRes.ok) {
             setFunnels(funnelsData.funnels ?? []);
             setFunnelsError(null);
+            setFunnelsNeedsAuth(false);
+          } else if (funnelsData.needsAuth || funnelsRes.status === 401) {
+            setFunnels([]);
+            setFunnelsError(null);
+            setFunnelsNeedsAuth(true);
           } else {
             setFunnels([]);
             setFunnelsError(
               funnelsData.error ?? "Failed to load funnels (landing pages)"
             );
+            setFunnelsNeedsAuth(false);
           }
         }
       } catch (error) {
@@ -237,6 +246,7 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
           setFunnelsError(
             error instanceof Error ? error.message : "Failed to load funnels"
           );
+          setFunnelsNeedsAuth(false);
         }
       } finally {
         if (!isCancelled) setFunnelsLoading(false);
@@ -403,23 +413,40 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
                         below (when connected).
                         {showGhlResources && (
                           <span className="mt-3 block rounded-xl border border-white/10 bg-slate-950/40 p-3">
-                            {!locationId && (
-                              <span className="block rounded-lg border border-amber-400/15 bg-amber-400/10 px-3 py-2 text-xs text-amber-100/90">
-                                No location ID — connect GHL to load your landing
-                                page link.
+                            {funnelsNeedsAuth && (
+                              <span className="block rounded-lg border border-amber-400/20 bg-amber-500/10 p-3">
+                                <span className="block text-sm text-amber-100/90">
+                                  In order to find your related landing pages,
+                                </span>
+                                {locationId ? (
+                                  <a
+                                    href={`/api/auth/ghl/authorize?locationId=${encodeURIComponent(locationId)}`}
+                                    target="_top"
+                                    rel="noopener noreferrer"
+                                    className="mt-2 inline-flex items-center gap-1.5 rounded-lg bg-indigo-600 px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-indigo-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-400/60"
+                                  >
+                                    Connect HighLevel →
+                                  </a>
+                                ) : (
+                                  <span className="mt-2 block text-xs text-amber-100/70">
+                                    Open this app from inside GHL to connect a
+                                    location.
+                                  </span>
+                                )}
                               </span>
                             )}
-                            {locationId && funnelsLoading && (
+                            {!funnelsNeedsAuth && locationId && funnelsLoading && (
                               <span className="block text-sm text-slate-400">
                                 Loading…
                               </span>
                             )}
-                            {locationId && funnelsError && (
+                            {!funnelsNeedsAuth && locationId && funnelsError && (
                               <span className="block rounded-lg border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-xs text-rose-100/95">
                                 {funnelsError}
                               </span>
                             )}
-                            {locationId &&
+                            {!funnelsNeedsAuth &&
+                              locationId &&
                               !funnelsLoading &&
                               !funnelsError &&
                               funnels.length === 0 && (
@@ -428,7 +455,7 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
                                   (Spanish-only matches are excluded).
                                 </span>
                               )}
-                            {locationId && funnels[0] && (
+                            {!funnelsNeedsAuth && locationId && funnels[0] && (
                               <a
                                 href={funnels[0].url}
                                 target="_blank"
