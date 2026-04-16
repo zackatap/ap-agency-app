@@ -374,13 +374,56 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
                   <AccordionChevron />
                 </summary>
                 <div className="space-y-4 border-t border-white/10 px-4 pb-4 pt-3">
+                  {showGhlResources && (
+                    <div className="rounded-xl border border-white/10 bg-slate-950/40 p-3">
+                      {!locationId && (
+                        <p className="rounded-lg border border-amber-400/15 bg-amber-400/10 px-3 py-2 text-xs text-amber-100/90">
+                          No location ID — connect GHL to load your landing page
+                          link.
+                        </p>
+                      )}
+                      {locationId && funnelsLoading && (
+                        <p className="text-sm text-slate-400">Loading…</p>
+                      )}
+                      {locationId && funnelsError && (
+                        <p className="rounded-lg border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-xs text-rose-100/95">
+                          {funnelsError}
+                        </p>
+                      )}
+                      {locationId &&
+                        !funnelsLoading &&
+                        !funnelsError &&
+                        funnels.length === 0 && (
+                          <p className="text-sm text-slate-400">
+                            No landing page found for this campaign (Spanish-only
+                            matches are excluded).
+                          </p>
+                        )}
+                      {locationId && funnels[0] && (
+                        <a
+                          href={funnels[0].url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="flex w-full flex-col rounded-xl border border-white/10 px-3 py-2.5 text-left transition hover:bg-white/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400/50"
+                        >
+                          <p className="text-sm font-semibold text-white">
+                            {activeCampaign.label} Landing Page
+                          </p>
+                          <p className="mt-0.5 flex items-center gap-1.5 text-xs text-slate-400">
+                            Open in new tab
+                            <IconExternalLink className="text-slate-400" />
+                          </p>
+                        </a>
+                      )}
+                    </div>
+                  )}
                   <div>
                     <p className="text-sm font-semibold text-white">Instructions</p>
                     <ol className="mt-3 list-decimal space-y-6 pl-5 text-sm leading-relaxed text-slate-300">
                       <li>
                         Open your funnel in GHL using the{" "}
                         <span className="text-slate-200">Landing Page</span> link
-                        below (when connected).
+                        above (when connected).
                       </li>
                       <li>
                         <span className="text-slate-200">Connect a domain</span> to
@@ -418,49 +461,6 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
                       </li>
                     </ol>
                   </div>
-                  {showGhlResources && (
-                    <div className="rounded-xl border border-white/10 bg-slate-950/40 p-3">
-                      {!locationId && (
-                        <p className="rounded-lg border border-amber-400/15 bg-amber-400/10 px-3 py-2 text-xs text-amber-100/90">
-                          No location ID — connect GHL to load your landing page
-                          link.
-                        </p>
-                      )}
-                      {locationId && funnelsLoading && (
-                        <p className="text-sm text-slate-400">Loading…</p>
-                      )}
-                      {locationId && funnelsError && (
-                        <p className="rounded-lg border border-rose-400/20 bg-rose-500/10 px-3 py-2 text-xs text-rose-100/95">
-                          {funnelsError}
-                        </p>
-                      )}
-                      {locationId &&
-                        !funnelsLoading &&
-                        !funnelsError &&
-                        funnels.length === 0 && (
-                          <p className="text-sm text-slate-400">
-                            No landing page found for this campaign (Spanish-only
-                            matches are excluded).
-                          </p>
-                        )}
-                      {locationId && funnels[0] && (
-                        <a
-                          href={funnels[0].url}
-                          target="_blank"
-                          rel="noreferrer"
-                          className="mt-2 flex w-full flex-col rounded-xl border border-white/10 px-3 py-2.5 text-left transition hover:bg-white/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400/50"
-                        >
-                          <p className="text-sm font-semibold text-white">
-                            {activeCampaign.label} Landing Page
-                          </p>
-                          <p className="mt-0.5 flex items-center gap-1.5 text-xs text-slate-400">
-                            Open in new tab
-                            <IconExternalLink className="text-slate-400" />
-                          </p>
-                        </a>
-                      )}
-                    </div>
-                  )}
                 </div>
               </details>
             )}
