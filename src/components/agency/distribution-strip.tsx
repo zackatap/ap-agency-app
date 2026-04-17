@@ -1,36 +1,41 @@
 "use client";
 
 import { useMemo } from "react";
-import type { ClientLocationSummary, MetricKey } from "./types";
+import type { ClientCampaignSummary, MetricKey } from "./types";
 import { METRIC_META } from "./metric-meta";
-import { buildDistribution, getLocationMetric } from "./benchmarks";
+import { buildDistribution, getCampaignMetric } from "./benchmarks";
 import { formatMetricValue } from "./format";
 
 interface Props {
-  locations: ClientLocationSummary[];
+  campaigns: ClientCampaignSummary[];
   metric: MetricKey;
   monthKey: string | "total";
-  highlightedLocationId?: string;
-  onSelect?: (locationId: string) => void;
+  highlightedCampaignKey?: string;
+  onSelect?: (campaign: ClientCampaignSummary) => void;
 }
 
 /**
- * A horizontal distribution strip ("dot plot"): each client is a dot on the
- * metric axis, highlighted one shown bigger + labeled. Great for showing
- * where a single client sits relative to the rest of the agency.
+ * A horizontal distribution strip ("dot plot"): each campaign is a dot on the
+ * metric axis. The highlighted campaign is shown bigger and labeled. Great
+ * for showing where a single campaign sits relative to the rest of the agency.
  */
 export function DistributionStrip({
-  locations,
+  campaigns,
   metric,
   monthKey,
-  highlightedLocationId,
+  highlightedCampaignKey,
   onSelect,
 }: Props) {
   const meta = METRIC_META[metric];
   const dist = useMemo(
-    () => buildDistribution(locations, metric, monthKey),
-    [locations, metric, monthKey]
+    () => buildDistribution(campaigns, metric, monthKey),
+    [campaigns, metric, monthKey]
   );
+  const byKey = useMemo(() => {
+    const map = new Map<string, ClientCampaignSummary>();
+    for (const c of campaigns) map.set(c.campaignKey, c);
+    return map;
+  }, [campaigns]);
 
   if (dist.values.length === 0) {
     return (
@@ -46,12 +51,11 @@ export function DistributionStrip({
 
   const pct = (value: number) => ((value - minV) / range) * 100;
 
-  const highlightedValue = highlightedLocationId
-    ? getLocationMetric(
-        locations.find((l) => l.locationId === highlightedLocationId)!,
-        metric,
-        monthKey
-      )
+  const highlighted = highlightedCampaignKey
+    ? byKey.get(highlightedCampaignKey) ?? null
+    : null;
+  const highlightedValue = highlighted
+    ? getCampaignMetric(highlighted, metric, monthKey)
     : null;
 
   const avg = dist.simpleAverage;
@@ -60,13 +64,13 @@ export function DistributionStrip({
     <div className="rounded-xl border border-white/10 bg-slate-900/30 p-4">
       <div className="mb-4 flex items-center justify-between text-xs text-slate-400">
         <span>
-          {dist.values.length} clients · min {formatMetricValue(minV, meta.kind)}{" "}
+          {dist.values.length} campaigns · min {formatMetricValue(minV, meta.kind)}{" "}
           · avg {formatMetricValue(avg, meta.kind)} · max{" "}
           {formatMetricValue(maxV, meta.kind)}
         </span>
         {highlightedValue != null && (
           <span className="text-slate-300">
-            This client: {formatMetricValue(highlightedValue, meta.kind)}
+            This campaign: {formatMetricValue(highlightedValue, meta.kind)}
           </span>
         )}
       </div>
@@ -89,20 +93,23 @@ export function DistributionStrip({
             title={`Agency average: ${formatMetricValue(avg, meta.kind)}`}
           />
         )}
-        {dist.values.map(({ locationId, value }) => {
-          const isHighlight = locationId === highlightedLocationId;
+        {dist.values.map(({ key, value }) => {
+          const isHighlight = key === highlightedCampaignKey;
+          const campaign = byKey.get(key);
           return (
             <button
-              key={locationId}
+              key={key}
               type="button"
-              onClick={() => onSelect?.(locationId)}
+              onClick={() => campaign && onSelect?.(campaign)}
               className={`absolute top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full transition-transform ${
                 isHighlight
                   ? "z-10 h-4 w-4 bg-amber-400 ring-2 ring-amber-200/50 hover:scale-125"
                   : "h-2 w-2 bg-slate-300/70 hover:scale-150 hover:bg-white"
               }`}
               style={{ left: `${pct(value)}%` }}
-              title={`${formatMetricValue(value, meta.kind)}`}
+              title={`${campaign?.businessName ?? key}${
+                campaign && campaign.status !== "ACTIVE" ? ` (${campaign.status})` : ""
+              } — ${formatMetricValue(value, meta.kind)}`}
             />
           );
         })}

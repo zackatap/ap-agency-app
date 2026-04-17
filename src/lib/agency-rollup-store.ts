@@ -3,21 +3,32 @@
  *
  * Three tables:
  *   agency_rollup_snapshots         - one row per refresh run
- *   agency_rollup_clients           - current active-client roster (rebuilt each run)
- *   agency_rollup_location_months   - per-location per-month metrics captured in a snapshot
+ *   agency_rollup_campaigns         - current active-campaign roster
+ *                                     (one row per sheet campaign row — a
+ *                                      single location can contribute multiple
+ *                                      rows, e.g. ACTIVE + 2ND CMPN)
+ *   agency_rollup_campaign_months   - per-campaign per-month metrics for a
+ *                                     snapshot
  *
- * Only the last 10 complete snapshots are retained; older rows are pruned on each
- * new run. The dashboard reads the most recent `complete` snapshot so partial
- * in-progress refreshes never show broken data.
+ * Grain change (v2): previously the rollup stored one row per (snapshot,
+ * locationId, monthKey). The new unit is the **campaign** — a location with
+ * two active campaigns in the Client Database now contributes two rows per
+ * month. The `campaign_key` from agency-clients.ts is the stable identifier
+ * across snapshots; it is of the form `${locationId}:${pipelineKeywordOrStatus}`.
+ *
+ * Only the last 10 complete snapshots are retained; older rows are pruned on
+ * each new run. The dashboard reads the most recent `complete` snapshot so
+ * partial in-progress refreshes never show broken data.
  */
 
 import { neon } from "@neondatabase/serverless";
 import type { FunnelMetrics } from "@/lib/funnel-metrics";
+import type { CampaignStatus } from "@/lib/agency-clients";
 
 const SNAPSHOT_RETENTION = 10;
 
 export type SnapshotStatus = "running" | "complete" | "failed";
-export type ClientRowStatus = "ok" | "error" | "skipped";
+export type CampaignRowStatus = "ok" | "error" | "skipped";
 export type TriggerSource = "manual" | "cron";
 
 export interface AgencySnapshot {
@@ -29,35 +40,49 @@ export interface AgencySnapshot {
   clientsTotal: number;
   clientsIncluded: number;
   clientsFailed: number;
-  errors: Array<{ locationId?: string; businessName?: string; message: string }>;
+  errors: Array<{
+    locationId?: string;
+    businessName?: string;
+    campaignKey?: string;
+    message: string;
+  }>;
   triggeredBy: TriggerSource;
   progressCurrent: number;
   progressTotal: number;
   progressLabel: string | null;
 }
 
-export interface AgencyClientRecord {
+export interface AgencyCampaignRecord {
+  campaignKey: string;
   locationId: string;
+  status: CampaignStatus;
   cid: string | null;
   businessName: string | null;
   ownerFirstName: string | null;
   ownerLastName: string | null;
-  statuses: string[];
+  pipelineKeyword: string | null;
+  campaignKeyword: string | null;
   pipelineId: string | null;
   pipelineName: string | null;
   adAccountId: string | null;
+  /**
+   * Populated when we could not resolve the campaign to a GHL pipeline. The
+   * UI surfaces these as "Needs setup" instead of silently dropping them.
+   */
+  needsSetupReason: string | null;
   updatedAt: string;
 }
 
-export interface AgencyLocationMonth {
+export interface AgencyCampaignMonth {
   snapshotId: number;
+  campaignKey: string;
   locationId: string;
   monthKey: string;
   startDate: string;
   endDate: string;
   metrics: FunnelMetrics;
   adSpend: number;
-  status: ClientRowStatus;
+  status: CampaignRowStatus;
   errorMessage: string | null;
 }
 
@@ -130,26 +155,35 @@ async function ensureSchema(sql: Sql): Promise<void> {
       )
     `;
   });
-  await runIfNotExists(sql, "agency_rollup_clients", async () => {
+  await runIfNotExists(sql, "agency_rollup_campaigns", async () => {
     await sql`
-      CREATE TABLE IF NOT EXISTS agency_rollup_clients (
-        location_id TEXT PRIMARY KEY,
+      CREATE TABLE IF NOT EXISTS agency_rollup_campaigns (
+        campaign_key TEXT PRIMARY KEY,
+        location_id TEXT NOT NULL,
+        status TEXT NOT NULL,
         cid TEXT,
         business_name TEXT,
         owner_first_name TEXT,
         owner_last_name TEXT,
-        statuses TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+        pipeline_keyword TEXT,
+        campaign_keyword TEXT,
         pipeline_id TEXT,
         pipeline_name TEXT,
         ad_account_id TEXT,
+        needs_setup_reason TEXT,
         updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     `;
-  });
-  await runIfNotExists(sql, "agency_rollup_location_months", async () => {
     await sql`
-      CREATE TABLE IF NOT EXISTS agency_rollup_location_months (
+      CREATE INDEX IF NOT EXISTS idx_agency_campaigns_location
+        ON agency_rollup_campaigns (location_id)
+    `;
+  });
+  await runIfNotExists(sql, "agency_rollup_campaign_months", async () => {
+    await sql`
+      CREATE TABLE IF NOT EXISTS agency_rollup_campaign_months (
         snapshot_id BIGINT NOT NULL REFERENCES agency_rollup_snapshots(id) ON DELETE CASCADE,
+        campaign_key TEXT NOT NULL,
         location_id TEXT NOT NULL,
         month_key TEXT NOT NULL,
         start_date DATE NOT NULL,
@@ -158,12 +192,12 @@ async function ensureSchema(sql: Sql): Promise<void> {
         ad_spend NUMERIC NOT NULL DEFAULT 0,
         status TEXT NOT NULL DEFAULT 'ok',
         error_message TEXT,
-        PRIMARY KEY (snapshot_id, location_id, month_key)
+        PRIMARY KEY (snapshot_id, campaign_key, month_key)
       )
     `;
     await sql`
-      CREATE INDEX IF NOT EXISTS idx_agency_months_snapshot
-        ON agency_rollup_location_months (snapshot_id)
+      CREATE INDEX IF NOT EXISTS idx_agency_campaign_months_snapshot
+        ON agency_rollup_campaign_months (snapshot_id)
     `;
   });
   schemaReady = true;
@@ -366,92 +400,121 @@ export async function expireStaleRunningSnapshots(
   `;
 }
 
-export async function upsertClients(
-  clients: Array<Omit<AgencyClientRecord, "updatedAt">>
+export async function upsertCampaigns(
+  campaigns: Array<Omit<AgencyCampaignRecord, "updatedAt">>
 ): Promise<void> {
   const sql = getDb();
   if (!sql) return;
   await ensureSchema(sql);
-  for (const client of clients) {
+  for (const c of campaigns) {
     await sql`
-      INSERT INTO agency_rollup_clients (
-        location_id, cid, business_name, owner_first_name, owner_last_name,
-        statuses, pipeline_id, pipeline_name, ad_account_id, updated_at
+      INSERT INTO agency_rollup_campaigns (
+        campaign_key, location_id, status, cid, business_name,
+        owner_first_name, owner_last_name, pipeline_keyword, campaign_keyword,
+        pipeline_id, pipeline_name, ad_account_id, needs_setup_reason, updated_at
       ) VALUES (
-        ${client.locationId},
-        ${client.cid},
-        ${client.businessName},
-        ${client.ownerFirstName},
-        ${client.ownerLastName},
-        ${client.statuses as unknown as string[]},
-        ${client.pipelineId},
-        ${client.pipelineName},
-        ${client.adAccountId},
+        ${c.campaignKey},
+        ${c.locationId},
+        ${c.status},
+        ${c.cid},
+        ${c.businessName},
+        ${c.ownerFirstName},
+        ${c.ownerLastName},
+        ${c.pipelineKeyword},
+        ${c.campaignKeyword},
+        ${c.pipelineId},
+        ${c.pipelineName},
+        ${c.adAccountId},
+        ${c.needsSetupReason},
         NOW()
       )
-      ON CONFLICT (location_id) DO UPDATE SET
+      ON CONFLICT (campaign_key) DO UPDATE SET
+        location_id = EXCLUDED.location_id,
+        status = EXCLUDED.status,
         cid = EXCLUDED.cid,
         business_name = EXCLUDED.business_name,
         owner_first_name = EXCLUDED.owner_first_name,
         owner_last_name = EXCLUDED.owner_last_name,
-        statuses = EXCLUDED.statuses,
+        pipeline_keyword = EXCLUDED.pipeline_keyword,
+        campaign_keyword = EXCLUDED.campaign_keyword,
         pipeline_id = EXCLUDED.pipeline_id,
         pipeline_name = EXCLUDED.pipeline_name,
         ad_account_id = EXCLUDED.ad_account_id,
+        needs_setup_reason = EXCLUDED.needs_setup_reason,
         updated_at = NOW()
     `;
   }
 }
 
-export async function listClients(
-  locationIds?: string[]
-): Promise<AgencyClientRecord[]> {
+function mapCampaignRow(row: Record<string, unknown>): AgencyCampaignRecord {
+  return {
+    campaignKey: String(row.campaign_key),
+    locationId: String(row.location_id),
+    status: ((row.status as string) ?? "ACTIVE") as CampaignStatus,
+    cid: (row.cid as string) ?? null,
+    businessName: (row.business_name as string) ?? null,
+    ownerFirstName: (row.owner_first_name as string) ?? null,
+    ownerLastName: (row.owner_last_name as string) ?? null,
+    pipelineKeyword: (row.pipeline_keyword as string) ?? null,
+    campaignKeyword: (row.campaign_keyword as string) ?? null,
+    pipelineId: (row.pipeline_id as string) ?? null,
+    pipelineName: (row.pipeline_name as string) ?? null,
+    adAccountId: (row.ad_account_id as string) ?? null,
+    needsSetupReason: (row.needs_setup_reason as string) ?? null,
+    updatedAt:
+      row.updated_at instanceof Date
+        ? (row.updated_at as Date).toISOString()
+        : String(row.updated_at ?? ""),
+  };
+}
+
+export async function listCampaigns(
+  campaignKeys?: string[]
+): Promise<AgencyCampaignRecord[]> {
   const sql = getDb();
   if (!sql) return [];
   await ensureSchema(sql);
-  const rows = locationIds && locationIds.length
+  const rows = campaignKeys && campaignKeys.length
     ? await sql`
-        SELECT * FROM agency_rollup_clients
-        WHERE location_id = ANY(${locationIds as unknown as string[]})
+        SELECT * FROM agency_rollup_campaigns
+        WHERE campaign_key = ANY(${campaignKeys as unknown as string[]})
         ORDER BY business_name NULLS LAST
       `
     : await sql`
-        SELECT * FROM agency_rollup_clients
+        SELECT * FROM agency_rollup_campaigns
         ORDER BY business_name NULLS LAST
       `;
-  return rows.map((row) => {
-    const r = row as Record<string, unknown>;
-    return {
-      locationId: String(r.location_id),
-      cid: (r.cid as string) ?? null,
-      businessName: (r.business_name as string) ?? null,
-      ownerFirstName: (r.owner_first_name as string) ?? null,
-      ownerLastName: (r.owner_last_name as string) ?? null,
-      statuses: Array.isArray(r.statuses) ? (r.statuses as string[]) : [],
-      pipelineId: (r.pipeline_id as string) ?? null,
-      pipelineName: (r.pipeline_name as string) ?? null,
-      adAccountId: (r.ad_account_id as string) ?? null,
-      updatedAt:
-        r.updated_at instanceof Date
-          ? (r.updated_at as Date).toISOString()
-          : String(r.updated_at ?? ""),
-    };
-  });
+  return rows.map((r) => mapCampaignRow(r as Record<string, unknown>));
 }
 
-export async function insertLocationMonths(
-  rows: AgencyLocationMonth[]
+export async function listCampaignsByLocation(
+  locationId: string
+): Promise<AgencyCampaignRecord[]> {
+  const sql = getDb();
+  if (!sql) return [];
+  await ensureSchema(sql);
+  const rows = await sql`
+    SELECT * FROM agency_rollup_campaigns
+    WHERE location_id = ${locationId}
+    ORDER BY status ASC
+  `;
+  return rows.map((r) => mapCampaignRow(r as Record<string, unknown>));
+}
+
+export async function insertCampaignMonths(
+  rows: AgencyCampaignMonth[]
 ): Promise<void> {
   const sql = getDb();
   if (!sql || rows.length === 0) return;
   await ensureSchema(sql);
   for (const row of rows) {
     await sql`
-      INSERT INTO agency_rollup_location_months (
-        snapshot_id, location_id, month_key, start_date, end_date,
-        metrics, ad_spend, status, error_message
+      INSERT INTO agency_rollup_campaign_months (
+        snapshot_id, campaign_key, location_id, month_key,
+        start_date, end_date, metrics, ad_spend, status, error_message
       ) VALUES (
         ${row.snapshotId},
+        ${row.campaignKey},
         ${row.locationId},
         ${row.monthKey},
         ${row.startDate},
@@ -461,7 +524,7 @@ export async function insertLocationMonths(
         ${row.status},
         ${row.errorMessage}
       )
-      ON CONFLICT (snapshot_id, location_id, month_key) DO UPDATE SET
+      ON CONFLICT (snapshot_id, campaign_key, month_key) DO UPDATE SET
         metrics = EXCLUDED.metrics,
         ad_spend = EXCLUDED.ad_spend,
         status = EXCLUDED.status,
@@ -470,23 +533,24 @@ export async function insertLocationMonths(
   }
 }
 
-export async function listSnapshotLocationMonths(
+export async function listSnapshotCampaignMonths(
   snapshotId: number
-): Promise<AgencyLocationMonth[]> {
+): Promise<AgencyCampaignMonth[]> {
   const sql = getDb();
   if (!sql) return [];
   await ensureSchema(sql);
   const rows = await sql`
-    SELECT snapshot_id, location_id, month_key, start_date, end_date,
+    SELECT snapshot_id, campaign_key, location_id, month_key, start_date, end_date,
            metrics, ad_spend, status, error_message
-    FROM agency_rollup_location_months
+    FROM agency_rollup_campaign_months
     WHERE snapshot_id = ${snapshotId}
-    ORDER BY location_id, month_key
+    ORDER BY location_id, campaign_key, month_key
   `;
   return rows.map((row) => {
     const r = row as Record<string, unknown>;
     return {
       snapshotId: Number(r.snapshot_id),
+      campaignKey: String(r.campaign_key),
       locationId: String(r.location_id),
       monthKey: String(r.month_key),
       startDate:
@@ -499,7 +563,7 @@ export async function listSnapshotLocationMonths(
           : String(r.end_date),
       metrics: r.metrics as FunnelMetrics,
       adSpend: Number(r.ad_spend ?? 0),
-      status: (r.status as ClientRowStatus) ?? "ok",
+      status: (r.status as CampaignRowStatus) ?? "ok",
       errorMessage: (r.error_message as string) ?? null,
     };
   });

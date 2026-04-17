@@ -12,7 +12,7 @@ import {
   YAxis,
 } from "recharts";
 import type {
-  ClientLocationSummary,
+  ClientCampaignSummary,
   ClientMonthTotals,
   ClientRollupView,
   MetricKey,
@@ -30,12 +30,14 @@ import {
 interface Props {
   view: ClientRollupView;
   locationId: string;
+  /** Pick a specific campaign at this location. Falls back to first included. */
+  campaignKey?: string | null;
   /** Hide the header block (used when embedding inside the location dashboard) */
   compact?: boolean;
 }
 
-function getClientMonthValue(
-  months: ClientLocationSummary["months"],
+function getMonthValue(
+  months: ClientCampaignSummary["months"],
   monthKey: string,
   metric: MetricKey
 ): number | null {
@@ -60,9 +62,6 @@ function getAgencyAvgForMonth(
     case "totalValue":
     case "successValue":
     case "adSpend":
-      // For volume metrics, compare against the simple average per client
-      // (total / clientCount) so the client sees "am I above / below a typical
-      // client's volume?"
       if (!m.clientCount) return null;
       return (
         Math.round(
@@ -89,45 +88,71 @@ function getAgencyAvgForMonth(
   }
 }
 
-export function ClientBenchmark({ view, locationId, compact }: Props) {
-  const client = view.locations.find((l) => l.locationId === locationId);
+export function ClientBenchmark({ view, locationId, campaignKey, compact }: Props) {
+  const campaignsAtLocation = useMemo(
+    () => view.campaigns.filter((c) => c.locationId === locationId),
+    [view.campaigns, locationId]
+  );
+  const [selectedCampaignKey, setSelectedCampaignKey] = useState<string | null>(
+    () => {
+      if (campaignKey) return campaignKey;
+      const preferred =
+        campaignsAtLocation.find((c) => c.status === "ACTIVE" && c.included) ??
+        campaignsAtLocation.find((c) => c.included) ??
+        campaignsAtLocation[0];
+      return preferred?.campaignKey ?? null;
+    }
+  );
+
+  const campaign = useMemo(
+    () =>
+      campaignsAtLocation.find((c) => c.campaignKey === selectedCampaignKey) ??
+      null,
+    [campaignsAtLocation, selectedCampaignKey]
+  );
+
   const [focusMetric, setFocusMetric] = useState<MetricKey>("closed");
-  const [selectedMonthKey, setSelectedMonthKey] = useState<
-    string | "total"
-  >(() => view.months[view.months.length - 1]?.monthKey ?? "total");
+  const [selectedMonthKey, setSelectedMonthKey] = useState<string | "total">(
+    () => view.months[view.months.length - 1]?.monthKey ?? "total"
+  );
+
+  const includedCampaigns = useMemo(
+    () => view.campaigns.filter((c) => c.included),
+    [view.campaigns]
+  );
 
   const rankSummary = useMemo(() => {
-    if (!client) return [];
+    if (!campaign) return [];
     return METRIC_ORDER.map((key) => {
-      const dist = buildDistribution(view.locations, key, selectedMonthKey);
-      const rank = computeRank(dist, locationId, key);
+      const dist = buildDistribution(includedCampaigns, key, selectedMonthKey);
+      const rank = computeRank(dist, campaign.campaignKey, key);
       const meta = METRIC_META[key];
-      const clientValue =
+      const value =
         selectedMonthKey === "total"
-          ? (client.totals as unknown as Record<string, number | null>)[key] ??
+          ? (campaign.totals as unknown as Record<string, number | null>)[key] ??
             null
-          : getClientMonthValue(client.months, selectedMonthKey, key);
+          : getMonthValue(campaign.months, selectedMonthKey, key);
       return {
         key,
         meta,
         rank,
-        clientValue,
+        value,
         average: dist.simpleAverage,
       };
     });
-  }, [client, view.locations, selectedMonthKey, locationId]);
+  }, [campaign, includedCampaigns, selectedMonthKey]);
 
   const trendData = useMemo(() => {
-    if (!client) return [];
+    if (!campaign) return [];
     return view.months.map((m) => ({
       monthKey: m.monthKey,
       month: formatMonthLabel(m.monthKey),
-      You: getClientMonthValue(client.months, m.monthKey, focusMetric),
+      You: getMonthValue(campaign.months, m.monthKey, focusMetric),
       "Agency avg": getAgencyAvgForMonth(view.months, m.monthKey, focusMetric),
     }));
-  }, [client, view.months, focusMetric]);
+  }, [campaign, view.months, focusMetric]);
 
-  if (!client) {
+  if (campaignsAtLocation.length === 0) {
     return (
       <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-6 text-sm text-amber-200">
         This location is not part of the latest snapshot. Run a refresh from the
@@ -136,7 +161,16 @@ export function ClientBenchmark({ view, locationId, compact }: Props) {
     );
   }
 
+  if (!campaign) {
+    return (
+      <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 p-6 text-sm text-amber-200">
+        Could not resolve a campaign for this location.
+      </div>
+    );
+  }
+
   const focusMeta = METRIC_META[focusMetric];
+  const showCampaignPicker = campaignsAtLocation.length > 1;
 
   return (
     <div className="space-y-6">
@@ -147,14 +181,15 @@ export function ClientBenchmark({ view, locationId, compact }: Props) {
               Benchmark
             </div>
             <h1 className="mt-1 text-2xl font-semibold text-white">
-              {client.businessName}
+              {campaign.businessName}
             </h1>
-            {client.ownerName && (
-              <div className="text-sm text-slate-400">{client.ownerName}</div>
+            {campaign.ownerName && (
+              <div className="text-sm text-slate-400">{campaign.ownerName}</div>
             )}
             <div className="mt-1 text-xs text-slate-500">
-              CID {client.cid ?? "—"} · {client.pipelineName ?? "No pipeline"} ·
-              Based on snapshot from{" "}
+              CID {campaign.cid ?? "—"} ·{" "}
+              {campaign.pipelineName ?? campaign.pipelineKeyword ?? "No pipeline"} ·{" "}
+              {campaign.status} · Based on snapshot from{" "}
               {formatDateTime(view.snapshot.finishedAt)}
             </div>
           </div>
@@ -175,13 +210,42 @@ export function ClientBenchmark({ view, locationId, compact }: Props) {
         </div>
       )}
 
+      {showCampaignPicker && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-white/10 bg-slate-900/30 p-3 text-sm">
+          <span className="text-xs uppercase tracking-wide text-slate-400">
+            Campaign
+          </span>
+          {campaignsAtLocation.map((c) => {
+            const isActive = c.campaignKey === selectedCampaignKey;
+            return (
+              <button
+                key={c.campaignKey}
+                type="button"
+                onClick={() => setSelectedCampaignKey(c.campaignKey)}
+                className={`rounded-lg px-3 py-1.5 text-xs transition-colors ${
+                  isActive
+                    ? "bg-indigo-600 text-white"
+                    : "bg-slate-800/50 text-slate-300 hover:bg-slate-800"
+                }`}
+                title={c.pipelineName ?? c.pipelineKeyword ?? undefined}
+              >
+                <span className="mr-1.5 text-[10px] opacity-80">
+                  {c.status}
+                </span>
+                {c.pipelineName ?? c.pipelineKeyword ?? "Pipeline"}
+              </button>
+            );
+          })}
+        </div>
+      )}
+
       <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        {rankSummary.slice(0, 8).map(({ key, meta, rank, clientValue, average }) => {
+        {rankSummary.slice(0, 8).map(({ key, meta, rank, value, average }) => {
           const aboveAverage =
-            clientValue != null &&
+            value != null &&
             average != null &&
-            ((meta.higherIsBetter && clientValue >= average) ||
-              (!meta.higherIsBetter && clientValue <= average));
+            ((meta.higherIsBetter && value >= average) ||
+              (!meta.higherIsBetter && value <= average));
           return (
             <button
               key={key}
@@ -196,7 +260,7 @@ export function ClientBenchmark({ view, locationId, compact }: Props) {
                 {meta.label}
               </div>
               <div className="mt-1 text-xl font-semibold text-white">
-                {formatMetricValue(clientValue, meta.kind)}
+                {formatMetricValue(value, meta.kind)}
               </div>
               <div
                 className={`mt-1 text-xs ${aboveAverage ? "text-emerald-400" : "text-rose-400"}`}
@@ -222,7 +286,7 @@ export function ClientBenchmark({ view, locationId, compact }: Props) {
             </h2>
             <p className="mt-1 text-xs text-slate-400">
               Your {focusMeta.label.toLowerCase()} over time compared with the
-              agency&apos;s simple average (average across clients).
+              agency&apos;s simple average (average across campaigns).
             </p>
           </div>
           <select
@@ -293,15 +357,15 @@ export function ClientBenchmark({ view, locationId, compact }: Props) {
           Where you stand — {focusMeta.label}
         </h2>
         <p className="mt-1 text-xs text-slate-400">
-          Every dot is one client in the selected period. Your position is
+          Every dot is one campaign in the selected period. Your position is
           highlighted in gold.
         </p>
         <div className="mt-4">
           <DistributionStrip
-            locations={view.locations}
+            campaigns={includedCampaigns}
             metric={focusMetric}
             monthKey={selectedMonthKey}
-            highlightedLocationId={locationId}
+            highlightedCampaignKey={campaign.campaignKey}
           />
         </div>
       </section>
@@ -322,11 +386,11 @@ export function ClientBenchmark({ view, locationId, compact }: Props) {
               </tr>
             </thead>
             <tbody className="divide-y divide-white/5">
-              {rankSummary.map(({ key, meta, rank, clientValue, average }) => (
+              {rankSummary.map(({ key, meta, rank, value, average }) => (
                 <tr key={key} className="hover:bg-white/5">
                   <td className="px-4 py-2 text-slate-200">{meta.label}</td>
                   <td className="px-3 py-2 text-right tabular-nums text-slate-100">
-                    {formatMetricValue(clientValue, meta.kind)}
+                    {formatMetricValue(value, meta.kind)}
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums text-slate-400">
                     {formatMetricValue(average, meta.kind)}

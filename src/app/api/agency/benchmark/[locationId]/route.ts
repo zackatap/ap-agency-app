@@ -19,9 +19,12 @@ export async function GET(
       { headers: { "Cache-Control": "no-store" } }
     );
   }
-  const present = view.locations.some((l) => l.locationId === locationId);
+  const campaignsForLocation = view.campaigns.filter(
+    (c) => c.locationId === locationId
+  );
+  const present = campaignsForLocation.length > 0;
   return NextResponse.json(
-    { view, locationId, present },
+    { view, locationId, present, campaigns: campaignsForLocation },
     { headers: { "Cache-Control": "no-store" } }
   );
 }

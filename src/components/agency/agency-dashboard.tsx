@@ -4,7 +4,6 @@ import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import type {
   ClientAgencySnapshot,
-  ClientLocationSummary,
   ClientRollupView,
   MetricKey,
 } from "./types";
@@ -19,151 +18,6 @@ import { RefreshControls } from "./refresh-controls";
 interface Props {
   initial: ClientRollupView | null;
   initialLatest: ClientAgencySnapshot | null;
-}
-
-type ViewMode = "location" | "cid";
-
-function grouping(locations: ClientLocationSummary[], mode: ViewMode) {
-  if (mode === "location") return locations;
-  const byCid = new Map<string, ClientLocationSummary[]>();
-  for (const loc of locations) {
-    const key = loc.cid?.trim() || `loc:${loc.locationId}`;
-    const list = byCid.get(key) ?? [];
-    list.push(loc);
-    byCid.set(key, list);
-  }
-  const grouped: ClientLocationSummary[] = [];
-  for (const [key, items] of byCid.entries()) {
-    if (items.length === 1) {
-      grouped.push(items[0]);
-      continue;
-    }
-    const included = items.every((i) => i.included);
-    const first = items[0];
-    const monthKeys = first.months.map((m) => m.monthKey);
-    const months = monthKeys.map((mk) => {
-      let leads = 0,
-        totalAppts = 0,
-        showed = 0,
-        closed = 0,
-        totalValue = 0,
-        successValue = 0,
-        adSpend = 0;
-      for (const it of items) {
-        const m = it.months.find((mm) => mm.monthKey === mk);
-        if (!m) continue;
-        leads += m.leads;
-        totalAppts += m.totalAppts;
-        showed += m.showed;
-        closed += m.closed;
-        totalValue += m.totalValue;
-        successValue += m.successValue;
-        adSpend += m.adSpend;
-      }
-      const pool = leads + totalAppts + showed + closed;
-      const bookingRate =
-        pool > 0 ? Math.round(((totalAppts + showed + closed) / pool) * 1000) / 10 : null;
-      const apptPool = totalAppts + showed + closed;
-      const showRate =
-        apptPool > 0 ? Math.round(((showed + closed) / apptPool) * 1000) / 10 : null;
-      const closePool = showed + closed;
-      const closeRate =
-        closePool > 0 ? Math.round((closed / closePool) * 1000) / 10 : null;
-      return {
-        monthKey: mk,
-        leads,
-        totalAppts,
-        showed,
-        closed,
-        totalValue,
-        successValue,
-        adSpend,
-        bookingRate,
-        showRate,
-        closeRate,
-        cpl: adSpend > 0 && leads > 0 ? Math.round((adSpend / leads) * 100) / 100 : null,
-        cps:
-          adSpend > 0 && showed > 0 ? Math.round((adSpend / showed) * 100) / 100 : null,
-        cpClose:
-          adSpend > 0 && closed > 0 ? Math.round((adSpend / closed) * 100) / 100 : null,
-        roas:
-          adSpend > 0 ? Math.round((successValue / adSpend) * 100) / 100 : null,
-      };
-    });
-    const totals = months.reduce(
-      (acc, m) => ({
-        leads: acc.leads + m.leads,
-        totalAppts: acc.totalAppts + m.totalAppts,
-        showed: acc.showed + m.showed,
-        closed: acc.closed + m.closed,
-        totalValue: acc.totalValue + m.totalValue,
-        successValue: acc.successValue + m.successValue,
-        adSpend: acc.adSpend + m.adSpend,
-      }),
-      {
-        leads: 0,
-        totalAppts: 0,
-        showed: 0,
-        closed: 0,
-        totalValue: 0,
-        successValue: 0,
-        adSpend: 0,
-      }
-    );
-    const pool = totals.leads + totals.totalAppts + totals.showed + totals.closed;
-    const apptPool = totals.totalAppts + totals.showed + totals.closed;
-    const closePool = totals.showed + totals.closed;
-    const combined: ClientLocationSummary = {
-      locationId: `cid:${key}`,
-      cid: first.cid,
-      businessName: first.cid
-        ? `CID ${first.cid} (${items.length} locations)`
-        : first.businessName,
-      ownerName: first.ownerName,
-      statuses: [...new Set(items.flatMap((i) => i.statuses))],
-      pipelineName: null,
-      included,
-      errorMessage: null,
-      totals: {
-        ...totals,
-        bookingRate:
-          pool > 0
-            ? Math.round(
-                ((totals.totalAppts + totals.showed + totals.closed) / pool) * 1000
-              ) / 10
-            : null,
-        showRate:
-          apptPool > 0
-            ? Math.round(((totals.showed + totals.closed) / apptPool) * 1000) / 10
-            : null,
-        closeRate:
-          closePool > 0
-            ? Math.round((totals.closed / closePool) * 1000) / 10
-            : null,
-        cpl:
-          totals.adSpend > 0 && totals.leads > 0
-            ? Math.round((totals.adSpend / totals.leads) * 100) / 100
-            : null,
-        cps:
-          totals.adSpend > 0 && totals.showed > 0
-            ? Math.round((totals.adSpend / totals.showed) * 100) / 100
-            : null,
-        cpClose:
-          totals.adSpend > 0 && totals.closed > 0
-            ? Math.round((totals.adSpend / totals.closed) * 100) / 100
-            : null,
-        roas:
-          totals.adSpend > 0
-            ? Math.round((totals.successValue / totals.adSpend) * 100) / 100
-            : null,
-      },
-      latestMonth: months[months.length - 1] ?? null,
-      months,
-    };
-    grouped.push(combined);
-  }
-  grouped.sort((a, b) => a.businessName.localeCompare(b.businessName));
-  return grouped;
 }
 
 function delta(
@@ -223,7 +77,6 @@ function Kpi({ label, value, sub, diff, better, kind }: KpiProps) {
 
 export function AgencyDashboard({ initial, initialLatest }: Props) {
   const [view, setView] = useState<ClientRollupView | null>(initial);
-  const [viewMode, setViewMode] = useState<ViewMode>("location");
   const [selectedMonthKey, setSelectedMonthKey] = useState<string | "total">(
     () => initial?.months[initial.months.length - 1]?.monthKey ?? "total"
   );
@@ -265,20 +118,29 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
 
   useEffect(() => {
     if (!currentLatest || currentLatest.status !== "running") return;
-    // when a run is active, also poll the full view every 15s so the dashboard
-    // quietly refreshes once it's done even if the user hasn't clicked anything.
     const id = setInterval(reloadSnapshot, 15_000);
     return () => clearInterval(id);
   }, [currentLatest]);
 
-  const locations = useMemo(
-    () => (view ? grouping(view.locations, viewMode) : []),
-    [view, viewMode]
+  const campaigns = view?.campaigns ?? [];
+  const includedCampaigns = useMemo(
+    () => campaigns.filter((c) => c.included),
+    [campaigns]
+  );
+  const needsSetup = useMemo(
+    () => campaigns.filter((c) => !c.included),
+    [campaigns]
   );
 
   const months = view?.months ?? [];
   const latestMonth = months[months.length - 1];
   const prevMonth = months[months.length - 2];
+
+  const activeLocationCount = useMemo(() => {
+    const set = new Set<string>();
+    for (const c of includedCampaigns) set.add(c.locationId);
+    return set.size;
+  }, [includedCampaigns]);
 
   const kpiCards = useMemo(() => {
     if (!latestMonth) return [];
@@ -335,12 +197,12 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
       {
         label: "Clients reporting",
         value: `${latestMonth.clientCount}`,
-        sub: `of ${locations.length} total`,
+        sub: `of ${campaigns.length} campaigns · ${activeLocationCount} locations`,
         better: "up" as const,
         kind: "count" as const,
       },
     ];
-  }, [latestMonth, prevMonth, locations.length]);
+  }, [latestMonth, prevMonth, campaigns.length, activeLocationCount]);
 
   const latestSnapshotFinished =
     view?.snapshot.finishedAt ?? initial?.snapshot.finishedAt ?? null;
@@ -353,9 +215,9 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
             Agency rollup
           </h1>
           <p className="mt-1 text-sm text-slate-400">
-            Performance across every active & 2nd campaign client. Data is
-            cached in the database so everyone on the team sees the same
-            numbers. Refresh pulls fresh data from GoHighLevel and Meta.
+            Performance across every active &amp; 2nd campaign client. Each sheet
+            row is its own campaign; clients with ACTIVE + 2ND CMPN show both
+            pipelines rolled up under their CID.
           </p>
         </div>
         <RefreshControls
@@ -383,6 +245,34 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
               <Kpi key={idx} {...card} />
             ))}
           </section>
+
+          {needsSetup.length > 0 && (
+            <details className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-4">
+              <summary className="cursor-pointer text-sm font-semibold text-amber-300">
+                {needsSetup.length} campaign{needsSetup.length === 1 ? "" : "s"}{" "}
+                need setup · click to expand
+              </summary>
+              <ul className="mt-3 space-y-1.5 text-xs text-slate-300">
+                {needsSetup.map((c) => (
+                  <li key={c.campaignKey} className="flex items-start gap-3">
+                    <Link
+                      href={`/v2/location/${c.locationId}/dashboard`}
+                      className="font-medium text-amber-200 hover:text-amber-100"
+                    >
+                      {c.businessName}
+                    </Link>
+                    <span className="text-slate-500">
+                      {c.status}
+                      {c.pipelineKeyword ? ` · col I: "${c.pipelineKeyword}"` : ""}
+                    </span>
+                    <span className="text-slate-400">
+                      {c.errorMessage ?? c.needsSetupReason ?? "Unknown"}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
 
           <section className="grid grid-cols-1 gap-6 lg:grid-cols-2">
             <div className="rounded-2xl border border-white/10 bg-slate-900/30 p-5">
@@ -412,7 +302,7 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
                         ? "bg-indigo-600 text-white"
                         : "text-slate-300 hover:text-white"
                     }`}
-                    title="Average of each client's rate (clients weighted equally)"
+                    title="Average of each campaign's rate (campaigns weighted equally)"
                   >
                     Simple avg
                   </button>
@@ -423,7 +313,7 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
                         ? "bg-indigo-600 text-white"
                         : "text-slate-300 hover:text-white"
                     }`}
-                    title="Sum across all clients (big accounts dominate)"
+                    title="Sum across all campaigns (big accounts dominate)"
                   >
                     Weighted
                   </button>
@@ -438,7 +328,7 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
           <section className="rounded-2xl border border-white/10 bg-slate-900/30 p-5">
             <div className="flex flex-wrap items-baseline justify-between gap-3">
               <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-300">
-                Client distribution
+                Campaign distribution
               </h2>
               <div className="flex flex-wrap items-center gap-2 text-xs">
                 <select
@@ -473,53 +363,30 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
               </div>
             </div>
             <p className="mt-2 text-xs text-slate-400">
-              Each dot is one client. The indigo bar covers the middle 50% of
-              clients; the vertical line is the agency average. Click any dot to
-              open that client&apos;s benchmark.
+              Each dot is one campaign. The indigo bar covers the middle 50%
+              of campaigns; the vertical line is the agency average. Click any
+              dot to open that campaign&apos;s benchmark.
             </p>
             <div className="mt-4">
               <DistributionStrip
-                locations={locations}
+                campaigns={includedCampaigns}
                 metric={distributionMetric}
                 monthKey={selectedMonthKey}
-                onSelect={(locationId) => {
-                  if (locationId.startsWith("cid:")) return;
-                  window.location.href = `/agency/dashboard/${locationId}`;
+                onSelect={(campaign) => {
+                  window.location.href = `/agency/dashboard/${campaign.locationId}?campaign=${encodeURIComponent(
+                    campaign.campaignKey
+                  )}`;
                 }}
               />
             </div>
           </section>
 
           <section className="space-y-3">
-            <div className="flex flex-wrap items-baseline justify-between gap-3">
-              <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-300">
-                Client leaderboard
-              </h2>
-              <div className="flex items-center gap-2 rounded-lg bg-slate-800/50 p-1 text-xs">
-                <button
-                  onClick={() => setViewMode("location")}
-                  className={`rounded-md px-3 py-1 ${
-                    viewMode === "location"
-                      ? "bg-indigo-600 text-white"
-                      : "text-slate-300 hover:text-white"
-                  }`}
-                >
-                  By location
-                </button>
-                <button
-                  onClick={() => setViewMode("cid")}
-                  className={`rounded-md px-3 py-1 ${
-                    viewMode === "cid"
-                      ? "bg-indigo-600 text-white"
-                      : "text-slate-300 hover:text-white"
-                  }`}
-                >
-                  By CID (client)
-                </button>
-              </div>
-            </div>
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-300">
+              Client leaderboard
+            </h2>
             <LeaderboardTable
-              locations={locations}
+              campaigns={includedCampaigns}
               monthKey={selectedMonthKey}
             />
           </section>
@@ -527,14 +394,14 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
           <section className="space-y-2 text-xs text-slate-500">
             <div>
               Snapshot #{view.snapshot.id} ·{" "}
-              {view.snapshot.clientsIncluded} included ·{" "}
+              {view.snapshot.clientsIncluded} campaigns included ·{" "}
               {view.snapshot.clientsFailed} excluded ·{" "}
               {view.snapshot.monthsCovered} months
             </div>
             {view.snapshot.errors.length > 0 && (
               <details className="rounded-xl border border-white/10 bg-slate-900/40 p-4">
                 <summary className="cursor-pointer text-sm text-slate-300">
-                  {view.snapshot.errors.length} locations could not be
+                  {view.snapshot.errors.length} campaigns could not be
                   included — click for details
                 </summary>
                 <ul className="mt-3 space-y-1 text-xs text-slate-400">

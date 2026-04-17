@@ -4,6 +4,8 @@ import type { MetricKey } from "@/lib/agency-rollup-view";
 
 export type { MetricKey };
 
+export type CampaignStatusLabel = "ACTIVE" | "2ND CMPN";
+
 export interface ClientMonthTotals {
   monthKey: string;
   startDate: string;
@@ -28,7 +30,7 @@ export interface ClientMonthTotals {
   roas: number | null;
 }
 
-export interface ClientLocationMonth {
+export interface ClientCampaignMonth {
   monthKey: string;
   leads: number;
   totalAppts: number;
@@ -46,18 +48,24 @@ export interface ClientLocationMonth {
   roas: number | null;
 }
 
-export interface ClientLocationSummary {
+export interface ClientCampaignSummary {
+  campaignKey: string;
   locationId: string;
+  status: CampaignStatusLabel;
   cid: string | null;
   businessName: string;
   ownerName: string | null;
-  statuses: string[];
+  pipelineId: string | null;
   pipelineName: string | null;
+  pipelineKeyword: string | null;
+  campaignKeyword: string | null;
+  adAccountId: string | null;
   included: boolean;
   errorMessage: string | null;
-  totals: Omit<ClientLocationMonth, "monthKey">;
-  latestMonth: ClientLocationMonth | null;
-  months: ClientLocationMonth[];
+  needsSetupReason: string | null;
+  totals: Omit<ClientCampaignMonth, "monthKey">;
+  latestMonth: ClientCampaignMonth | null;
+  months: ClientCampaignMonth[];
 }
 
 export interface ClientAgencySnapshot {
@@ -69,7 +77,12 @@ export interface ClientAgencySnapshot {
   clientsTotal: number;
   clientsIncluded: number;
   clientsFailed: number;
-  errors: Array<{ locationId?: string; businessName?: string; message: string }>;
+  errors: Array<{
+    locationId?: string;
+    businessName?: string;
+    campaignKey?: string;
+    message: string;
+  }>;
   triggeredBy: "manual" | "cron";
   progressCurrent: number;
   progressTotal: number;
@@ -79,10 +92,33 @@ export interface ClientAgencySnapshot {
 export interface ClientRollupView {
   snapshot: ClientAgencySnapshot;
   months: ClientMonthTotals[];
-  locations: ClientLocationSummary[];
+  campaigns: ClientCampaignSummary[];
 }
 
 export interface ClientRollupStatus {
   latest: ClientAgencySnapshot | null;
   recent: ClientAgencySnapshot[];
+}
+
+/**
+ * A display row in the leaderboard/distribution/charts. Either a single
+ * campaign or a CID rollup combining multiple campaigns. When `children` is
+ * populated, this row is an aggregation; the UI can show an accordion toggle.
+ */
+export interface ClientLeaderboardRow {
+  rowKey: string;
+  /** true when this row aggregates multiple campaigns (e.g. CID rollup). */
+  isGroup: boolean;
+  displayName: string;
+  subLabel: string | null;
+  cid: string | null;
+  locationId: string | null;
+  campaignKey: string | null;
+  pipelineName: string | null;
+  statuses: CampaignStatusLabel[];
+  included: boolean;
+  errorMessage: string | null;
+  totals: Omit<ClientCampaignMonth, "monthKey">;
+  months: ClientCampaignMonth[];
+  children: ClientCampaignSummary[];
 }

@@ -1,17 +1,15 @@
 /**
  * Builds the payload served to the agency dashboard from a stored snapshot.
  *
- * Responsibilities:
- *   - Pull the snapshot row, its per-location-per-month rows, and the client roster.
- *   - Compute agency-level aggregates (totals + simple-average rates + weighted rates).
- *   - Compute per-location 13-month series and latest-month benchmark stats.
- *   - Return a JSON-friendly shape the React UI can render without further math.
+ * Grain: one entry per CAMPAIGN (a.k.a. per sheet row). A location with
+ * ACTIVE + 2ND CMPN contributes two CampaignSummary objects. The UI decides
+ * whether to display them grouped by CID (with an accordion) or flat.
  *
  * Averages policy:
- *   - "Simple average" = mean of each client's per-client rate. This is the
- *     headline number for cross-client comparisons (each client counted once).
- *   - "Weighted average" = sum(numerator) / sum(denominator) across clients.
- *     Shown alongside as the agency-wide "true" rate for totals context.
+ *   - "Simple average" = mean of each campaign's per-month rate. Each
+ *     campaign counted once per month.
+ *   - "Weighted average" = sum(numerator) / sum(denominator) across
+ *     campaigns. Shown as context.
  */
 
 import { getMonthsBack } from "@/lib/date-ranges";
@@ -19,12 +17,13 @@ import type { FunnelMetrics } from "@/lib/funnel-metrics";
 import {
   getLatestCompleteSnapshot,
   getSnapshotById,
-  listClients,
-  listSnapshotLocationMonths,
-  type AgencyClientRecord,
-  type AgencyLocationMonth,
+  listCampaigns,
+  listSnapshotCampaignMonths,
+  type AgencyCampaignRecord,
+  type AgencyCampaignMonth,
   type AgencySnapshot,
 } from "@/lib/agency-rollup-store";
+import type { CampaignStatus } from "@/lib/agency-clients";
 
 export type MetricKey =
   | "leads"
@@ -66,7 +65,7 @@ export interface MonthTotals {
   roas: number | null;
 }
 
-export interface LocationMonthly {
+export interface CampaignMonthly {
   monthKey: string;
   leads: number;
   totalAppts: number;
@@ -84,24 +83,32 @@ export interface LocationMonthly {
   roas: number | null;
 }
 
-export interface LocationSummary {
+export interface CampaignSummary {
+  /** `${locationId}:${pipelineKeywordOrStatus}` — unique across the agency. */
+  campaignKey: string;
   locationId: string;
+  status: CampaignStatus;
   cid: string | null;
   businessName: string;
   ownerName: string | null;
-  statuses: string[];
+  pipelineId: string | null;
   pipelineName: string | null;
+  pipelineKeyword: string | null;
+  campaignKeyword: string | null;
+  adAccountId: string | null;
   included: boolean;
+  /** When not included: "skipped" or "error" plus a reason. */
   errorMessage: string | null;
-  totals: Omit<LocationMonthly, "monthKey">;
-  latestMonth: LocationMonthly | null;
-  months: LocationMonthly[];
+  needsSetupReason: string | null;
+  totals: Omit<CampaignMonthly, "monthKey">;
+  latestMonth: CampaignMonthly | null;
+  months: CampaignMonthly[];
 }
 
 export interface AgencyRollupView {
   snapshot: AgencySnapshot;
   months: MonthTotals[];
-  locations: LocationSummary[];
+  campaigns: CampaignSummary[];
 }
 
 interface MonthlyAccum {
@@ -137,11 +144,11 @@ function average(values: number[]): number | null {
   return Math.round((sum / values.length) * 10) / 10;
 }
 
-function buildLocationMonth(
+function buildCampaignMonth(
   monthKey: string,
   metrics: FunnelMetrics | null,
   adSpend: number
-): LocationMonthly {
+): CampaignMonthly {
   const leads = metrics?.leads ?? 0;
   const totalAppts = metrics?.totalAppts ?? 0;
   const showed = metrics?.showed ?? 0;
@@ -177,9 +184,9 @@ function buildLocationMonth(
   };
 }
 
-function sumLocationMonthly(
-  months: LocationMonthly[]
-): Omit<LocationMonthly, "monthKey"> {
+function sumCampaignMonthly(
+  months: CampaignMonthly[]
+): Omit<CampaignMonthly, "monthKey"> {
   const totals = months.reduce(
     (acc, m) => {
       acc.leads += m.leads;
@@ -226,16 +233,16 @@ function sumLocationMonthly(
   };
 }
 
-function displayBusinessName(client: AgencyClientRecord | undefined): string {
-  if (!client) return "Unknown location";
-  if (client.businessName && client.businessName.trim()) return client.businessName;
-  if (client.ownerFirstName || client.ownerLastName) {
-    return [client.ownerFirstName, client.ownerLastName]
+function displayBusinessName(record: AgencyCampaignRecord | undefined): string {
+  if (!record) return "Unknown location";
+  if (record.businessName && record.businessName.trim()) return record.businessName;
+  if (record.ownerFirstName || record.ownerLastName) {
+    return [record.ownerFirstName, record.ownerLastName]
       .filter(Boolean)
       .join(" ")
       .trim();
   }
-  return client.locationId;
+  return record.locationId;
 }
 
 export async function buildAgencyRollupView(
@@ -246,12 +253,14 @@ export async function buildAgencyRollupView(
     : await getLatestCompleteSnapshot();
   if (!snapshot) return null;
 
-  const [clients, locationMonths] = await Promise.all([
-    listClients(),
-    listSnapshotLocationMonths(snapshot.id),
+  const [campaignRecords, campaignMonths] = await Promise.all([
+    listCampaigns(),
+    listSnapshotCampaignMonths(snapshot.id),
   ]);
 
-  const clientById = new Map(clients.map((c) => [c.locationId, c]));
+  const recordByKey = new Map(
+    campaignRecords.map((c) => [c.campaignKey, c])
+  );
   const monthRanges = getMonthsBack(snapshot.monthsCovered);
   const orderedMonthKeys = monthRanges
     .map((m) => ({ monthKey: m.monthKey, startDate: m.startDate, endDate: m.endDate }))
@@ -279,22 +288,22 @@ export async function buildAgencyRollupView(
     ])
   );
 
-  const locationMonthsByLocation = new Map<string, AgencyLocationMonth[]>();
-  for (const row of locationMonths) {
-    const list = locationMonthsByLocation.get(row.locationId) ?? [];
+  const monthsByCampaign = new Map<string, AgencyCampaignMonth[]>();
+  for (const row of campaignMonths) {
+    const list = monthsByCampaign.get(row.campaignKey) ?? [];
     list.push(row);
-    locationMonthsByLocation.set(row.locationId, list);
+    monthsByCampaign.set(row.campaignKey, list);
   }
 
-  const locationSummaries: LocationSummary[] = [];
+  const campaignSummaries: CampaignSummary[] = [];
 
-  for (const [locationId, rows] of locationMonthsByLocation.entries()) {
-    const byKey = new Map<string, AgencyLocationMonth>(
+  for (const [campaignKey, rows] of monthsByCampaign.entries()) {
+    const byKey = new Map<string, AgencyCampaignMonth>(
       rows.map((r) => [r.monthKey, r])
     );
-    const months: LocationMonthly[] = orderedMonthKeys.map(({ monthKey }) => {
+    const months: CampaignMonthly[] = orderedMonthKeys.map(({ monthKey }) => {
       const row = byKey.get(monthKey);
-      return buildLocationMonth(monthKey, row?.metrics ?? null, row?.adSpend ?? 0);
+      return buildCampaignMonth(monthKey, row?.metrics ?? null, row?.adSpend ?? 0);
     });
 
     const anyError = rows.find((r) => r.status !== "ok");
@@ -324,30 +333,75 @@ export async function buildAgencyRollupView(
       }
     }
 
-    const client = clientById.get(locationId);
-    const ownerName = client
-      ? [client.ownerFirstName, client.ownerLastName]
+    const record = recordByKey.get(campaignKey);
+    const ownerName = record
+      ? [record.ownerFirstName, record.ownerLastName]
           .filter(Boolean)
           .join(" ")
           .trim() || null
       : null;
 
-    locationSummaries.push({
-      locationId,
-      cid: client?.cid ?? null,
-      businessName: displayBusinessName(client),
+    campaignSummaries.push({
+      campaignKey,
+      locationId: record?.locationId ?? rows[0]?.locationId ?? "",
+      status: (record?.status ?? "ACTIVE") as CampaignStatus,
+      cid: record?.cid ?? null,
+      businessName: displayBusinessName(record),
       ownerName,
-      statuses: client?.statuses ?? [],
-      pipelineName: client?.pipelineName ?? null,
+      pipelineId: record?.pipelineId ?? null,
+      pipelineName: record?.pipelineName ?? null,
+      pipelineKeyword: record?.pipelineKeyword ?? null,
+      campaignKeyword: record?.campaignKeyword ?? null,
+      adAccountId: record?.adAccountId ?? null,
       included,
       errorMessage: anyError?.errorMessage ?? null,
-      totals: sumLocationMonthly(months),
+      needsSetupReason: record?.needsSetupReason ?? null,
+      totals: sumCampaignMonthly(months),
       latestMonth: months[months.length - 1] ?? null,
       months,
     });
   }
 
-  locationSummaries.sort((a, b) => a.businessName.localeCompare(b.businessName));
+  // Include campaigns that have no month rows yet (edge case — sheet row
+  // added between rollup runs). These show as "needs setup" in the UI.
+  for (const record of campaignRecords) {
+    if (monthsByCampaign.has(record.campaignKey)) continue;
+    const months: CampaignMonthly[] = orderedMonthKeys.map(({ monthKey }) =>
+      buildCampaignMonth(monthKey, null, 0)
+    );
+    const ownerName =
+      [record.ownerFirstName, record.ownerLastName]
+        .filter(Boolean)
+        .join(" ")
+        .trim() || null;
+    campaignSummaries.push({
+      campaignKey: record.campaignKey,
+      locationId: record.locationId,
+      status: record.status,
+      cid: record.cid,
+      businessName: displayBusinessName(record),
+      ownerName,
+      pipelineId: record.pipelineId,
+      pipelineName: record.pipelineName,
+      pipelineKeyword: record.pipelineKeyword,
+      campaignKeyword: record.campaignKeyword,
+      adAccountId: record.adAccountId,
+      included: false,
+      errorMessage: record.needsSetupReason,
+      needsSetupReason: record.needsSetupReason,
+      totals: sumCampaignMonthly(months),
+      latestMonth: months[months.length - 1] ?? null,
+      months,
+    });
+  }
+
+  campaignSummaries.sort((a, b) => {
+    const nameCmp = a.businessName.localeCompare(b.businessName);
+    if (nameCmp !== 0) return nameCmp;
+    // ACTIVE before 2ND CMPN at the same business.
+    if (a.status !== b.status) return a.status === "ACTIVE" ? -1 : 1;
+    return a.campaignKey.localeCompare(b.campaignKey);
+  });
 
   const monthTotals: MonthTotals[] = orderedMonthKeys.map(({ monthKey }) => {
     const bucket = monthlyAccum.get(monthKey)!;
@@ -406,7 +460,7 @@ export async function buildAgencyRollupView(
   return {
     snapshot,
     months: monthTotals,
-    locations: locationSummaries,
+    campaigns: campaignSummaries,
   };
 }
 
@@ -434,8 +488,8 @@ export const METRIC_META: Record<
   roas: { label: "ROAS", kind: "ratio", higherIsBetter: true },
 };
 
-export function getLocationMetricValue(
-  monthly: LocationMonthly,
+export function getCampaignMetricValue(
+  monthly: CampaignMonthly,
   metric: MetricKey
 ): number | null {
   switch (metric) {

@@ -6,10 +6,14 @@ export const dynamic = "force-dynamic";
 
 interface PageProps {
   params: Promise<{ locationId: string }>;
+  searchParams: Promise<{ campaign?: string | string[] }>;
 }
 
-export default async function ClientBenchmarkPage({ params }: PageProps) {
+export default async function ClientBenchmarkPage({ params, searchParams }: PageProps) {
   const { locationId } = await params;
+  const sp = await searchParams;
+  const rawCampaign = sp.campaign;
+  const campaignKey = Array.isArray(rawCampaign) ? rawCampaign[0] : rawCampaign;
   const view = await buildAgencyRollupView();
 
   return (
@@ -24,7 +28,11 @@ export default async function ClientBenchmarkPage({ params }: PageProps) {
           </Link>
         </div>
         {view ? (
-          <ClientBenchmark view={view} locationId={locationId} />
+          <ClientBenchmark
+            view={view}
+            locationId={locationId}
+            campaignKey={campaignKey ?? null}
+          />
         ) : (
           <div className="rounded-2xl border border-white/10 bg-slate-900/40 p-8 text-center text-slate-300">
             <p className="text-lg font-medium">No rollup data yet</p>
