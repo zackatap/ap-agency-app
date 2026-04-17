@@ -36,6 +36,66 @@ interface Props {
   compact?: boolean;
 }
 
+interface SeriesConfig {
+  metric: MetricKey;
+  label: string;
+  color: string;
+}
+
+/**
+ * Metric groupings for the paired line charts. Each group shares a unit
+ * (count / percent / dollar) so a single y-axis works. Colors are reused
+ * across groups but each series within a group is distinct.
+ */
+const CHART_GROUPS: Array<{
+  id: string;
+  title: string;
+  subtitle: string;
+  unit: string;
+  kind: "count" | "money" | "rate" | "ratio";
+  series: SeriesConfig[];
+}> = [
+  {
+    id: "funnel",
+    title: "Funnel volume",
+    subtitle: "Leads, appointments, showed, and closed over time.",
+    unit: "",
+    kind: "count",
+    series: [
+      { metric: "leads", label: "Leads", color: "#818cf8" },
+      { metric: "totalAppts", label: "Appointments", color: "#fbbf24" },
+      { metric: "showed", label: "Showed", color: "#34d399" },
+      { metric: "closed", label: "Closed", color: "#fb7185" },
+    ],
+  },
+  {
+    id: "rates",
+    title: "Conversion rates",
+    subtitle:
+      "Booking / show / close as a percentage of the preceding funnel stage.",
+    unit: "%",
+    kind: "rate",
+    series: [
+      { metric: "bookingRate", label: "Booking rate", color: "#fbbf24" },
+      { metric: "showRate", label: "Show rate", color: "#34d399" },
+      { metric: "closeRate", label: "Close rate", color: "#fb7185" },
+    ],
+  },
+  {
+    id: "cost",
+    title: "Cost per conversion",
+    subtitle:
+      "Spend divided by leads / showed / closed. Lower is better.",
+    unit: "",
+    kind: "money",
+    series: [
+      { metric: "cpl", label: "Cost / Lead", color: "#818cf8" },
+      { metric: "cps", label: "Cost / Show", color: "#34d399" },
+      { metric: "cpClose", label: "Cost / Close", color: "#fb7185" },
+    ],
+  },
+];
+
 function getMonthValue(
   months: ClientCampaignSummary["months"],
   monthKey: string,
@@ -167,15 +227,25 @@ export function ClientBenchmark({ view, locationId, campaignKey, compact }: Prop
     });
   }, [campaign, includedCampaigns, selectedMonthKey]);
 
-  const trendData = useMemo(() => {
+  /**
+   * Build a flat per-month dataset for a Recharts LineChart that contains two
+   * series per metric: `client_<metric>` and `agency_<metric>`. Downstream we
+   * map this to paired solid/dashed lines with a single hue per metric.
+   */
+  const multiSeriesData = useMemo(() => {
     if (!campaign) return [];
-    return view.months.map((m) => ({
-      monthKey: m.monthKey,
-      month: formatMonthLabel(m.monthKey),
-      You: getMonthValue(campaign.months, m.monthKey, focusMetric),
-      "Agency avg": getAgencyAvgForMonth(view.months, m.monthKey, focusMetric),
-    }));
-  }, [campaign, view.months, focusMetric]);
+    return view.months.map((m) => {
+      const row: Record<string, string | number | null> = {
+        monthKey: m.monthKey,
+        month: formatMonthLabel(m.monthKey),
+      };
+      for (const key of METRIC_ORDER) {
+        row[`client_${key}`] = getMonthValue(campaign.months, m.monthKey, key);
+        row[`agency_${key}`] = getAgencyAvgForMonth(view.months, m.monthKey, key);
+      }
+      return row;
+    });
+  }, [campaign, view.months]);
 
   if (campaignsAtLocation.length === 0) {
     return (
@@ -303,87 +373,39 @@ export function ClientBenchmark({ view, locationId, campaignKey, compact }: Prop
         })}
       </section>
 
-      <section className="rounded-2xl border border-white/10 bg-slate-900/30 p-5">
-        <div className="flex flex-wrap items-baseline justify-between gap-3">
-          <div>
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-300">
-              {focusMeta.label} — you vs the agency
-            </h2>
-            <p className="mt-1 text-xs text-slate-400">
-              Your {focusMeta.label.toLowerCase()} over time compared with the
-              agency&apos;s simple average (average across campaigns).
-            </p>
-          </div>
-          <select
-            value={focusMetric}
-            onChange={(e) => setFocusMetric(e.target.value as MetricKey)}
-            className="rounded-lg border border-white/10 bg-slate-950/60 px-2 py-1 text-xs text-slate-200"
-          >
-            {METRIC_ORDER.map((key) => (
-              <option key={key} value={key}>
-                {METRIC_META[key].label}
-              </option>
-            ))}
-          </select>
+      <section className="space-y-4">
+        <div>
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-300">
+            Client vs agency — trends
+          </h2>
+          <p className="mt-1 text-xs text-slate-400">
+            Solid = this client · dashed = agency simple average (each campaign
+            weighted equally). Metrics are grouped so related series share a
+            single y-axis and are easy to compare at a glance.
+          </p>
         </div>
-        <div className="mt-4 h-72 w-full">
-          <ResponsiveContainer>
-            <LineChart
-              data={trendData}
-              margin={{ top: 10, right: 20, bottom: 0, left: 0 }}
-            >
-              <CartesianGrid stroke="rgba(255,255,255,0.05)" vertical={false} />
-              <XAxis dataKey="month" stroke="#94a3b8" fontSize={12} />
-              <YAxis
-                stroke="#94a3b8"
-                fontSize={12}
-                width={60}
-                unit={focusMeta.kind === "rate" ? "%" : ""}
-              />
-              <Tooltip
-                contentStyle={{
-                  backgroundColor: "#0f172a",
-                  border: "1px solid rgba(255,255,255,0.1)",
-                  borderRadius: 8,
-                  fontSize: 12,
-                }}
-                formatter={(value) =>
-                  formatMetricValue(
-                    value == null ? null : Number(value),
-                    focusMeta.kind
-                  )
-                }
-              />
-              <Legend wrapperStyle={{ fontSize: 12, color: "#cbd5e1" }} />
-              <Line
-                type="monotone"
-                dataKey="You"
-                stroke="#fbbf24"
-                strokeWidth={2.5}
-                dot={{ r: 3 }}
-                connectNulls
-              />
-              <Line
-                type="monotone"
-                dataKey="Agency avg"
-                stroke="#94a3b8"
-                strokeDasharray="4 4"
-                strokeWidth={2}
-                dot={false}
-                connectNulls
-              />
-            </LineChart>
-          </ResponsiveContainer>
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+          {CHART_GROUPS.map((group) => (
+            <GroupedComparisonChart
+              key={group.id}
+              title={group.title}
+              subtitle={group.subtitle}
+              unit={group.unit}
+              kind={group.kind}
+              series={group.series}
+              data={multiSeriesData}
+            />
+          ))}
         </div>
       </section>
 
       <section className="rounded-2xl border border-white/10 bg-slate-900/30 p-5">
         <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-300">
-          Where you stand — {focusMeta.label}
+          Where this client stands — {focusMeta.label}
         </h2>
         <p className="mt-1 text-xs text-slate-400">
-          Every dot is one campaign in the selected period. Your position is
-          highlighted in gold.
+          Every dot is one campaign in the selected period. This client&apos;s
+          position is highlighted in gold.
         </p>
         <div className="mt-4">
           <DistributionStrip
@@ -404,7 +426,7 @@ export function ClientBenchmark({ view, locationId, campaignKey, compact }: Prop
             <thead>
               <tr className="bg-slate-900/60 text-left text-xs uppercase tracking-wide text-slate-400">
                 <th className="px-4 py-3">Metric</th>
-                <th className="px-3 py-3 text-right">Your value</th>
+                <th className="px-3 py-3 text-right">Client value</th>
                 <th className="px-3 py-3 text-right">Agency avg</th>
                 <th className="px-3 py-3 text-right">Rank</th>
                 <th className="px-3 py-3 text-right">Percentile</th>
@@ -432,6 +454,103 @@ export function ClientBenchmark({ view, locationId, campaignKey, compact }: Prop
           </table>
         </div>
       </section>
+    </div>
+  );
+}
+
+interface GroupedComparisonChartProps {
+  title: string;
+  subtitle: string;
+  unit: string;
+  kind: "count" | "money" | "rate" | "ratio";
+  series: SeriesConfig[];
+  data: Array<Record<string, string | number | null>>;
+}
+
+/**
+ * A paired-line chart: each configured metric renders as two lines — a solid
+ * line for the client and a dashed, lower-opacity line for the agency
+ * simple average. Shared color per metric makes it easy to pair them up.
+ */
+function GroupedComparisonChart({
+  title,
+  subtitle,
+  unit,
+  kind,
+  series,
+  data,
+}: GroupedComparisonChartProps) {
+  return (
+    <div className="rounded-2xl border border-white/10 bg-slate-900/30 p-4">
+      <div className="mb-3">
+        <h3 className="text-xs font-semibold uppercase tracking-wide text-slate-300">
+          {title}
+        </h3>
+        <p className="mt-0.5 text-[11px] text-slate-500">{subtitle}</p>
+      </div>
+      <div className="h-64 w-full">
+        <ResponsiveContainer>
+          <LineChart
+            data={data}
+            margin={{ top: 10, right: 12, bottom: 0, left: 0 }}
+          >
+            <CartesianGrid
+              stroke="rgba(255,255,255,0.05)"
+              vertical={false}
+            />
+            <XAxis dataKey="month" stroke="#94a3b8" fontSize={11} />
+            <YAxis
+              stroke="#94a3b8"
+              fontSize={11}
+              width={kind === "money" ? 60 : 40}
+              unit={unit}
+            />
+            <Tooltip
+              contentStyle={{
+                backgroundColor: "#0f172a",
+                border: "1px solid rgba(255,255,255,0.1)",
+                borderRadius: 8,
+                fontSize: 12,
+              }}
+              formatter={(value) =>
+                formatMetricValue(value == null ? null : Number(value), kind)
+              }
+            />
+            <Legend
+              wrapperStyle={{ fontSize: 11, color: "#cbd5e1" }}
+              iconSize={8}
+            />
+            {series.map((s) => (
+              <Line
+                key={`client-${s.metric}`}
+                type="monotone"
+                dataKey={`client_${s.metric}`}
+                name={`Client · ${s.label}`}
+                stroke={s.color}
+                strokeWidth={2.25}
+                dot={{ r: 2.5 }}
+                connectNulls
+                isAnimationActive={false}
+              />
+            ))}
+            {series.map((s) => (
+              <Line
+                key={`agency-${s.metric}`}
+                type="monotone"
+                dataKey={`agency_${s.metric}`}
+                name={`Agency · ${s.label}`}
+                stroke={s.color}
+                strokeDasharray="4 4"
+                strokeWidth={1.5}
+                strokeOpacity={0.55}
+                dot={false}
+                connectNulls
+                isAnimationActive={false}
+              />
+            ))}
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
     </div>
   );
 }
