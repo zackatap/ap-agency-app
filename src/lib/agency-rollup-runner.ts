@@ -440,6 +440,18 @@ interface PipelineResolution {
   reason: string;
 }
 
+/**
+ * Pipelines whose names contain ❌ are treated as explicitly retired by the
+ * client and should never be chosen — even if they match the column I keyword.
+ * This lets us keep the old/archived pipeline around in GHL for historical
+ * reference without tripping up the rollup.
+ */
+const RETIRED_MARKER = "\u274c"; // ❌
+
+function isRetired(pipeline: GHLPipeline): boolean {
+  return (pipeline.name ?? "").includes(RETIRED_MARKER);
+}
+
 function resolvePipeline(
   campaign: ActiveCampaign,
   pipelines: GHLPipeline[]
@@ -451,10 +463,18 @@ function resolvePipeline(
     };
   }
 
+  const eligible = pipelines.filter((p) => !isRetired(p));
+  if (eligible.length === 0) {
+    return {
+      pipeline: null,
+      reason: `All ${pipelines.length} pipelines at this location are marked with ❌.`,
+    };
+  }
+
   const keyword = campaign.pipelineKeyword?.trim();
   if (keyword) {
     const kw = keyword.toLowerCase();
-    const matches = pipelines.filter((p) =>
+    const matches = eligible.filter((p) =>
       (p.name ?? "").toLowerCase().includes(kw)
     );
     if (matches.length === 1) {
@@ -463,7 +483,7 @@ function resolvePipeline(
     if (matches.length > 1) {
       return {
         pipeline: null,
-        reason: `Column I "${keyword}" matched ${matches.length} pipelines: ${matches
+        reason: `Column I "${keyword}" matched ${matches.length} pipelines (excluding ❌): ${matches
           .map((p) => p.name)
           .join(", ")}. Make the keyword more specific.`,
       };
@@ -471,16 +491,16 @@ function resolvePipeline(
     // no match with keyword — fall through to single-pipeline fallback
   }
 
-  if (pipelines.length === 1) {
-    return { pipeline: pipelines[0], reason: "" };
+  if (eligible.length === 1) {
+    return { pipeline: eligible[0], reason: "" };
   }
 
-  const available = pipelines.map((p) => p.name).join(", ");
+  const available = eligible.map((p) => p.name).join(", ");
   return {
     pipeline: null,
     reason: keyword
-      ? `No GHL pipeline name contains "${keyword}". Available: ${available}.`
-      : `Location has ${pipelines.length} pipelines and column I is empty. Available: ${available}.`,
+      ? `No GHL pipeline name contains "${keyword}" (after excluding ❌). Available: ${available}.`
+      : `Location has ${eligible.length} pipelines and column I is empty. Available: ${available}.`,
   };
 }
 
