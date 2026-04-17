@@ -261,6 +261,15 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
 
   const step1Title = `Step 1) ${activeCampaign.label} Settings`;
 
+  const ghlAppBase = (
+    process.env.NEXT_PUBLIC_GHL_FUNNEL_APP_BASE?.trim() ||
+    process.env.NEXT_PUBLIC_GHL_WORKFLOW_APP_BASE?.trim() ||
+    "https://app.automatedpractice.com"
+  ).replace(/\/$/, "");
+  const adManagerUrl = locationId
+    ? `${ghlAppBase}/v2/location/${encodeURIComponent(locationId)}/marketing/ad-manager/settings?type=meta&tab=conversions`
+    : null;
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-slate-100">
       <Script
@@ -376,6 +385,32 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
                     />
                   </div>
                 </div>
+
+                {isBase && (
+                  <div className="mt-3 rounded-xl border border-white/10 bg-slate-950/40 p-3">
+                    {adManagerUrl ? (
+                      <a
+                        href={adManagerUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="flex w-full flex-col rounded-xl border border-white/10 px-3 py-2.5 text-left transition hover:bg-white/5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400/50"
+                      >
+                        <span className="block text-sm font-semibold text-white">
+                          Ad Manager Settings
+                        </span>
+                        <span className="mt-0.5 flex items-center gap-1.5 text-xs text-slate-400">
+                          Open in new tab
+                          <IconExternalLink className="text-slate-400" />
+                        </span>
+                      </a>
+                    ) : (
+                      <p className="text-xs text-slate-400">
+                        Open this app from inside GHL to get your Ad Manager
+                        Settings link.
+                      </p>
+                    )}
+                  </div>
+                )}
               </div>
             </details>
 
