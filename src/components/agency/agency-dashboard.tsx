@@ -19,6 +19,11 @@ import { DistributionStrip } from "./distribution-strip";
 import { LeaderboardTable } from "./leaderboard-table";
 import { RefreshControls } from "./refresh-controls";
 import { ClientBenchmark } from "./client-benchmark";
+import {
+  aggregateCampaignsOverMonths,
+  buildExcludedSet,
+  type ExclusionLevel,
+} from "./data-quality";
 
 interface Props {
   initial: ClientRollupView | null;
@@ -185,15 +190,28 @@ const PERIOD_OPTIONS: Array<{ value: PeriodSize; label: string }> = [
   { value: 12, label: "Last 12 months" },
 ];
 
+interface RateAggregate {
+  bookingRate: number | null;
+  showRate: number | null;
+  closeRate: number | null;
+  cpl: number | null;
+  cps: number | null;
+  cpClose: number | null;
+  roas: number | null;
+}
+
 /**
- * Volume metrics roll up as a sum across campaigns; rate metrics use the
- * aggregated pool (weighted average). Ad-efficiency metrics (CPL/CPS/CPClose)
- * and ROAS are derived from the aggregated totals. The `higherIsBetter` flag
- * tells the Kpi component whether ▲ should be green or red.
+ * Count-sum metrics (leads/appts/showed/closed/value/spend) come from the
+ * full pool — "total leads across the agency" must always include every
+ * campaign so the numbers don't quietly shrink when the hygiene toggle is
+ * flipped. Rate/cost-efficiency metrics pull from `rates`, which is
+ * recomputed from only the trusted (non-excluded) campaigns.
  */
 function buildKpiCards(
   current: WindowAggregate,
-  prior: WindowAggregate
+  prior: WindowAggregate,
+  currentRates: RateAggregate,
+  priorRates: RateAggregate
 ): KpiProps[] {
   return [
     {
@@ -226,29 +244,29 @@ function buildKpiCards(
     },
     {
       label: "Booking rate",
-      value: formatMetricValue(current.bookingRate, "rate"),
-      diff: delta(current.bookingRate, prior.bookingRate),
+      value: formatMetricValue(currentRates.bookingRate, "rate"),
+      diff: delta(currentRates.bookingRate, priorRates.bookingRate),
       better: "up",
       kind: "rate",
     },
     {
       label: "Show rate",
-      value: formatMetricValue(current.showRate, "rate"),
-      diff: delta(current.showRate, prior.showRate),
+      value: formatMetricValue(currentRates.showRate, "rate"),
+      diff: delta(currentRates.showRate, priorRates.showRate),
       better: "up",
       kind: "rate",
     },
     {
       label: "Close rate",
-      value: formatMetricValue(current.closeRate, "rate"),
-      diff: delta(current.closeRate, prior.closeRate),
+      value: formatMetricValue(currentRates.closeRate, "rate"),
+      diff: delta(currentRates.closeRate, priorRates.closeRate),
       better: "up",
       kind: "rate",
     },
     {
       label: "ROAS",
-      value: formatMetricValue(current.roas, "ratio"),
-      diff: delta(current.roas, prior.roas),
+      value: formatMetricValue(currentRates.roas, "ratio"),
+      diff: delta(currentRates.roas, priorRates.roas),
       better: "up",
       kind: "ratio",
     },
@@ -268,20 +286,50 @@ function buildKpiCards(
     },
     {
       label: "Cost / Lead",
-      value: formatMetricValue(current.cpl, "money"),
-      diff: delta(current.cpl, prior.cpl),
+      value: formatMetricValue(currentRates.cpl, "money"),
+      diff: delta(currentRates.cpl, priorRates.cpl),
       better: "down",
       kind: "money",
     },
     {
       label: "Cost / Close",
-      value: formatMetricValue(current.cpClose, "money"),
-      diff: delta(current.cpClose, prior.cpClose),
+      value: formatMetricValue(currentRates.cpClose, "money"),
+      diff: delta(currentRates.cpClose, priorRates.cpClose),
       better: "down",
       kind: "money",
     },
   ];
 }
+
+const EXCLUSION_OPTIONS: Array<{
+  value: ExclusionLevel;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "off",
+    label: "Off",
+    description: "Every campaign counts toward agency averages.",
+  },
+  {
+    value: "strict",
+    label: "Strict",
+    description:
+      "Only exclude campaigns with <5% funnel movement or 80%+ of open appts untouched for 21+ days.",
+  },
+  {
+    value: "moderate",
+    label: "Moderate",
+    description:
+      "Exclude campaigns with <25% funnel movement or >50% stale-open backlog.",
+  },
+  {
+    value: "aggressive",
+    label: "Aggressive",
+    description:
+      "Exclude campaigns with <50% funnel movement or >30% stale-open backlog.",
+  },
+];
 
 export function AgencyDashboard({ initial, initialLatest }: Props) {
   const [view, setView] = useState<ClientRollupView | null>(initial);
@@ -292,6 +340,7 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
   const [distributionMetric, setDistributionMetric] = useState<MetricKey>("closed");
   const [ratesMode, setRatesMode] = useState<"simple" | "weighted">("simple");
   const [compareCampaignKey, setCompareCampaignKey] = useState<string | "">("");
+  const [exclusionLevel, setExclusionLevel] = useState<ExclusionLevel>("moderate");
   const [currentLatest, setCurrentLatest] = useState<ClientAgencySnapshot | null>(
     initialLatest
   );
@@ -343,6 +392,22 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
     [campaigns]
   );
 
+  // Data-hygiene exclusion: some clients don't move appts forward on their
+  // opportunity board. They're included in the total counts (they still
+  // produce leads/appts) but excluded from rate-based metrics/averages.
+  const excludedMap = useMemo(
+    () => buildExcludedSet(includedCampaigns, exclusionLevel),
+    [includedCampaigns, exclusionLevel]
+  );
+  const excludedKeys = useMemo(
+    () => new Set(excludedMap.keys()),
+    [excludedMap]
+  );
+  const trustedCampaigns = useMemo(
+    () => includedCampaigns.filter((c) => !excludedKeys.has(c.campaignKey)),
+    [includedCampaigns, excludedKeys]
+  );
+
   const months = view?.months ?? [];
 
   const { current: currentSlice, prior: priorSlice } = useMemo(
@@ -354,9 +419,34 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
     [currentSlice]
   );
   const priorAggregate = useMemo(() => aggregateWindow(priorSlice), [priorSlice]);
+
+  // Rate KPIs are pooled over the TRUSTED campaign subset; count sums stay
+  // on the full pool so "Total Leads" always matches the underlying data.
+  const currentRateAggregate = useMemo(
+    () =>
+      aggregateCampaignsOverMonths(
+        trustedCampaigns,
+        currentSlice.map((m) => m.monthKey)
+      ),
+    [trustedCampaigns, currentSlice]
+  );
+  const priorRateAggregate = useMemo(
+    () =>
+      aggregateCampaignsOverMonths(
+        trustedCampaigns,
+        priorSlice.map((m) => m.monthKey)
+      ),
+    [trustedCampaigns, priorSlice]
+  );
   const kpiCards = useMemo(
-    () => buildKpiCards(currentAggregate, priorAggregate),
-    [currentAggregate, priorAggregate]
+    () =>
+      buildKpiCards(
+        currentAggregate,
+        priorAggregate,
+        currentRateAggregate,
+        priorRateAggregate
+      ),
+    [currentAggregate, priorAggregate, currentRateAggregate, priorRateAggregate]
   );
 
   const compareCampaign = useMemo(
@@ -435,6 +525,14 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
                       campaigns reporting
                     </>
                   )}
+                  {excludedKeys.size > 0 && (
+                    <>
+                      {" · "}
+                      <span className="text-amber-300">
+                        {excludedKeys.size} excluded from rates
+                      </span>
+                    </>
+                  )}
                 </div>
               </div>
               <div className="flex items-center gap-2 rounded-lg bg-slate-800/50 p-1 text-xs">
@@ -447,6 +545,37 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
                         ? "bg-indigo-600 text-white"
                         : "text-slate-300 hover:text-white"
                     }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border border-white/10 bg-slate-900/30 px-4 py-3 text-xs text-slate-300">
+              <div className="flex flex-wrap items-baseline gap-2">
+                <span className="font-semibold uppercase tracking-wide text-slate-400">
+                  Data hygiene filter
+                </span>
+                <span className="text-slate-500">
+                  {
+                    EXCLUSION_OPTIONS.find((o) => o.value === exclusionLevel)
+                      ?.description
+                  }
+                </span>
+              </div>
+              <div className="flex items-center gap-1 rounded-lg bg-slate-800/50 p-1">
+                {EXCLUSION_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    onClick={() => setExclusionLevel(opt.value)}
+                    className={`rounded-md px-3 py-1 transition-colors ${
+                      exclusionLevel === opt.value
+                        ? "bg-indigo-600 text-white"
+                        : "text-slate-300 hover:text-white"
+                    }`}
+                    title={opt.description}
                   >
                     {opt.label}
                   </button>
@@ -515,6 +644,7 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
                   view={view}
                   locationId={compareCampaign.locationId}
                   campaignKey={compareCampaign.campaignKey}
+                  excludedKeys={excludedKeys}
                   compact
                 />
               </div>
@@ -619,6 +749,7 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
                 campaigns={includedCampaigns}
                 metric={distributionMetric}
                 monthKey={selectedMonthKey}
+                excludedKeys={excludedKeys}
                 highlightedCampaignKey={
                   compareCampaign?.campaignKey ?? undefined
                 }
@@ -634,6 +765,7 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
             <LeaderboardTable
               campaigns={includedCampaigns}
               monthKey={selectedMonthKey}
+              excludedKeys={excludedKeys}
             />
           </section>
 

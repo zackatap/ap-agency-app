@@ -48,6 +48,14 @@ export interface ClientCampaignMonth {
   roas: number | null;
 }
 
+export interface ClientCampaignDataQuality {
+  movementRatio: number | null;
+  openCount: number | null;
+  staleOpenCount: number | null;
+  staleOpenPct: number | null;
+  lastManualStageChangeAt: string | null;
+}
+
 export interface ClientCampaignSummary {
   campaignKey: string;
   locationId: string;
@@ -63,6 +71,7 @@ export interface ClientCampaignSummary {
   included: boolean;
   errorMessage: string | null;
   needsSetupReason: string | null;
+  dataQuality: ClientCampaignDataQuality;
   totals: Omit<ClientCampaignMonth, "monthKey">;
   latestMonth: ClientCampaignMonth | null;
   months: ClientCampaignMonth[];

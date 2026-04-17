@@ -50,7 +50,18 @@ export function getRowMetric(
 }
 
 export interface Distribution {
+  /**
+   * Peer-set values that drive percentile / average / IQR. Campaigns flagged
+   * as excluded (data hygiene filter) do NOT appear here — their numbers
+   * would skew the summary.
+   */
   values: Array<{ key: string; value: number }>;
+  /**
+   * Every campaign's raw value, including excluded ones. The UI plots these
+   * as grayed-out dots so the user can still see where lazy-updater clients
+   * land relative to the peer set. Always a superset of `values`.
+   */
+  allValues: Array<{ key: string; value: number; excluded: boolean }>;
   simpleAverage: number | null;
   median: number | null;
   min: number | null;
@@ -72,15 +83,24 @@ function percentileValue(sorted: number[], p: number): number | null {
 export function buildDistribution(
   campaigns: ClientCampaignSummary[],
   metric: MetricKey,
-  monthKey: string | "total"
+  monthKey: string | "total",
+  excludedKeys?: ReadonlySet<string>
 ): Distribution {
-  const values = campaigns
+  const allValues = campaigns
     .filter((c) => c.included)
     .map((c) => ({
       key: c.campaignKey,
       value: getCampaignMetric(c, metric, monthKey),
+      excluded: excludedKeys?.has(c.campaignKey) ?? false,
     }))
-    .filter((v): v is { key: string; value: number } => v.value != null);
+    .filter(
+      (v): v is { key: string; value: number; excluded: boolean } =>
+        v.value != null
+    );
+
+  const values = allValues
+    .filter((v) => !v.excluded)
+    .map((v) => ({ key: v.key, value: v.value }));
 
   const sorted = values.map((v) => v.value).sort((a, b) => a - b);
   const simpleAverage =
@@ -90,6 +110,7 @@ export function buildDistribution(
 
   return {
     values,
+    allValues,
     simpleAverage,
     median: percentileValue(sorted, 0.5),
     min: sorted.length ? sorted[0] : null,

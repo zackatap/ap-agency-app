@@ -265,13 +265,22 @@ export async function getOpportunityCountsByStage(
 /**
  * Fetch all opportunities once, bucket by month. Used by monthly API to avoid
  * N×months API calls (which causes 429). Single pipeline fetch, aggregate in memory.
+ *
+ * Optional `onOpp` callback fires for EVERY opportunity (regardless of whether
+ * it falls inside the monthRanges window). The callback receives the raw opp
+ * plus the resolved stage name so the caller can compute pipeline-wide signals
+ * (e.g. stale-open backlog, last manual activity) without making a second API
+ * call. Emitted once per deduped opportunity id.
  */
 export async function getOpportunityCountsByStagePerMonth(
   locationId: string,
   pipeline: GHLPipeline,
   accessToken: string,
   monthRanges: Array<{ monthKey: string; startDate: string; endDate: string }>,
-  attributionMode: AttributionMode = "lastUpdated"
+  attributionMode: AttributionMode = "lastUpdated",
+  opts?: {
+    onOpp?: (opp: GHLOpportunity, stageName: string) => void;
+  }
 ): Promise<
   Array<{
     monthKey: string;
@@ -343,6 +352,22 @@ export async function getOpportunityCountsByStagePerMonth(
       if (seenOpp.has(opp.id)) continue;
       seenOpp.add(opp.id);
 
+      // Resolve stage name up-front so the quality callback can see it even
+      // for won opps (won collapses to STATUS_WON_KEY in bucketing, but the
+      // caller might want the real stage name for its own signals).
+      const resolvedStageName =
+        opp.stageName ??
+        (opp.pipelineStageId
+          ? stageIdToName.get(opp.pipelineStageId as string)
+          : null) ??
+        (opp.pipelineStageId as string) ??
+        "Unknown";
+
+      // Fire the quality callback unconditionally — it runs regardless of
+      // whether the opp falls inside the monthRanges window (stale-open
+      // backlog counts opps that may predate the window, for example).
+      opts?.onOpp?.(opp, resolvedStageName);
+
       const dateStr = getOpportunityAttributionLocalDate(opp, attributionMode);
       if (dateStr) {
         if (!minDateInPage || dateStr < minDateInPage) minDateInPage = dateStr;
@@ -362,15 +387,10 @@ export async function getOpportunityCountsByStagePerMonth(
         bucket.counts[STATUS_WON_KEY] = (bucket.counts[STATUS_WON_KEY] ?? 0) + 1;
         bucket.values[STATUS_WON_KEY] = (bucket.values[STATUS_WON_KEY] ?? 0) + val;
       } else {
-        const stageName =
-          opp.stageName ??
-          (opp.pipelineStageId
-            ? stageIdToName.get(opp.pipelineStageId as string)
-            : null) ??
-          (opp.pipelineStageId as string) ??
-          "Unknown";
-        bucket.counts[stageName] = (bucket.counts[stageName] ?? 0) + 1;
-        bucket.values[stageName] = (bucket.values[stageName] ?? 0) + val;
+        bucket.counts[resolvedStageName] =
+          (bucket.counts[resolvedStageName] ?? 0) + 1;
+        bucket.values[resolvedStageName] =
+          (bucket.values[resolvedStageName] ?? 0) + val;
       }
     }
 

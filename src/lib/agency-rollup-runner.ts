@@ -29,9 +29,14 @@ import { getToken } from "@/lib/oauth-tokens";
 import {
   getPipelines,
   getOpportunityCountsByStagePerMonth,
+  type GHLOpportunity,
   type GHLPipeline,
 } from "@/lib/ghl-oauth";
-import { calculateFunnelMetrics, type FunnelMetrics } from "@/lib/funnel-metrics";
+import {
+  calculateFunnelMetrics,
+  getEffectiveMapping,
+  type FunnelMetrics,
+} from "@/lib/funnel-metrics";
 import { getMonthsBack } from "@/lib/date-ranges";
 import { getLocationSettings } from "@/lib/location-settings";
 import {
@@ -57,6 +62,155 @@ import {
 
 const ROLLUP_CONCURRENCY = 6;
 const DEFAULT_MONTHS = 13;
+
+/**
+ * Data-hygiene thresholds.
+ *
+ * STALE_OPEN_DAYS: an opportunity that is currently "open" in a Requested or
+ * Confirmed (automated) stage but hasn't had its stage touched in this many
+ * days is almost certainly left behind by a client who isn't working the
+ * board anymore.
+ *
+ * MOVEMENT_GRACE_DAYS: exclude any month whose endDate is within this many
+ * days of "now" when computing movement ratio — recent appointments
+ * legitimately haven't been marked showed/no-show yet and shouldn't count
+ * against the client.
+ */
+const STALE_OPEN_DAYS = 21;
+const MOVEMENT_GRACE_DAYS = 14;
+
+interface CampaignQualitySignals {
+  movementRatio: number | null;
+  openCount: number | null;
+  staleOpenCount: number | null;
+  staleOpenPct: number | null;
+  lastManualStageChangeAt: string | null;
+}
+
+const OPEN_AUTO_STAGES = new Set(["requested", "confirmed", "lead"]);
+const MANUAL_STAGES = new Set(["showed", "noShow", "closed"]);
+
+function parseIsoTimestamp(raw: unknown): number | null {
+  if (raw == null) return null;
+  if (typeof raw === "number") return raw;
+  if (typeof raw !== "string") return null;
+  const t = Date.parse(raw);
+  return Number.isFinite(t) ? t : null;
+}
+
+function extractLastStageChange(opp: GHLOpportunity): number | null {
+  const record = opp as Record<string, unknown>;
+  const candidates = [
+    opp.lastStageChangeAt,
+    record.last_stage_change_at,
+    opp.lastStatusChangeAt,
+    record.last_status_change_at,
+    opp.dateUpdated,
+    record.date_updated,
+    record.updated_at,
+  ];
+  for (const c of candidates) {
+    const t = parseIsoTimestamp(c);
+    if (t != null) return t;
+  }
+  return null;
+}
+
+/**
+ * Accumulates per-pipeline data-quality signals as we iterate opportunities.
+ * One instance is created per campaign (per pipeline fetch), fed via the
+ * onOpp callback on getOpportunityCountsByStagePerMonth.
+ */
+class QualityAccumulator {
+  private openCount = 0;
+  private staleOpenCount = 0;
+  private lastManualStageChangeMs: number | null = null;
+  private readonly nowMs = Date.now();
+  private readonly staleCutoffMs = this.nowMs - STALE_OPEN_DAYS * 86400_000;
+
+  constructor(
+    private readonly customMappings?: Parameters<
+      typeof getEffectiveMapping
+    >[1]
+  ) {}
+
+  accept = (opp: GHLOpportunity, stageName: string): void => {
+    const mapping = getEffectiveMapping(stageName, this.customMappings);
+    if (!mapping) return;
+
+    const status = typeof opp.status === "string" ? opp.status.toLowerCase() : "";
+    const isOpen = status === "" || status === "open";
+
+    // Current stale-open backlog: opps sitting in automated stages without
+    // being moved forward, regardless of when they were created.
+    if (isOpen && OPEN_AUTO_STAGES.has(mapping)) {
+      this.openCount += 1;
+      const lastChange = extractLastStageChange(opp);
+      if (lastChange != null && lastChange < this.staleCutoffMs) {
+        this.staleOpenCount += 1;
+      }
+    }
+
+    // Most recent sign the client actually touched a manual stage. Used as
+    // a secondary signal — a client who hasn't updated showed/closed in
+    // months is almost certainly producing stale rate metrics.
+    if (MANUAL_STAGES.has(mapping)) {
+      const lastChange = extractLastStageChange(opp);
+      if (lastChange != null) {
+        if (
+          this.lastManualStageChangeMs == null ||
+          lastChange > this.lastManualStageChangeMs
+        ) {
+          this.lastManualStageChangeMs = lastChange;
+        }
+      }
+    }
+  };
+
+  finalize(movementRatio: number | null): CampaignQualitySignals {
+    const staleOpenPct =
+      this.openCount > 0 ? this.staleOpenCount / this.openCount : null;
+    return {
+      movementRatio,
+      openCount: this.openCount,
+      staleOpenCount: this.staleOpenCount,
+      staleOpenPct,
+      lastManualStageChangeAt:
+        this.lastManualStageChangeMs != null
+          ? new Date(this.lastManualStageChangeMs).toISOString()
+          : null,
+    };
+  }
+}
+
+/**
+ * Movement ratio = (showed + noShow + closed) / (requested + confirmed +
+ * showed + noShow + closed) across all "aged" months in the window. Months
+ * whose endDate falls within MOVEMENT_GRACE_DAYS of today are excluded so
+ * we don't penalize legitimately-in-flight appointments. Returns null when
+ * there's not enough signal (no appointments at all in aged months).
+ */
+function computeMovementRatio(
+  monthRows: Array<{
+    endDate: string;
+    metrics: FunnelMetrics;
+  }>
+): number | null {
+  const cutoffMs = Date.now() - MOVEMENT_GRACE_DAYS * 86400_000;
+  let movedPast = 0;
+  let totalReached = 0;
+  for (const row of monthRows) {
+    const endMs = Date.parse(row.endDate);
+    if (!Number.isFinite(endMs) || endMs > cutoffMs) continue;
+    const m = row.metrics;
+    const reached = m.requested + m.confirmed + m.showed + m.noShow + m.closed;
+    if (reached <= 0) continue;
+    totalReached += reached;
+    movedPast += m.showed + m.noShow + m.closed;
+  }
+  if (totalReached <= 0) return null;
+  return movedPast / totalReached;
+}
 
 export interface StartRollupParams {
   monthsCovered?: number;
@@ -324,12 +478,17 @@ async function processLocation(args: {
   ]);
 
   // Cache opportunity counts per pipeline: two campaigns pointing at the same
-  // pipeline (uncommon but possible) only fetch once.
+  // pipeline (uncommon but possible) only fetch once. The cache also holds
+  // the quality accumulator that was fed during the fetch so callers get
+  // both results in one shot.
   const oppCountsCache = new Map<
     string,
-    Promise<
-      Awaited<ReturnType<typeof getOpportunityCountsByStagePerMonth>>
-    >
+    Promise<{
+      perMonth: Awaited<
+        ReturnType<typeof getOpportunityCountsByStagePerMonth>
+      >;
+      quality: QualityAccumulator;
+    }>
   >();
 
   for (const campaign of campaignsAtLocation) {
@@ -359,16 +518,18 @@ async function processLocation(args: {
 
     let oppFetch = oppCountsCache.get(pipeline.id);
     if (!oppFetch) {
+      const quality = new QualityAccumulator(customMappings);
       oppFetch = getOpportunityCountsByStagePerMonth(
         locationId,
         pipeline,
         stored.access_token,
         monthRanges,
-        attributionMode
-      );
+        attributionMode,
+        { onOpp: quality.accept }
+      ).then((perMonth) => ({ perMonth, quality }));
       oppCountsCache.set(pipeline.id, oppFetch);
     }
-    const perMonth = await oppFetch;
+    const { perMonth, quality } = await oppFetch;
 
     const monthKeys = monthRanges.map((m) => m.monthKey);
     const configuredAdSpend = settings?.adSpend?.[pipeline.id] ?? {};
@@ -398,6 +559,8 @@ async function processLocation(args: {
       };
     });
 
+    const qualitySignals = quality.finalize(computeMovementRatio(monthRows));
+
     await upsertCampaigns([
       {
         campaignKey: campaign.campaignKey,
@@ -413,6 +576,7 @@ async function processLocation(args: {
         pipelineName: pipeline.name,
         adAccountId: campaign.adAccountId,
         needsSetupReason: null,
+        ...qualitySignals,
       },
     ]);
 
@@ -600,6 +764,11 @@ async function upsertCampaignWithoutPipeline(
       pipelineName: null,
       adAccountId: campaign.adAccountId,
       needsSetupReason: reason,
+      movementRatio: null,
+      openCount: null,
+      staleOpenCount: null,
+      staleOpenPct: null,
+      lastManualStageChangeAt: null,
     },
   ]);
 }

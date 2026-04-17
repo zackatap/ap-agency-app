@@ -34,6 +34,12 @@ interface Props {
   campaignKey?: string | null;
   /** Hide the header block (used when embedding inside the location dashboard) */
   compact?: boolean;
+  /**
+   * Peer campaigns flagged by the data-hygiene filter. Ranks, percentiles,
+   * and peer-averages are computed over the trusted set; excluded campaigns
+   * still appear on the distribution strip but drawn gray.
+   */
+  excludedKeys?: ReadonlySet<string>;
 }
 
 interface SeriesConfig {
@@ -160,7 +166,13 @@ function getAgencyAvgForMonth(
   }
 }
 
-export function ClientBenchmark({ view, locationId, campaignKey, compact }: Props) {
+export function ClientBenchmark({
+  view,
+  locationId,
+  campaignKey,
+  compact,
+  excludedKeys,
+}: Props) {
   const campaignsAtLocation = useMemo(
     () => view.campaigns.filter((c) => c.locationId === locationId),
     [view.campaigns, locationId]
@@ -221,7 +233,12 @@ export function ClientBenchmark({ view, locationId, campaignKey, compact }: Prop
   const rankSummary = useMemo(() => {
     if (!campaign) return [];
     return METRIC_ORDER.map((key) => {
-      const dist = buildDistribution(includedCampaigns, key, selectedMonthKey);
+      const dist = buildDistribution(
+        includedCampaigns,
+        key,
+        selectedMonthKey,
+        excludedKeys
+      );
       const rank = computeRank(dist, campaign.campaignKey, key);
       const meta = METRIC_META[key];
       const value =
@@ -237,7 +254,10 @@ export function ClientBenchmark({ view, locationId, campaignKey, compact }: Prop
         average: dist.simpleAverage,
       };
     });
-  }, [campaign, includedCampaigns, selectedMonthKey]);
+  }, [campaign, includedCampaigns, selectedMonthKey, excludedKeys]);
+
+  const isClientExcluded =
+    campaign != null && excludedKeys != null && excludedKeys.has(campaign.campaignKey);
 
   /**
    * Build a flat per-month dataset for a Recharts LineChart that contains two
@@ -314,6 +334,15 @@ export function ClientBenchmark({ view, locationId, campaignKey, compact }: Prop
               </option>
             ))}
           </select>
+        </div>
+      )}
+
+      {isClientExcluded && (
+        <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200">
+          <span className="font-semibold">Heads up:</span> this client&apos;s
+          opportunity board hasn&apos;t been kept up to date, so their
+          rate/cost metrics are probably understated. Agency averages shown
+          here exclude other clients with the same issue.
         </div>
       )}
 
@@ -424,6 +453,7 @@ export function ClientBenchmark({ view, locationId, campaignKey, compact }: Prop
             campaigns={includedCampaigns}
             metric={focusMetric}
             monthKey={selectedMonthKey}
+            excludedKeys={excludedKeys}
             highlightedCampaignKey={campaign.campaignKey}
           />
         </div>

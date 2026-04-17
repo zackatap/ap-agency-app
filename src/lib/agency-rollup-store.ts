@@ -70,6 +70,24 @@ export interface AgencyCampaignRecord {
    * UI surfaces these as "Needs setup" instead of silently dropping them.
    */
   needsSetupReason: string | null;
+  /**
+   * Data-hygiene signals used by the agency dashboard's "exclude lazy
+   * updaters" toggle. All nullable — older snapshots won't have them.
+   *
+   * - movementRatio: fraction of appts that moved past Confirmed stage over
+   *   the aged portion of the window. Low → client isn't updating.
+   * - openCount / staleOpenCount: snapshot of currently-open opportunities
+   *   in Requested/Confirmed stages, and how many of those have been
+   *   sitting untouched for >21 days.
+   * - lastManualStageChangeAt: most recent lastStageChangeAt across any opp
+   *   in a manual stage (showed/noShow/closed). Old → client has stopped
+   *   touching the board.
+   */
+  movementRatio: number | null;
+  openCount: number | null;
+  staleOpenCount: number | null;
+  staleOpenPct: number | null;
+  lastManualStageChangeAt: string | null;
   updatedAt: string;
 }
 
@@ -179,6 +197,22 @@ async function ensureSchema(sql: Sql): Promise<void> {
         ON agency_rollup_campaigns (location_id)
     `;
   });
+  // Additive data-quality columns. Nullable so they can be back-filled on the
+  // next refresh without breaking older snapshots. Runs every warm start but
+  // is cheap: Postgres short-circuits `ADD COLUMN IF NOT EXISTS` when the
+  // column already exists.
+  try {
+    await sql`
+      ALTER TABLE agency_rollup_campaigns
+        ADD COLUMN IF NOT EXISTS movement_ratio NUMERIC,
+        ADD COLUMN IF NOT EXISTS open_count INTEGER,
+        ADD COLUMN IF NOT EXISTS stale_open_count INTEGER,
+        ADD COLUMN IF NOT EXISTS stale_open_pct NUMERIC,
+        ADD COLUMN IF NOT EXISTS last_manual_stage_change TIMESTAMPTZ
+    `;
+  } catch (err) {
+    console.warn("[agency-rollup-store] ADD COLUMN quality failed:", err);
+  }
   await runIfNotExists(sql, "agency_rollup_campaign_months", async () => {
     await sql`
       CREATE TABLE IF NOT EXISTS agency_rollup_campaign_months (
@@ -411,7 +445,9 @@ export async function upsertCampaigns(
       INSERT INTO agency_rollup_campaigns (
         campaign_key, location_id, status, cid, business_name,
         owner_first_name, owner_last_name, pipeline_keyword, campaign_keyword,
-        pipeline_id, pipeline_name, ad_account_id, needs_setup_reason, updated_at
+        pipeline_id, pipeline_name, ad_account_id, needs_setup_reason,
+        movement_ratio, open_count, stale_open_count, stale_open_pct,
+        last_manual_stage_change, updated_at
       ) VALUES (
         ${c.campaignKey},
         ${c.locationId},
@@ -426,6 +462,11 @@ export async function upsertCampaigns(
         ${c.pipelineName},
         ${c.adAccountId},
         ${c.needsSetupReason},
+        ${c.movementRatio},
+        ${c.openCount},
+        ${c.staleOpenCount},
+        ${c.staleOpenPct},
+        ${c.lastManualStageChangeAt},
         NOW()
       )
       ON CONFLICT (campaign_key) DO UPDATE SET
@@ -441,6 +482,11 @@ export async function upsertCampaigns(
         pipeline_name = EXCLUDED.pipeline_name,
         ad_account_id = EXCLUDED.ad_account_id,
         needs_setup_reason = EXCLUDED.needs_setup_reason,
+        movement_ratio = EXCLUDED.movement_ratio,
+        open_count = EXCLUDED.open_count,
+        stale_open_count = EXCLUDED.stale_open_count,
+        stale_open_pct = EXCLUDED.stale_open_pct,
+        last_manual_stage_change = EXCLUDED.last_manual_stage_change,
         updated_at = NOW()
     `;
   }
@@ -461,6 +507,19 @@ function mapCampaignRow(row: Record<string, unknown>): AgencyCampaignRecord {
     pipelineName: (row.pipeline_name as string) ?? null,
     adAccountId: (row.ad_account_id as string) ?? null,
     needsSetupReason: (row.needs_setup_reason as string) ?? null,
+    movementRatio:
+      row.movement_ratio == null ? null : Number(row.movement_ratio),
+    openCount: row.open_count == null ? null : Number(row.open_count),
+    staleOpenCount:
+      row.stale_open_count == null ? null : Number(row.stale_open_count),
+    staleOpenPct:
+      row.stale_open_pct == null ? null : Number(row.stale_open_pct),
+    lastManualStageChangeAt:
+      row.last_manual_stage_change == null
+        ? null
+        : row.last_manual_stage_change instanceof Date
+          ? (row.last_manual_stage_change as Date).toISOString()
+          : String(row.last_manual_stage_change),
     updatedAt:
       row.updated_at instanceof Date
         ? (row.updated_at as Date).toISOString()

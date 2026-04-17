@@ -19,6 +19,12 @@ interface Props {
   campaigns: ClientCampaignSummary[];
   monthKey: string | "total";
   defaultSort?: MetricKey;
+  /**
+   * Campaign keys flagged by the data-hygiene filter. Rows that match get
+   * grayed out with a "Data stale" badge; CID groups whose children are
+   * ALL flagged are fully grayed, mixed groups show a partial hint.
+   */
+  excludedKeys?: ReadonlySet<string>;
 }
 
 type ViewMode = "cid" | "campaign";
@@ -32,6 +38,7 @@ export function LeaderboardTable({
   campaigns,
   monthKey,
   defaultSort = "closed",
+  excludedKeys,
 }: Props) {
   const [mode, setMode] = useState<ViewMode>("cid");
   const [sortKey, setSortKey] = useState<MetricKey>(defaultSort);
@@ -42,6 +49,31 @@ export function LeaderboardTable({
     () => buildLeaderboardRows(campaigns, mode),
     [campaigns, mode]
   );
+
+  /**
+   * A row counts as "stale" when every campaign it represents (just itself
+   * for a leaf row; all children for a CID rollup) is in the excluded set.
+   * Mixed rows stay fully-colored but surface a subtle hint in the expand.
+   */
+  const rowStaleness = useMemo(() => {
+    const map = new Map<string, "all" | "some" | "none">();
+    if (!excludedKeys || excludedKeys.size === 0) return map;
+    for (const row of rows) {
+      let flagged = 0;
+      for (const child of row.children) {
+        if (excludedKeys.has(child.campaignKey)) flagged += 1;
+      }
+      map.set(
+        row.rowKey,
+        flagged === 0
+          ? "none"
+          : flagged === row.children.length
+            ? "all"
+            : "some"
+      );
+    }
+    return map;
+  }, [rows, excludedKeys]);
 
   const sorted = useMemo(() => {
     const meta = METRIC_META[sortKey];
@@ -137,6 +169,8 @@ export function LeaderboardTable({
                 monthKey={monthKey}
                 isExpanded={expanded.has(row.rowKey)}
                 onToggle={() => toggleRow(row.rowKey)}
+                staleness={rowStaleness.get(row.rowKey) ?? "none"}
+                excludedKeys={excludedKeys}
               />
             ))}
           </tbody>
@@ -151,13 +185,28 @@ interface RowGroupProps {
   monthKey: string | "total";
   isExpanded: boolean;
   onToggle: () => void;
+  staleness: "all" | "some" | "none";
+  excludedKeys?: ReadonlySet<string>;
 }
 
-function RowGroup({ row, monthKey, isExpanded, onToggle }: RowGroupProps) {
+function RowGroup({
+  row,
+  monthKey,
+  isExpanded,
+  onToggle,
+  staleness,
+  excludedKeys,
+}: RowGroupProps) {
   const showChildren = row.isGroup && isExpanded && row.children.length > 1;
+  const rowOpacity =
+    staleness === "all"
+      ? "opacity-50"
+      : staleness === "some"
+        ? "opacity-90"
+        : "";
   return (
     <>
-      <tr className="hover:bg-white/5">
+      <tr className={`hover:bg-white/5 ${rowOpacity}`}>
         <td className="sticky left-0 z-10 whitespace-nowrap bg-slate-950/70 px-4 py-2">
           <div className="flex items-center gap-2">
             {row.isGroup && row.children.length > 1 ? (
@@ -178,7 +227,7 @@ function RowGroup({ row, monthKey, isExpanded, onToggle }: RowGroupProps) {
             ) : (
               <span className="w-5" aria-hidden />
             )}
-            <ClientLink row={row} />
+            <ClientLink row={row} staleness={staleness} />
           </div>
         </td>
         {METRIC_ORDER.map((key) => {
@@ -195,46 +244,58 @@ function RowGroup({ row, monthKey, isExpanded, onToggle }: RowGroupProps) {
         })}
       </tr>
       {showChildren &&
-        row.children.map((child) => (
-          <tr
-            key={child.campaignKey}
-            className="bg-slate-950/40 hover:bg-white/5"
-          >
-            <td className="sticky left-0 z-10 whitespace-nowrap bg-slate-950/70 px-4 py-2 pl-12">
-              <Link
-                href={`/agency/dashboard/${child.locationId}?campaign=${encodeURIComponent(child.campaignKey)}`}
-                className="flex flex-col text-slate-300 hover:text-indigo-300"
-              >
-                <span className="text-[13px]">
-                  <StatusBadge status={child.status} />{" "}
-                  {child.pipelineName ?? child.pipelineKeyword ?? "Pipeline"}
-                </span>
-                {!child.included && (
-                  <span className="text-[11px] text-amber-400">
-                    {child.errorMessage ?? child.needsSetupReason ?? "Needs setup"}
-                  </span>
-                )}
-              </Link>
-            </td>
-            {METRIC_ORDER.map((key) => {
-              const meta = METRIC_META[key];
-              const val = getCampaignMetric(child, key, monthKey);
-              return (
-                <td
-                  key={key}
-                  className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-slate-300"
+        row.children.map((child) => {
+          const childStale = excludedKeys?.has(child.campaignKey) ?? false;
+          return (
+            <tr
+              key={child.campaignKey}
+              className={`bg-slate-950/40 hover:bg-white/5 ${
+                childStale ? "opacity-50" : ""
+              }`}
+            >
+              <td className="sticky left-0 z-10 whitespace-nowrap bg-slate-950/70 px-4 py-2 pl-12">
+                <Link
+                  href={`/agency/dashboard/${child.locationId}?campaign=${encodeURIComponent(child.campaignKey)}`}
+                  className="flex flex-col text-slate-300 hover:text-indigo-300"
                 >
-                  {formatMetricValue(val, meta.kind)}
-                </td>
-              );
-            })}
-          </tr>
-        ))}
+                  <span className="text-[13px]">
+                    <StatusBadge status={child.status} />{" "}
+                    {child.pipelineName ?? child.pipelineKeyword ?? "Pipeline"}
+                    {childStale && <StaleBadge />}
+                  </span>
+                  {!child.included && (
+                    <span className="text-[11px] text-amber-400">
+                      {child.errorMessage ?? child.needsSetupReason ?? "Needs setup"}
+                    </span>
+                  )}
+                </Link>
+              </td>
+              {METRIC_ORDER.map((key) => {
+                const meta = METRIC_META[key];
+                const val = getCampaignMetric(child, key, monthKey);
+                return (
+                  <td
+                    key={key}
+                    className="whitespace-nowrap px-3 py-2 text-right tabular-nums text-slate-300"
+                  >
+                    {formatMetricValue(val, meta.kind)}
+                  </td>
+                );
+              })}
+            </tr>
+          );
+        })}
     </>
   );
 }
 
-function ClientLink({ row }: { row: ClientLeaderboardRow }) {
+function ClientLink({
+  row,
+  staleness,
+}: {
+  row: ClientLeaderboardRow;
+  staleness: "all" | "some" | "none";
+}) {
   const href = row.locationId
     ? `/agency/dashboard/${row.locationId}${
         row.campaignKey ? `?campaign=${encodeURIComponent(row.campaignKey)}` : ""
@@ -246,10 +307,12 @@ function ClientLink({ row }: { row: ClientLeaderboardRow }) {
       {row.subLabel && (
         <span className="text-[11px] text-slate-500">{row.subLabel}</span>
       )}
-      <span className="mt-0.5 flex gap-1">
+      <span className="mt-0.5 flex items-center gap-1">
         {row.statuses.map((s) => (
           <StatusBadge key={s} status={s} />
         ))}
+        {staleness === "all" && <StaleBadge />}
+        {staleness === "some" && <StaleBadge partial />}
       </span>
       {!row.included && (
         <span className="text-[11px] text-amber-400">
@@ -265,6 +328,21 @@ function ClientLink({ row }: { row: ClientLeaderboardRow }) {
     <Link href={href} className="flex flex-col hover:text-indigo-300">
       {content}
     </Link>
+  );
+}
+
+function StaleBadge({ partial }: { partial?: boolean } = {}) {
+  return (
+    <span
+      className="inline-block rounded bg-slate-700/60 px-1.5 py-px text-[9px] font-semibold uppercase tracking-wide text-slate-300"
+      title={
+        partial
+          ? "Some campaigns in this client haven't been updating their opportunity board — excluded from averages."
+          : "Opportunity board hasn't been kept up to date — excluded from rate averages."
+      }
+    >
+      {partial ? "Partial stale" : "Data stale"}
+    </span>
   );
 }
 

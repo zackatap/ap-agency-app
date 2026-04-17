@@ -83,6 +83,27 @@ export interface CampaignMonthly {
   roas: number | null;
 }
 
+export interface CampaignDataQuality {
+  /**
+   * Fraction (0..1) of appointments that were moved out of the automated
+   * Requested/Confirmed stages into a manual stage (showed/noShow/closed)
+   * over the aged portion of the window. Low ⇒ the client is leaving
+   * opportunities in the automated stages.
+   */
+  movementRatio: number | null;
+  /** Current count of open opps sitting in automated stages. */
+  openCount: number | null;
+  /** Of `openCount`, how many haven't had a stage change in >21 days. */
+  staleOpenCount: number | null;
+  /** staleOpenCount / openCount when openCount > 0. */
+  staleOpenPct: number | null;
+  /**
+   * Most recent timestamp at which any opp in a manual stage
+   * (showed/noShow/closed) had its stage touched. ISO string.
+   */
+  lastManualStageChangeAt: string | null;
+}
+
 export interface CampaignSummary {
   /** `${locationId}:${pipelineKeywordOrStatus}` — unique across the agency. */
   campaignKey: string;
@@ -100,6 +121,7 @@ export interface CampaignSummary {
   /** When not included: "skipped" or "error" plus a reason. */
   errorMessage: string | null;
   needsSetupReason: string | null;
+  dataQuality: CampaignDataQuality;
   totals: Omit<CampaignMonthly, "monthKey">;
   latestMonth: CampaignMonthly | null;
   months: CampaignMonthly[];
@@ -233,6 +255,27 @@ function sumCampaignMonthly(
   };
 }
 
+function extractDataQuality(
+  record: AgencyCampaignRecord | undefined
+): CampaignDataQuality {
+  if (!record) {
+    return {
+      movementRatio: null,
+      openCount: null,
+      staleOpenCount: null,
+      staleOpenPct: null,
+      lastManualStageChangeAt: null,
+    };
+  }
+  return {
+    movementRatio: record.movementRatio,
+    openCount: record.openCount,
+    staleOpenCount: record.staleOpenCount,
+    staleOpenPct: record.staleOpenPct,
+    lastManualStageChangeAt: record.lastManualStageChangeAt,
+  };
+}
+
 function displayBusinessName(record: AgencyCampaignRecord | undefined): string {
   if (!record) return "Unknown location";
   if (record.businessName && record.businessName.trim()) return record.businessName;
@@ -356,6 +399,7 @@ export async function buildAgencyRollupView(
       included,
       errorMessage: anyError?.errorMessage ?? null,
       needsSetupReason: record?.needsSetupReason ?? null,
+      dataQuality: extractDataQuality(record),
       totals: sumCampaignMonthly(months),
       latestMonth: months[months.length - 1] ?? null,
       months,
@@ -389,6 +433,7 @@ export async function buildAgencyRollupView(
       included: false,
       errorMessage: record.needsSetupReason,
       needsSetupReason: record.needsSetupReason,
+      dataQuality: extractDataQuality(record),
       totals: sumCampaignMonthly(months),
       latestMonth: months[months.length - 1] ?? null,
       months,
