@@ -40,58 +40,70 @@ interface SeriesConfig {
   metric: MetricKey;
   label: string;
   color: string;
+  /** Which y-axis this series is measured against. */
+  yAxis: "left" | "right";
+}
+
+interface AxisConfig {
+  /** Suffix shown on axis tick labels (e.g. "%"). Omit for mixed scales. */
+  unit?: string;
+  /** Prefix shown on axis tick labels (e.g. "$"). */
+  prefix?: string;
 }
 
 /**
- * Metric groupings for the paired line charts. Each group shares a unit
- * (count / percent / dollar) so a single y-axis works. Colors are reused
- * across groups but each series within a group is distinct.
+ * Metric groupings for the paired line charts. Each group can use up to two
+ * y-axes (left + right) so series with different units can coexist without
+ * squashing each other. Colors are chosen so each line in a group is visually
+ * distinct, and the tooltip formats each value according to its own metric
+ * kind (looked up from METRIC_META at render time).
  */
 const CHART_GROUPS: Array<{
   id: string;
   title: string;
   subtitle: string;
-  unit: string;
-  kind: "count" | "money" | "rate" | "ratio";
+  leftAxis: AxisConfig;
+  rightAxis?: AxisConfig;
   series: SeriesConfig[];
 }> = [
   {
-    id: "funnel",
-    title: "Funnel volume",
-    subtitle: "Leads, appointments, showed, and closed over time.",
-    unit: "",
-    kind: "count",
+    id: "leads",
+    title: "Leads",
+    subtitle: "Lead volume paired with cost per lead.",
+    leftAxis: {},
+    rightAxis: { prefix: "$" },
     series: [
-      { metric: "leads", label: "Leads", color: "#818cf8" },
-      { metric: "totalAppts", label: "Appointments", color: "#fbbf24" },
-      { metric: "showed", label: "Showed", color: "#34d399" },
-      { metric: "closed", label: "Closed", color: "#fb7185" },
+      { metric: "leads", label: "Leads", color: "#818cf8", yAxis: "left" },
+      { metric: "cpl", label: "Cost / Lead", color: "#fb7185", yAxis: "right" },
     ],
   },
   {
-    id: "rates",
-    title: "Conversion rates",
+    id: "appointments",
+    title: "Appointments",
     subtitle:
-      "Booking / show / close as a percentage of the preceding funnel stage.",
-    unit: "%",
-    kind: "rate",
+      "Appointments and shows with their booking / show rate percentages.",
+    leftAxis: {},
+    rightAxis: { unit: "%" },
     series: [
-      { metric: "bookingRate", label: "Booking rate", color: "#fbbf24" },
-      { metric: "showRate", label: "Show rate", color: "#34d399" },
-      { metric: "closeRate", label: "Close rate", color: "#fb7185" },
+      { metric: "totalAppts", label: "Appointments", color: "#818cf8", yAxis: "left" },
+      { metric: "showed", label: "Showed", color: "#34d399", yAxis: "left" },
+      { metric: "bookingRate", label: "Booking rate", color: "#fbbf24", yAxis: "right" },
+      { metric: "showRate", label: "Show rate", color: "#fb7185", yAxis: "right" },
     ],
   },
   {
-    id: "cost",
-    title: "Cost per conversion",
+    id: "conversions",
+    title: "Conversions",
     subtitle:
-      "Spend divided by leads / showed / closed. Lower is better.",
-    unit: "",
-    kind: "money",
+      "Closed deals, close rate, ROAS, revenue, and cost per close.",
+    leftAxis: {},
+    rightAxis: { prefix: "$" },
     series: [
-      { metric: "cpl", label: "Cost / Lead", color: "#818cf8" },
-      { metric: "cps", label: "Cost / Show", color: "#34d399" },
-      { metric: "cpClose", label: "Cost / Close", color: "#fb7185" },
+      { metric: "closed", label: "Closed", color: "#818cf8", yAxis: "left" },
+      { metric: "closeRate", label: "Close rate", color: "#fbbf24", yAxis: "left" },
+      { metric: "roas", label: "ROAS", color: "#a78bfa", yAxis: "left" },
+      { metric: "successValue", label: "Closed value", color: "#34d399", yAxis: "right" },
+      { metric: "cpClose", label: "Cost / Close", color: "#fb7185", yAxis: "right" },
     ],
   },
 ];
@@ -390,8 +402,8 @@ export function ClientBenchmark({ view, locationId, campaignKey, compact }: Prop
               key={group.id}
               title={group.title}
               subtitle={group.subtitle}
-              unit={group.unit}
-              kind={group.kind}
+              leftAxis={group.leftAxis}
+              rightAxis={group.rightAxis}
               series={group.series}
               data={multiSeriesData}
             />
@@ -461,8 +473,8 @@ export function ClientBenchmark({ view, locationId, campaignKey, compact }: Prop
 interface GroupedComparisonChartProps {
   title: string;
   subtitle: string;
-  unit: string;
-  kind: "count" | "money" | "rate" | "ratio";
+  leftAxis: AxisConfig;
+  rightAxis?: AxisConfig;
   series: SeriesConfig[];
   data: Array<Record<string, string | number | null>>;
 }
@@ -471,15 +483,33 @@ interface GroupedComparisonChartProps {
  * A paired-line chart: each configured metric renders as two lines — a solid
  * line for the client and a dashed, lower-opacity line for the agency
  * simple average. Shared color per metric makes it easy to pair them up.
+ *
+ * Supports up to two y-axes (left + right) so series with different units
+ * (counts vs %, counts vs $, etc.) can coexist without one flattening the
+ * other. Tooltip values are formatted per-metric using METRIC_META.
  */
 function GroupedComparisonChart({
   title,
   subtitle,
-  unit,
-  kind,
+  leftAxis,
+  rightAxis,
   series,
   data,
 }: GroupedComparisonChartProps) {
+  const hasRightAxis =
+    !!rightAxis && series.some((s) => s.yAxis === "right");
+
+  const formatTick = (cfg: AxisConfig) => (value: number) => {
+    if (value == null || !Number.isFinite(value)) return "";
+    const prefix = cfg.prefix ?? "";
+    const unit = cfg.unit ?? "";
+    // Compact money so "$12,500" doesn't push the axis too wide.
+    if (prefix === "$" && Math.abs(value) >= 1000) {
+      return `${prefix}${(value / 1000).toFixed(value >= 10_000 ? 0 : 1)}k`;
+    }
+    return `${prefix}${value}${unit}`;
+  };
+
   return (
     <div className="rounded-2xl border border-white/10 bg-slate-900/30 p-4">
       <div className="mb-3">
@@ -492,7 +522,7 @@ function GroupedComparisonChart({
         <ResponsiveContainer>
           <LineChart
             data={data}
-            margin={{ top: 10, right: 12, bottom: 0, left: 0 }}
+            margin={{ top: 10, right: hasRightAxis ? 8 : 12, bottom: 0, left: 0 }}
           >
             <CartesianGrid
               stroke="rgba(255,255,255,0.05)"
@@ -500,11 +530,22 @@ function GroupedComparisonChart({
             />
             <XAxis dataKey="month" stroke="#94a3b8" fontSize={11} />
             <YAxis
+              yAxisId="left"
               stroke="#94a3b8"
               fontSize={11}
-              width={kind === "money" ? 60 : 40}
-              unit={unit}
+              width={leftAxis.prefix === "$" ? 52 : 40}
+              tickFormatter={formatTick(leftAxis)}
             />
+            {hasRightAxis && (
+              <YAxis
+                yAxisId="right"
+                orientation="right"
+                stroke="#94a3b8"
+                fontSize={11}
+                width={rightAxis!.prefix === "$" ? 52 : 40}
+                tickFormatter={formatTick(rightAxis!)}
+              />
+            )}
             <Tooltip
               contentStyle={{
                 backgroundColor: "#0f172a",
@@ -512,9 +553,23 @@ function GroupedComparisonChart({
                 borderRadius: 8,
                 fontSize: 12,
               }}
-              formatter={(value) =>
-                formatMetricValue(value == null ? null : Number(value), kind)
-              }
+              formatter={(value, _name, item) => {
+                // Per-series formatting: derive the metric from the dataKey
+                // (e.g. "client_closeRate") and look up its kind so we get
+                // the right symbol/precision regardless of which axis it
+                // lives on.
+                const key =
+                  typeof item?.dataKey === "string" ? item.dataKey : "";
+                const metric = key.replace(
+                  /^(client_|agency_)/,
+                  ""
+                ) as MetricKey;
+                const meta = METRIC_META[metric];
+                return formatMetricValue(
+                  value == null ? null : Number(value),
+                  meta?.kind ?? "count"
+                );
+              }}
             />
             <Legend
               wrapperStyle={{ fontSize: 11, color: "#cbd5e1" }}
@@ -523,6 +578,7 @@ function GroupedComparisonChart({
             {series.map((s) => (
               <Line
                 key={`client-${s.metric}`}
+                yAxisId={s.yAxis}
                 type="monotone"
                 dataKey={`client_${s.metric}`}
                 name={`Client · ${s.label}`}
@@ -536,6 +592,7 @@ function GroupedComparisonChart({
             {series.map((s) => (
               <Line
                 key={`agency-${s.metric}`}
+                yAxisId={s.yAxis}
                 type="monotone"
                 dataKey={`agency_${s.metric}`}
                 name={`Agency · ${s.label}`}
