@@ -26,7 +26,7 @@
  * from every rate/average, not just the ones it looks bad on):
  *
  *   - off:        never exclude. Signals still shown as context.
- *   - strict:     only exclude clients who clearly aren't updating at all.
+ *   - light:      only exclude clients who clearly aren't updating at all.
  *   - moderate:   recommended default. Catches obvious cases without being
  *                 too aggressive.
  *   - aggressive: catches borderline cases too.
@@ -37,7 +37,7 @@ import type {
   ClientCampaignMonth,
 } from "./types";
 
-export const EXCLUSION_LEVELS = ["off", "strict", "moderate", "aggressive"] as const;
+export const EXCLUSION_LEVELS = ["off", "light", "moderate", "aggressive"] as const;
 export type ExclusionLevel = (typeof EXCLUSION_LEVELS)[number];
 
 /**
@@ -62,7 +62,7 @@ interface ExclusionRule {
  */
 const EXCLUSION_RULES: Record<ExclusionLevel, ExclusionRule | null> = {
   off: null,
-  strict: {
+  light: {
     movementBelow: 0.05,
     staleOpenAbove: 0.8,
   },

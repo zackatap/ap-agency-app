@@ -312,8 +312,8 @@ const EXCLUSION_OPTIONS: Array<{
     description: "Every campaign counts toward agency averages.",
   },
   {
-    value: "strict",
-    label: "Strict",
+    value: "light",
+    label: "Light",
     description:
       "Only exclude campaigns with <5% funnel movement or 80%+ of open appts untouched for 21+ days.",
   },
