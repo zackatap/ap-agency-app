@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   CartesianGrid,
   Legend,
@@ -93,16 +93,41 @@ export function ClientBenchmark({ view, locationId, campaignKey, compact }: Prop
     () => view.campaigns.filter((c) => c.locationId === locationId),
     [view.campaigns, locationId]
   );
-  const [selectedCampaignKey, setSelectedCampaignKey] = useState<string | null>(
-    () => {
-      if (campaignKey) return campaignKey;
-      const preferred =
-        campaignsAtLocation.find((c) => c.status === "ACTIVE" && c.included) ??
-        campaignsAtLocation.find((c) => c.included) ??
-        campaignsAtLocation[0];
-      return preferred?.campaignKey ?? null;
+
+  function pickDefaultCampaignKey(
+    list: typeof campaignsAtLocation,
+    explicit: string | null | undefined
+  ): string | null {
+    if (explicit && list.some((c) => c.campaignKey === explicit)) {
+      return explicit;
     }
+    const preferred =
+      list.find((c) => c.status === "ACTIVE" && c.included) ??
+      list.find((c) => c.included) ??
+      list[0];
+    return preferred?.campaignKey ?? null;
+  }
+
+  const [selectedCampaignKey, setSelectedCampaignKey] = useState<string | null>(
+    () => pickDefaultCampaignKey(campaignsAtLocation, campaignKey)
   );
+
+  // Keep local selection in sync when the parent swaps us onto a new
+  // location/campaign. Without this the component holds onto a stale key that
+  // no longer exists in the new location's campaign list, and we'd render
+  // "Could not resolve a campaign for this location" until the user clears
+  // the selection by hand.
+  useEffect(() => {
+    setSelectedCampaignKey((prev) => {
+      if (campaignKey && campaignsAtLocation.some((c) => c.campaignKey === campaignKey)) {
+        return campaignKey;
+      }
+      if (prev && campaignsAtLocation.some((c) => c.campaignKey === prev)) {
+        return prev;
+      }
+      return pickDefaultCampaignKey(campaignsAtLocation, campaignKey);
+    });
+  }, [campaignKey, campaignsAtLocation]);
 
   const campaign = useMemo(
     () =>

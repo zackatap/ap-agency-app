@@ -508,24 +508,42 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
                   average, and a highlighted distribution strip for every metric.
                 </p>
               </div>
-              <select
-                value={compareCampaignKey}
-                onChange={(e) => setCompareCampaignKey(e.target.value)}
-                className="min-w-[240px] rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2 text-sm text-slate-200"
-              >
-                <option value="">Choose a client…</option>
-                {includedCampaigns.map((c) => (
-                  <option key={c.campaignKey} value={c.campaignKey}>
-                    {c.businessName}
-                    {c.status !== "ACTIVE" ? ` (${c.status})` : ""}
-                    {c.pipelineName ? ` — ${c.pipelineName}` : ""}
-                  </option>
-                ))}
-              </select>
+              <div className="flex items-center gap-2">
+                <select
+                  value={compareCampaignKey}
+                  onChange={(e) => setCompareCampaignKey(e.target.value)}
+                  className="min-w-[240px] rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2 text-sm text-slate-200"
+                >
+                  <option value="">Choose a client…</option>
+                  {includedCampaigns.map((c) => (
+                    <option key={c.campaignKey} value={c.campaignKey}>
+                      {c.businessName}
+                      {c.status !== "ACTIVE" ? ` (${c.status})` : ""}
+                      {c.pipelineName ? ` — ${c.pipelineName}` : ""}
+                    </option>
+                  ))}
+                </select>
+                {compareCampaignKey && (
+                  <button
+                    type="button"
+                    onClick={() => setCompareCampaignKey("")}
+                    className="rounded-lg border border-white/10 bg-slate-800/60 px-3 py-2 text-xs text-slate-300 transition-colors hover:bg-slate-700/60 hover:text-white"
+                    title="Clear comparison"
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
             </div>
             {compareCampaign && view && (
+              /*
+               * `key` forces a full remount when the user picks a different
+               * campaign. Belt-and-braces with the internal useEffect in
+               * ClientBenchmark — guarantees no stale state survives a swap.
+               */
               <div className="mt-5 rounded-xl border border-white/5 bg-slate-950/40 p-5">
                 <ClientBenchmark
+                  key={compareCampaign.campaignKey}
                   view={view}
                   locationId={compareCampaign.locationId}
                   campaignKey={compareCampaign.campaignKey}
