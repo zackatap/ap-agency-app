@@ -30,7 +30,7 @@ import {
   type AgencyLocationMonth,
 } from "@/lib/agency-rollup-store";
 
-const ROLLUP_CONCURRENCY = 4;
+const ROLLUP_CONCURRENCY = 6;
 const DEFAULT_MONTHS = 13;
 
 export interface StartRollupParams {
@@ -42,6 +42,15 @@ export interface StartRollupParams {
    * lock the button forever.
    */
   skipIfRunning?: boolean;
+  /** Process at most this many clients. Useful for testing/debugging. */
+  limit?: number;
+  /**
+   * Optional hook for `after()` / `waitUntil()` so serverless platforms keep
+   * the function alive until the background work finishes. Vercel kills
+   * dangling promises the moment the response returns, which previously
+   * caused the runner to be terminated within seconds of starting.
+   */
+  waitUntil?: (promise: Promise<void>) => void;
 }
 
 export interface StartRollupResult {
@@ -80,16 +89,28 @@ export async function startRollupRefresh(
     };
   }
 
-  void executeRollup(snapshot.id, months).catch((err) => {
-    console.error("[agency-rollup-runner] execute failed:", err);
-  });
+  const runPromise = executeRollup(snapshot.id, months, params.limit).catch(
+    (err) => {
+      console.error("[agency-rollup-runner] execute failed:", err);
+    }
+  );
+
+  // Bind lifetime to the hosting platform's background-work hook when
+  // provided. Vercel: after(). Otherwise, fire-and-forget with a dangling
+  // reference so Node does not GC the promise (e.g. long-lived servers).
+  if (params.waitUntil) {
+    params.waitUntil(runPromise);
+  } else {
+    void runPromise;
+  }
 
   return { status: "started", snapshotId: snapshot.id };
 }
 
 async function executeRollup(
   snapshotId: number,
-  months: number
+  months: number,
+  limit?: number
 ): Promise<void> {
   const errors: Array<{
     locationId?: string;
@@ -101,9 +122,16 @@ async function executeRollup(
     progressLabel: "Loading client roster",
   });
 
-  const { clients, error: sheetError } = await listActiveClients();
+  const { clients: allClients, error: sheetError } = await listActiveClients();
   if (sheetError) {
     errors.push({ message: `Sheet load failed: ${sheetError}` });
+  }
+
+  const clients = limit ? allClients.slice(0, limit) : allClients;
+  if (limit && allClients.length > limit) {
+    console.info(
+      `[agency-rollup-runner] limit=${limit} applied (of ${allClients.length} active clients).`
+    );
   }
 
   if (clients.length === 0) {

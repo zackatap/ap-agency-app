@@ -52,11 +52,12 @@ export function RefreshControls({
     return () => clearInterval(id);
   }, [current, onRefreshFinished]);
 
-  async function handleRefresh() {
+  async function handleRefresh(limit?: number) {
     setSubmitting(true);
     setError(null);
     try {
-      const res = await fetch("/api/agency/rollup/refresh", {
+      const qs = limit ? `?limit=${limit}` : "";
+      const res = await fetch(`/api/agency/rollup/refresh${qs}`, {
         method: "POST",
       });
       if (!res.ok && res.status !== 202) {
@@ -101,18 +102,41 @@ export function RefreshControls({
           </div>
           <div>{formatDateTime(completeFinishedAt)}</div>
         </div>
-        <button
-          type="button"
-          onClick={handleRefresh}
-          disabled={submitting || isRunning}
-          className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-colors enabled:hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {isRunning
-            ? "Refreshing…"
-            : submitting
-              ? "Starting…"
-              : "Refresh data"}
-        </button>
+        <div className="flex items-stretch overflow-hidden rounded-lg bg-indigo-600">
+          <button
+            type="button"
+            onClick={() => handleRefresh()}
+            disabled={submitting || isRunning}
+            className="px-4 py-2 text-sm font-medium text-white transition-colors enabled:hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {isRunning
+              ? "Refreshing…"
+              : submitting
+                ? "Starting…"
+                : "Refresh data"}
+          </button>
+          <details className="relative">
+            <summary
+              className={`flex h-full cursor-pointer items-center border-l border-indigo-500/50 px-2 text-sm text-white hover:bg-indigo-500 ${
+                submitting || isRunning ? "pointer-events-none opacity-60" : ""
+              }`}
+            >
+              ▾
+            </summary>
+            <div className="absolute right-0 z-20 mt-1 w-48 rounded-md border border-white/10 bg-slate-900 p-1 text-sm shadow-xl">
+              {[5, 10, 25].map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  onClick={() => handleRefresh(n)}
+                  className="block w-full rounded px-3 py-2 text-left text-slate-200 hover:bg-white/5"
+                >
+                  Test run · first {n} clients
+                </button>
+              ))}
+            </div>
+          </details>
+        </div>
       </div>
       {isRunning && (
         <div className="w-72 space-y-1">
