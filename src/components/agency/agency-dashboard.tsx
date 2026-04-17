@@ -342,10 +342,6 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
     () => campaigns.filter((c) => c.included),
     [campaigns]
   );
-  const needsSetup = useMemo(
-    () => campaigns.filter((c) => !c.included),
-    [campaigns]
-  );
 
   const months = view?.months ?? [];
 
@@ -464,34 +460,6 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
               ))}
             </div>
           </section>
-
-          {needsSetup.length > 0 && (
-            <details className="rounded-2xl border border-amber-500/30 bg-amber-500/5 p-4">
-              <summary className="cursor-pointer text-sm font-semibold text-amber-300">
-                {needsSetup.length} campaign{needsSetup.length === 1 ? "" : "s"}{" "}
-                need setup · click to expand
-              </summary>
-              <ul className="mt-3 space-y-1.5 text-xs text-slate-300">
-                {needsSetup.map((c) => (
-                  <li key={c.campaignKey} className="flex items-start gap-3">
-                    <Link
-                      href={`/v2/location/${c.locationId}/dashboard`}
-                      className="font-medium text-amber-200 hover:text-amber-100"
-                    >
-                      {c.businessName}
-                    </Link>
-                    <span className="text-slate-500">
-                      {c.status}
-                      {c.pipelineKeyword ? ` · col I: "${c.pipelineKeyword}"` : ""}
-                    </span>
-                    <span className="text-slate-400">
-                      {c.errorMessage ?? c.needsSetupReason ?? "Unknown"}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </details>
-          )}
 
           <section
             ref={compareRef}
