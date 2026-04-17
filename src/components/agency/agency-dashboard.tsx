@@ -1,23 +1,126 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import type {
   ClientAgencySnapshot,
+  ClientMonthTotals,
   ClientRollupView,
   MetricKey,
 } from "./types";
 import { METRIC_META, METRIC_ORDER } from "./metric-meta";
-import { formatMetricValue, formatMonthLabel } from "./format";
+import {
+  formatMetricValue,
+  formatMonthLabel,
+} from "./format";
 import { MonthlyTotalsChart } from "./monthly-totals-chart";
 import { RatesChart } from "./rates-chart";
 import { DistributionStrip } from "./distribution-strip";
 import { LeaderboardTable } from "./leaderboard-table";
 import { RefreshControls } from "./refresh-controls";
+import { ClientBenchmark } from "./client-benchmark";
 
 interface Props {
   initial: ClientRollupView | null;
   initialLatest: ClientAgencySnapshot | null;
+}
+
+type PeriodSize = 1 | 3 | 6 | 12;
+
+interface WindowAggregate {
+  monthsCount: number;
+  leads: number;
+  totalAppts: number;
+  showed: number;
+  closed: number;
+  totalValue: number;
+  successValue: number;
+  adSpend: number;
+  bookingRate: number | null;
+  showRate: number | null;
+  closeRate: number | null;
+  cpl: number | null;
+  cps: number | null;
+  cpClose: number | null;
+  roas: number | null;
+  /** Peak of `clientCount` during the window — the number of campaigns
+   *  that reported at least one signal in their best month. */
+  peakCampaignCount: number;
+}
+
+function aggregateWindow(slice: ClientMonthTotals[]): WindowAggregate {
+  const base = {
+    monthsCount: slice.length,
+    leads: 0,
+    totalAppts: 0,
+    showed: 0,
+    closed: 0,
+    totalValue: 0,
+    successValue: 0,
+    adSpend: 0,
+    peakCampaignCount: 0,
+  };
+  for (const m of slice) {
+    base.leads += m.leads;
+    base.totalAppts += m.totalAppts;
+    base.showed += m.showed;
+    base.closed += m.closed;
+    base.totalValue += m.totalValue;
+    base.successValue += m.successValue;
+    base.adSpend += m.adSpend;
+    if (m.clientCount > base.peakCampaignCount) {
+      base.peakCampaignCount = m.clientCount;
+    }
+  }
+  const leadPool = base.leads + base.totalAppts + base.showed + base.closed;
+  const apptPool = base.totalAppts + base.showed + base.closed;
+  const showPool = base.showed + base.closed;
+  return {
+    ...base,
+    bookingRate:
+      leadPool > 0
+        ? Math.round(((apptPool) / leadPool) * 1000) / 10
+        : null,
+    showRate:
+      apptPool > 0 ? Math.round((showPool / apptPool) * 1000) / 10 : null,
+    closeRate:
+      showPool > 0 ? Math.round((base.closed / showPool) * 1000) / 10 : null,
+    cpl:
+      base.adSpend > 0 && base.leads > 0
+        ? Math.round((base.adSpend / base.leads) * 100) / 100
+        : null,
+    cps:
+      base.adSpend > 0 && base.showed > 0
+        ? Math.round((base.adSpend / base.showed) * 100) / 100
+        : null,
+    cpClose:
+      base.adSpend > 0 && base.closed > 0
+        ? Math.round((base.adSpend / base.closed) * 100) / 100
+        : null,
+    roas:
+      base.adSpend > 0
+        ? Math.round((base.successValue / base.adSpend) * 100) / 100
+        : null,
+  };
+}
+
+function getWindowSlices(
+  months: ClientMonthTotals[],
+  period: PeriodSize
+): { current: ClientMonthTotals[]; prior: ClientMonthTotals[] } {
+  if (months.length === 0) return { current: [], prior: [] };
+  const n = Math.min(period, months.length);
+  const current = months.slice(months.length - n, months.length);
+  const priorEnd = months.length - n;
+  const priorStart = Math.max(0, priorEnd - n);
+  const prior = months.slice(priorStart, priorEnd);
+  return { current, prior };
+}
+
+function describePeriodRange(slice: ClientMonthTotals[]): string {
+  if (slice.length === 0) return "—";
+  if (slice.length === 1) return formatMonthLabel(slice[0].monthKey);
+  return `${formatMonthLabel(slice[0].monthKey)} – ${formatMonthLabel(slice[slice.length - 1].monthKey)}`;
 }
 
 function delta(
@@ -75,16 +178,128 @@ function Kpi({ label, value, sub, diff, better, kind }: KpiProps) {
   );
 }
 
+const PERIOD_OPTIONS: Array<{ value: PeriodSize; label: string }> = [
+  { value: 1, label: "Latest month" },
+  { value: 3, label: "Last 3 months" },
+  { value: 6, label: "Last 6 months" },
+  { value: 12, label: "Last 12 months" },
+];
+
+/**
+ * Volume metrics roll up as a sum across campaigns; rate metrics use the
+ * aggregated pool (weighted average). Ad-efficiency metrics (CPL/CPS/CPClose)
+ * and ROAS are derived from the aggregated totals. The `higherIsBetter` flag
+ * tells the Kpi component whether ▲ should be green or red.
+ */
+function buildKpiCards(
+  current: WindowAggregate,
+  prior: WindowAggregate
+): KpiProps[] {
+  return [
+    {
+      label: "Leads",
+      value: formatMetricValue(current.leads, "count"),
+      diff: delta(current.leads, prior.leads),
+      better: "up",
+      kind: "count",
+    },
+    {
+      label: "Appointments",
+      value: formatMetricValue(current.totalAppts, "count"),
+      diff: delta(current.totalAppts, prior.totalAppts),
+      better: "up",
+      kind: "count",
+    },
+    {
+      label: "Showed",
+      value: formatMetricValue(current.showed, "count"),
+      diff: delta(current.showed, prior.showed),
+      better: "up",
+      kind: "count",
+    },
+    {
+      label: "Closed",
+      value: formatMetricValue(current.closed, "count"),
+      diff: delta(current.closed, prior.closed),
+      better: "up",
+      kind: "count",
+    },
+    {
+      label: "Booking rate",
+      value: formatMetricValue(current.bookingRate, "rate"),
+      diff: delta(current.bookingRate, prior.bookingRate),
+      better: "up",
+      kind: "rate",
+    },
+    {
+      label: "Show rate",
+      value: formatMetricValue(current.showRate, "rate"),
+      diff: delta(current.showRate, prior.showRate),
+      better: "up",
+      kind: "rate",
+    },
+    {
+      label: "Close rate",
+      value: formatMetricValue(current.closeRate, "rate"),
+      diff: delta(current.closeRate, prior.closeRate),
+      better: "up",
+      kind: "rate",
+    },
+    {
+      label: "ROAS",
+      value: formatMetricValue(current.roas, "ratio"),
+      diff: delta(current.roas, prior.roas),
+      better: "up",
+      kind: "ratio",
+    },
+    {
+      label: "Closed value",
+      value: formatMetricValue(current.successValue, "money"),
+      diff: delta(current.successValue, prior.successValue),
+      better: "up",
+      kind: "money",
+    },
+    {
+      label: "Ad spend",
+      value: formatMetricValue(current.adSpend, "money"),
+      diff: delta(current.adSpend, prior.adSpend),
+      better: "down",
+      kind: "money",
+    },
+    {
+      label: "Cost / Lead",
+      value: formatMetricValue(current.cpl, "money"),
+      diff: delta(current.cpl, prior.cpl),
+      better: "down",
+      kind: "money",
+    },
+    {
+      label: "Cost / Close",
+      value: formatMetricValue(current.cpClose, "money"),
+      diff: delta(current.cpClose, prior.cpClose),
+      better: "down",
+      kind: "money",
+    },
+  ];
+}
+
 export function AgencyDashboard({ initial, initialLatest }: Props) {
   const [view, setView] = useState<ClientRollupView | null>(initial);
+  const [period, setPeriod] = useState<PeriodSize>(1);
   const [selectedMonthKey, setSelectedMonthKey] = useState<string | "total">(
     () => initial?.months[initial.months.length - 1]?.monthKey ?? "total"
   );
   const [distributionMetric, setDistributionMetric] = useState<MetricKey>("closed");
   const [ratesMode, setRatesMode] = useState<"simple" | "weighted">("simple");
+  const [compareCampaignKey, setCompareCampaignKey] = useState<string | "">("");
   const [currentLatest, setCurrentLatest] = useState<ClientAgencySnapshot | null>(
     initialLatest
   );
+  const compareRef = useRef<HTMLElement | null>(null);
+  const selectCampaignForCompare = (campaignKey: string) => {
+    setCompareCampaignKey(campaignKey);
+    compareRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+  };
 
   const reloadSnapshot = async () => {
     try {
@@ -133,8 +348,26 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
   );
 
   const months = view?.months ?? [];
-  const latestMonth = months[months.length - 1];
-  const prevMonth = months[months.length - 2];
+
+  const { current: currentSlice, prior: priorSlice } = useMemo(
+    () => getWindowSlices(months, period),
+    [months, period]
+  );
+  const currentAggregate = useMemo(
+    () => aggregateWindow(currentSlice),
+    [currentSlice]
+  );
+  const priorAggregate = useMemo(() => aggregateWindow(priorSlice), [priorSlice]);
+  const kpiCards = useMemo(
+    () => buildKpiCards(currentAggregate, priorAggregate),
+    [currentAggregate, priorAggregate]
+  );
+
+  const compareCampaign = useMemo(
+    () =>
+      campaigns.find((c) => c.campaignKey === compareCampaignKey) ?? null,
+    [campaigns, compareCampaignKey]
+  );
 
   const activeLocationCount = useMemo(() => {
     const set = new Set<string>();
@@ -142,70 +375,12 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
     return set.size;
   }, [includedCampaigns]);
 
-  const kpiCards = useMemo(() => {
-    if (!latestMonth) return [];
-    return [
-      {
-        label: "Leads",
-        value: formatMetricValue(latestMonth.leads, "count"),
-        diff: delta(latestMonth.leads, prevMonth?.leads),
-        better: "up" as const,
-        kind: "count" as const,
-      },
-      {
-        label: "Appointments",
-        value: formatMetricValue(latestMonth.totalAppts, "count"),
-        diff: delta(latestMonth.totalAppts, prevMonth?.totalAppts),
-        better: "up" as const,
-        kind: "count" as const,
-      },
-      {
-        label: "Showed",
-        value: formatMetricValue(latestMonth.showed, "count"),
-        diff: delta(latestMonth.showed, prevMonth?.showed),
-        better: "up" as const,
-        kind: "count" as const,
-      },
-      {
-        label: "Closed",
-        value: formatMetricValue(latestMonth.closed, "count"),
-        diff: delta(latestMonth.closed, prevMonth?.closed),
-        better: "up" as const,
-        kind: "count" as const,
-      },
-      {
-        label: "Closed value",
-        value: formatMetricValue(latestMonth.successValue, "money"),
-        diff: delta(latestMonth.successValue, prevMonth?.successValue),
-        better: "up" as const,
-        kind: "money" as const,
-      },
-      {
-        label: "Ad spend",
-        value: formatMetricValue(latestMonth.adSpend, "money"),
-        diff: delta(latestMonth.adSpend, prevMonth?.adSpend),
-        better: "down" as const,
-        kind: "money" as const,
-      },
-      {
-        label: "ROAS",
-        value: formatMetricValue(latestMonth.roas, "ratio"),
-        diff: delta(latestMonth.roas, prevMonth?.roas),
-        better: "up" as const,
-        kind: "ratio" as const,
-      },
-      {
-        label: "Clients reporting",
-        value: `${latestMonth.clientCount}`,
-        sub: `of ${campaigns.length} campaigns · ${activeLocationCount} locations`,
-        better: "up" as const,
-        kind: "count" as const,
-      },
-    ];
-  }, [latestMonth, prevMonth, campaigns.length, activeLocationCount]);
-
   const latestSnapshotFinished =
     view?.snapshot.finishedAt ?? initial?.snapshot.finishedAt ?? null;
+
+  const currentRangeLabel = describePeriodRange(currentSlice);
+  const priorRangeLabel = describePeriodRange(priorSlice);
+  const hasPriorWindow = priorSlice.length > 0;
 
   return (
     <div className="mx-auto max-w-7xl space-y-8 px-4 py-8 sm:px-8">
@@ -240,10 +415,54 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
 
       {view && (
         <>
-          <section className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-4 xl:grid-cols-4">
-            {kpiCards.map((card, idx) => (
-              <Kpi key={idx} {...card} />
-            ))}
+          <section className="space-y-3">
+            <div className="flex flex-wrap items-end justify-between gap-4 rounded-2xl border border-white/10 bg-slate-900/40 p-4">
+              <div>
+                <div className="text-xs uppercase tracking-wide text-slate-400">
+                  Showing
+                </div>
+                <div className="mt-1 text-lg font-semibold text-white">
+                  {currentRangeLabel}
+                </div>
+                <div className="mt-0.5 text-xs text-slate-400">
+                  {hasPriorWindow ? (
+                    <>
+                      Compared with{" "}
+                      <span className="text-slate-300">{priorRangeLabel}</span>{" "}
+                      · {currentAggregate.peakCampaignCount}/{campaigns.length}{" "}
+                      campaigns reporting · {activeLocationCount} locations
+                    </>
+                  ) : (
+                    <>
+                      Not enough history for a comparison window ·{" "}
+                      {currentAggregate.peakCampaignCount}/{campaigns.length}{" "}
+                      campaigns reporting
+                    </>
+                  )}
+                </div>
+              </div>
+              <div className="flex items-center gap-2 rounded-lg bg-slate-800/50 p-1 text-xs">
+                {PERIOD_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    onClick={() => setPeriod(opt.value)}
+                    className={`rounded-md px-3 py-1.5 transition-colors ${
+                      period === opt.value
+                        ? "bg-indigo-600 text-white"
+                        : "text-slate-300 hover:text-white"
+                    }`}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+              {kpiCards.map((card, idx) => (
+                <Kpi key={idx} {...card} />
+              ))}
+            </div>
           </section>
 
           {needsSetup.length > 0 && (
@@ -273,6 +492,48 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
               </ul>
             </details>
           )}
+
+          <section
+            ref={compareRef}
+            className="scroll-mt-8 rounded-2xl border border-indigo-400/20 bg-gradient-to-br from-indigo-500/10 to-slate-900/30 p-5"
+          >
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="text-sm font-semibold uppercase tracking-wide text-indigo-200">
+                  Compare a client to the agency
+                </h2>
+                <p className="mt-1 text-xs text-slate-400">
+                  Pick any campaign to see exactly where they sit against the
+                  rest of the agency — with rank, percentile, trend vs. the
+                  average, and a highlighted distribution strip for every metric.
+                </p>
+              </div>
+              <select
+                value={compareCampaignKey}
+                onChange={(e) => setCompareCampaignKey(e.target.value)}
+                className="min-w-[240px] rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2 text-sm text-slate-200"
+              >
+                <option value="">Choose a client…</option>
+                {includedCampaigns.map((c) => (
+                  <option key={c.campaignKey} value={c.campaignKey}>
+                    {c.businessName}
+                    {c.status !== "ACTIVE" ? ` (${c.status})` : ""}
+                    {c.pipelineName ? ` — ${c.pipelineName}` : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+            {compareCampaign && view && (
+              <div className="mt-5 rounded-xl border border-white/5 bg-slate-950/40 p-5">
+                <ClientBenchmark
+                  view={view}
+                  locationId={compareCampaign.locationId}
+                  campaignKey={compareCampaign.campaignKey}
+                  compact
+                />
+              </div>
+            )}
+          </section>
 
           <section className="grid grid-cols-1 gap-6 lg:grid-cols-2">
             <div className="rounded-2xl border border-white/10 bg-slate-900/30 p-5">
@@ -372,11 +633,10 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
                 campaigns={includedCampaigns}
                 metric={distributionMetric}
                 monthKey={selectedMonthKey}
-                onSelect={(campaign) => {
-                  window.location.href = `/agency/dashboard/${campaign.locationId}?campaign=${encodeURIComponent(
-                    campaign.campaignKey
-                  )}`;
-                }}
+                highlightedCampaignKey={
+                  compareCampaign?.campaignKey ?? undefined
+                }
+                onSelect={(campaign) => selectCampaignForCompare(campaign.campaignKey)}
               />
             </div>
           </section>
