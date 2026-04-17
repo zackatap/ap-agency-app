@@ -2216,7 +2216,7 @@ function CalculatorPanel({
                 format="currency"
               />
               <CalcDerivedRow label="Net Profit" value={netProfit} format="currency" />
-              <CalcDerivedRow label="ROI" value={derived.roiRatio} format="ratio" emphasize />
+              <CalcDerivedRow label="ROI" value={derived.roiRatio} format="ratio" />
             </div>
           </section>
         </div>

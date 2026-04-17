@@ -71,57 +71,101 @@ type Sql = NonNullable<ReturnType<typeof getDb>>;
 
 let schemaReady = false;
 
+/**
+ * `CREATE TABLE IF NOT EXISTS` is NOT concurrency-safe in Postgres when the
+ * table involves auto-generated sequences (BIGSERIAL) — two simultaneous
+ * serverless invocations can both try to create the sequence and one will
+ * hit `duplicate key value violates unique constraint "pg_class_relname_nsp_index"`.
+ *
+ * We guard against this two ways:
+ *   1. Use `to_regclass()` to skip DDL entirely when the table already exists
+ *      (covers the overwhelming majority of warm-path traffic).
+ *   2. Catch the 23505 race error if two cold starts collide anyway and
+ *      continue — by the time the loser raises, the table has been created.
+ */
+async function runIfNotExists(
+  sql: Sql,
+  regclass: string,
+  ddl: () => Promise<unknown>
+): Promise<void> {
+  try {
+    const rows = await sql`SELECT to_regclass(${regclass}) AS oid`;
+    if (rows[0]?.oid) return;
+  } catch (err) {
+    console.warn("[agency-rollup-store] to_regclass check failed:", err);
+  }
+  try {
+    await ddl();
+  } catch (err) {
+    const code =
+      err && typeof err === "object" && "code" in err
+        ? String((err as { code?: unknown }).code)
+        : "";
+    if (code === "23505" || code === "42P07") {
+      // 23505: duplicate key (pg_class race); 42P07: relation already exists.
+      return;
+    }
+    throw err;
+  }
+}
+
 async function ensureSchema(sql: Sql): Promise<void> {
   if (schemaReady) return;
-  await sql`
-    CREATE TABLE IF NOT EXISTS agency_rollup_snapshots (
-      id BIGSERIAL PRIMARY KEY,
-      started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      finished_at TIMESTAMPTZ,
-      status TEXT NOT NULL DEFAULT 'running',
-      months_covered INT NOT NULL DEFAULT 13,
-      clients_total INT NOT NULL DEFAULT 0,
-      clients_included INT NOT NULL DEFAULT 0,
-      clients_failed INT NOT NULL DEFAULT 0,
-      errors JSONB NOT NULL DEFAULT '[]'::jsonb,
-      triggered_by TEXT NOT NULL DEFAULT 'manual',
-      progress_current INT NOT NULL DEFAULT 0,
-      progress_total INT NOT NULL DEFAULT 0,
-      progress_label TEXT
-    )
-  `;
-  await sql`
-    CREATE TABLE IF NOT EXISTS agency_rollup_clients (
-      location_id TEXT PRIMARY KEY,
-      cid TEXT,
-      business_name TEXT,
-      owner_first_name TEXT,
-      owner_last_name TEXT,
-      statuses TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
-      pipeline_id TEXT,
-      pipeline_name TEXT,
-      ad_account_id TEXT,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )
-  `;
-  await sql`
-    CREATE TABLE IF NOT EXISTS agency_rollup_location_months (
-      snapshot_id BIGINT NOT NULL REFERENCES agency_rollup_snapshots(id) ON DELETE CASCADE,
-      location_id TEXT NOT NULL,
-      month_key TEXT NOT NULL,
-      start_date DATE NOT NULL,
-      end_date DATE NOT NULL,
-      metrics JSONB NOT NULL,
-      ad_spend NUMERIC NOT NULL DEFAULT 0,
-      status TEXT NOT NULL DEFAULT 'ok',
-      error_message TEXT,
-      PRIMARY KEY (snapshot_id, location_id, month_key)
-    )
-  `;
-  await sql`
-    CREATE INDEX IF NOT EXISTS idx_agency_months_snapshot
-      ON agency_rollup_location_months (snapshot_id)
-  `;
+  await runIfNotExists(sql, "agency_rollup_snapshots", async () => {
+    await sql`
+      CREATE TABLE IF NOT EXISTS agency_rollup_snapshots (
+        id BIGSERIAL PRIMARY KEY,
+        started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        finished_at TIMESTAMPTZ,
+        status TEXT NOT NULL DEFAULT 'running',
+        months_covered INT NOT NULL DEFAULT 13,
+        clients_total INT NOT NULL DEFAULT 0,
+        clients_included INT NOT NULL DEFAULT 0,
+        clients_failed INT NOT NULL DEFAULT 0,
+        errors JSONB NOT NULL DEFAULT '[]'::jsonb,
+        triggered_by TEXT NOT NULL DEFAULT 'manual',
+        progress_current INT NOT NULL DEFAULT 0,
+        progress_total INT NOT NULL DEFAULT 0,
+        progress_label TEXT
+      )
+    `;
+  });
+  await runIfNotExists(sql, "agency_rollup_clients", async () => {
+    await sql`
+      CREATE TABLE IF NOT EXISTS agency_rollup_clients (
+        location_id TEXT PRIMARY KEY,
+        cid TEXT,
+        business_name TEXT,
+        owner_first_name TEXT,
+        owner_last_name TEXT,
+        statuses TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
+        pipeline_id TEXT,
+        pipeline_name TEXT,
+        ad_account_id TEXT,
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `;
+  });
+  await runIfNotExists(sql, "agency_rollup_location_months", async () => {
+    await sql`
+      CREATE TABLE IF NOT EXISTS agency_rollup_location_months (
+        snapshot_id BIGINT NOT NULL REFERENCES agency_rollup_snapshots(id) ON DELETE CASCADE,
+        location_id TEXT NOT NULL,
+        month_key TEXT NOT NULL,
+        start_date DATE NOT NULL,
+        end_date DATE NOT NULL,
+        metrics JSONB NOT NULL,
+        ad_spend NUMERIC NOT NULL DEFAULT 0,
+        status TEXT NOT NULL DEFAULT 'ok',
+        error_message TEXT,
+        PRIMARY KEY (snapshot_id, location_id, month_key)
+      )
+    `;
+    await sql`
+      CREATE INDEX IF NOT EXISTS idx_agency_months_snapshot
+        ON agency_rollup_location_months (snapshot_id)
+    `;
+  });
   schemaReady = true;
 }
 
