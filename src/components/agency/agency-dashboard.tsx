@@ -344,10 +344,13 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
   const [currentLatest, setCurrentLatest] = useState<ClientAgencySnapshot | null>(
     initialLatest
   );
-  const compareRef = useRef<HTMLElement | null>(null);
+  const leaderboardRef = useRef<HTMLElement | null>(null);
   const selectCampaignForCompare = (campaignKey: string) => {
     setCompareCampaignKey(campaignKey);
-    compareRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    leaderboardRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
   };
 
   const reloadSnapshot = async () => {
@@ -590,67 +593,6 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
             </div>
           </section>
 
-          <section
-            ref={compareRef}
-            className="scroll-mt-8 rounded-2xl border border-indigo-400/20 bg-gradient-to-br from-indigo-500/10 to-slate-900/30 p-5"
-          >
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div>
-                <h2 className="text-sm font-semibold uppercase tracking-wide text-indigo-200">
-                  Compare a client to the agency
-                </h2>
-                <p className="mt-1 text-xs text-slate-400">
-                  Pick any campaign to see exactly where they sit against the
-                  rest of the agency — with rank, percentile, trend vs. the
-                  average, and a highlighted distribution strip for every metric.
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                <select
-                  value={compareCampaignKey}
-                  onChange={(e) => setCompareCampaignKey(e.target.value)}
-                  className="min-w-[240px] rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2 text-sm text-slate-200"
-                >
-                  <option value="">Choose a client…</option>
-                  {includedCampaigns.map((c) => (
-                    <option key={c.campaignKey} value={c.campaignKey}>
-                      {c.businessName}
-                      {c.status !== "ACTIVE" ? ` (${c.status})` : ""}
-                      {c.pipelineName ? ` — ${c.pipelineName}` : ""}
-                    </option>
-                  ))}
-                </select>
-                {compareCampaignKey && (
-                  <button
-                    type="button"
-                    onClick={() => setCompareCampaignKey("")}
-                    className="rounded-lg border border-white/10 bg-slate-800/60 px-3 py-2 text-xs text-slate-300 transition-colors hover:bg-slate-700/60 hover:text-white"
-                    title="Clear comparison"
-                  >
-                    Clear
-                  </button>
-                )}
-              </div>
-            </div>
-            {compareCampaign && view && (
-              /*
-               * `key` forces a full remount when the user picks a different
-               * campaign. Belt-and-braces with the internal useEffect in
-               * ClientBenchmark — guarantees no stale state survives a swap.
-               */
-              <div className="mt-5 rounded-xl border border-white/5 bg-slate-950/40 p-5">
-                <ClientBenchmark
-                  key={compareCampaign.campaignKey}
-                  view={view}
-                  locationId={compareCampaign.locationId}
-                  campaignKey={compareCampaign.campaignKey}
-                  excludedKeys={excludedKeys}
-                  compact
-                />
-              </div>
-            )}
-          </section>
-
           <section className="grid grid-cols-1 gap-6 lg:grid-cols-2">
             <div className="rounded-2xl border border-white/10 bg-slate-900/30 p-5">
               <div className="flex items-baseline justify-between">
@@ -758,14 +700,36 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
             </div>
           </section>
 
-          <section className="space-y-3">
-            <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-300">
-              Client leaderboard
-            </h2>
+          <section ref={leaderboardRef} className="scroll-mt-8 space-y-3">
+            <div className="flex flex-wrap items-baseline justify-between gap-3">
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-300">
+                Client leaderboard
+              </h2>
+              <p className="text-xs text-slate-500">
+                Click <span className="text-slate-300">Compare</span> on any
+                row to see that client benchmarked against the agency inline.
+              </p>
+            </div>
             <LeaderboardTable
               campaigns={includedCampaigns}
               monthKey={selectedMonthKey}
               excludedKeys={excludedKeys}
+              compareCampaignKey={compareCampaignKey || null}
+              onCompareCampaignKeyChange={(key) =>
+                setCompareCampaignKey(key ?? "")
+              }
+              renderCompare={(campaign) =>
+                view ? (
+                  <ClientBenchmark
+                    key={campaign.campaignKey}
+                    view={view}
+                    locationId={campaign.locationId}
+                    campaignKey={campaign.campaignKey}
+                    excludedKeys={excludedKeys}
+                    compact
+                  />
+                ) : null
+              }
             />
           </section>
 
