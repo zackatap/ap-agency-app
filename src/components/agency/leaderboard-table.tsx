@@ -63,6 +63,30 @@ export function LeaderboardTable({
   const [sortDir, setSortDir] = useState<"desc" | "asc">("desc");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const tableRef = useRef<HTMLDivElement | null>(null);
+  /**
+   * Width of the *visible* scroll viewport (not the inner table width).
+   * The inline Compare expansion is rendered inside a `<td colSpan>`, so
+   * without constraint it would stretch to the full table width — which
+   * is much wider than the dashboard container because of all the metric
+   * columns — and the benchmark charts would be clipped off-screen to
+   * the right. We measure the scroll container and pin the expansion
+   * content to `offsetWidth` with `position: sticky; left: 0`.
+   */
+  const [viewportWidth, setViewportWidth] = useState<number | null>(null);
+
+  useEffect(() => {
+    const el = tableRef.current;
+    if (!el) return;
+    const update = () => setViewportWidth(el.offsetWidth);
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    window.addEventListener("resize", update);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", update);
+    };
+  }, []);
 
   const rows = useMemo(
     () => buildLeaderboardRows(campaigns, mode),
@@ -244,6 +268,7 @@ export function LeaderboardTable({
                 onCompareToggle={toggleCompare}
                 renderCompare={renderCompare}
                 campaigns={campaigns}
+                viewportWidth={viewportWidth}
               />
             ))}
           </tbody>
@@ -265,6 +290,7 @@ interface RowGroupProps {
   onCompareToggle: (campaignKey: string) => void;
   renderCompare?: (campaign: ClientCampaignSummary) => React.ReactNode;
   campaigns: ClientCampaignSummary[];
+  viewportWidth: number | null;
 }
 
 function RowGroup({
@@ -279,6 +305,7 @@ function RowGroup({
   onCompareToggle,
   renderCompare,
   campaigns,
+  viewportWidth,
 }: RowGroupProps) {
   const showChildren = row.isGroup && isExpanded && row.children.length > 1;
   const rowOpacity =
@@ -355,6 +382,7 @@ function RowGroup({
       {isRowCompared && singleCampaign && renderCompare && (
         <CompareRow
           onClose={() => onCompareToggle(singleCampaign.campaignKey)}
+          viewportWidth={viewportWidth}
         >
           {renderCompare(singleCampaign)}
         </CompareRow>
@@ -417,6 +445,7 @@ function RowGroup({
               {isChildCompared && childCampaign && renderCompare && (
                 <CompareRow
                   onClose={() => onCompareToggle(child.campaignKey)}
+                  viewportWidth={viewportWidth}
                 >
                   {renderCompare(childCampaign)}
                 </CompareRow>
@@ -461,25 +490,41 @@ function CompareButton({
 function CompareRow({
   children,
   onClose,
+  viewportWidth,
 }: {
   children: React.ReactNode;
   onClose: () => void;
+  viewportWidth: number | null;
 }) {
+  /*
+   * The `<td colSpan>` stretches to the full table width (which scrolls
+   * horizontally because of all the metric columns). We pin the actual
+   * content to the *visible* scroll-container width with
+   * `position: sticky; left: 0` so the benchmark charts render inside
+   * the dashboard viewport instead of getting clipped off-screen to
+   * the right.
+   */
   return (
     <tr className="bg-slate-950/60">
-      <td
-        colSpan={TOTAL_COLUMNS}
-        className="sticky left-0 z-0 bg-slate-950/60 p-0"
-      >
-        <div className="relative border-y border-indigo-500/20 bg-gradient-to-br from-indigo-500/5 to-slate-900/40 p-5">
-          <button
-            type="button"
-            onClick={onClose}
-            className="absolute right-4 top-4 rounded-md border border-white/10 bg-slate-800/60 px-2 py-1 text-xs text-slate-300 transition-colors hover:bg-slate-700/60 hover:text-white"
-          >
-            Close
-          </button>
-          {children}
+      <td colSpan={TOTAL_COLUMNS} className="p-0">
+        <div
+          className="sticky left-0 border-y border-indigo-500/20 bg-gradient-to-br from-indigo-500/5 to-slate-900/60"
+          style={
+            viewportWidth
+              ? { width: `${viewportWidth}px`, maxWidth: "100%" }
+              : undefined
+          }
+        >
+          <div className="relative p-5">
+            <button
+              type="button"
+              onClick={onClose}
+              className="absolute right-4 top-4 z-10 rounded-md border border-white/10 bg-slate-800/60 px-2 py-1 text-xs text-slate-300 transition-colors hover:bg-slate-700/60 hover:text-white"
+            >
+              Close
+            </button>
+            {children}
+          </div>
         </div>
       </td>
     </tr>
