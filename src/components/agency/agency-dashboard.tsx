@@ -19,6 +19,7 @@ import { DistributionStrip } from "./distribution-strip";
 import { LeaderboardTable } from "./leaderboard-table";
 import { RefreshControls } from "./refresh-controls";
 import { ClientBenchmark } from "./client-benchmark";
+import { ClientMap } from "./client-map";
 import {
   aggregateCampaignsOverMonths,
   buildExcludedSet,
@@ -31,6 +32,7 @@ interface Props {
 }
 
 type PeriodSize = 1 | 3 | 6 | 12;
+type DashboardTab = "performance" | "map";
 
 interface WindowAggregate {
   monthsCount: number;
@@ -344,6 +346,7 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
   const [currentLatest, setCurrentLatest] = useState<ClientAgencySnapshot | null>(
     initialLatest
   );
+  const [activeTab, setActiveTab] = useState<DashboardTab>("performance");
   const leaderboardRef = useRef<HTMLElement | null>(null);
   const selectCampaignForCompare = (campaignKey: string) => {
     setCompareCampaignKey(campaignKey);
@@ -479,19 +482,48 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
             Agency rollup
           </h1>
           <p className="mt-1 text-sm text-slate-400">
-            Performance across every active &amp; 2nd campaign client. Each sheet
-            row is its own campaign; clients with ACTIVE + 2ND CMPN show both
-            pipelines rolled up under their CID.
+            {activeTab === "performance"
+              ? "Performance across every active & 2nd campaign client. Each sheet row is its own campaign; clients with ACTIVE + 2ND CMPN show both pipelines rolled up under their CID."
+              : "Every client from the Client DB sheet plotted on a map. Filter by status to focus the view; each pin is one client even when they have multiple campaigns."}
           </p>
         </div>
-        <RefreshControls
-          latest={currentLatest}
-          completeFinishedAt={latestSnapshotFinished}
-          onRefreshFinished={reloadSnapshot}
-        />
+        {/* Refresh rebuilds the rollup snapshot, which only drives the
+            Performance tab. Keep it scoped there so nobody clicks it on the
+            map tab and kicks off a 1–3 minute job they didn't need. */}
+        {activeTab === "performance" && (
+          <RefreshControls
+            latest={currentLatest}
+            completeFinishedAt={latestSnapshotFinished}
+            onRefreshFinished={reloadSnapshot}
+          />
+        )}
       </header>
 
-      {!view && (
+      <nav className="flex items-center gap-1 rounded-xl border border-white/10 bg-slate-900/40 p-1 text-sm">
+        {(
+          [
+            { id: "performance", label: "Performance" },
+            { id: "map", label: "Client map" },
+          ] as Array<{ id: DashboardTab; label: string }>
+        ).map((tab) => (
+          <button
+            key={tab.id}
+            type="button"
+            onClick={() => setActiveTab(tab.id)}
+            className={`rounded-lg px-4 py-1.5 transition-colors ${
+              activeTab === tab.id
+                ? "bg-indigo-600 text-white"
+                : "text-slate-300 hover:text-white"
+            }`}
+          >
+            {tab.label}
+          </button>
+        ))}
+      </nav>
+
+      {activeTab === "map" && <ClientMap />}
+
+      {activeTab === "performance" && !view && (
         <div className="rounded-2xl border border-white/10 bg-slate-900/40 p-8 text-center text-slate-300">
           <p className="text-lg font-medium">No rollup data yet</p>
           <p className="mt-2 text-sm text-slate-400">
@@ -502,7 +534,7 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
         </div>
       )}
 
-      {view && (
+      {activeTab === "performance" && view && (
         <>
           <section className="space-y-3">
             <div className="flex flex-wrap items-end justify-between gap-4 rounded-2xl border border-white/10 bg-slate-900/40 p-4">

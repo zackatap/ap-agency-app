@@ -39,22 +39,27 @@ async function getSheetTitleByGid(sheets: ReturnType<typeof google.sheets>): Pro
 }
 
 /**
- * Fetch all rows from the first sheet.
- * Uses explicit A:AO range to ensure column AO (GHL Location ID) is included -
- * the default "whole sheet" range can trim columns and omit AO.
+ * Fetch all rows from the client-database sheet tab.
+ *
+ * Default range is A:AO so column AO (GHL Location ID) is always included —
+ * the default "whole sheet" range can trim columns and omit AO. Callers that
+ * need columns beyond AO (e.g. address fields in the Client DB) can pass a
+ * wider `columnEnd` such as "BZ".
  */
-export async function fetchSheetRows(): Promise<{ rows: string[][]; error?: string }> {
+export async function fetchSheetRows(
+  options: { columnEnd?: string } = {}
+): Promise<{ rows: string[][]; error?: string }> {
   const auth = getAuth();
   if (!auth) {
     return { rows: [], error: "GOOGLE_SERVICE_ACCOUNT_JSON not configured" };
   }
 
+  const columnEnd = (options.columnEnd ?? "AO").toUpperCase();
   try {
     const sheets = google.sheets({ version: "v4", auth });
     const sheetName = await getSheetTitleByGid(sheets);
     const sheetRef = sheetName.includes(" ") || sheetName.includes("'") ? `'${sheetName.replace(/'/g, "''")}'` : sheetName;
-    // Explicit A:AO range ensures we get column AO (GHL Location ID)
-    const range = `${sheetRef}!A:AO`;
+    const range = `${sheetRef}!A:${columnEnd}`;
     const res = await sheets.spreadsheets.values.get({
       spreadsheetId: SHEET_ID,
       range,
