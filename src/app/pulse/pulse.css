@@ -601,6 +601,109 @@
   margin: 0;
 }
 
+.pulse-review-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  margin-top: 14px;
+}
+.pulse-review-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 600;
+  text-decoration: none;
+  background: #fff;
+  color: #0f172a;
+  border: 2px solid #e2e8f0;
+  transition:
+    transform 0.15s ease,
+    border-color 0.2s ease,
+    box-shadow 0.2s ease;
+}
+.pulse-review-button:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 10px 20px -10px rgba(15, 23, 42, 0.25);
+}
+.pulse-review-google:hover {
+  border-color: #f59e0b;
+}
+.pulse-review-facebook:hover {
+  border-color: #1877f2;
+}
+.pulse-review-logo {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+}
+
+.pulse-referral {
+  margin-top: 16px;
+  padding: 22px 22px;
+  border-radius: 20px;
+  background:
+    radial-gradient(
+      600px 300px at 0% 0%,
+      rgba(253, 224, 71, 0.5),
+      transparent 60%
+    ),
+    radial-gradient(
+      500px 300px at 100% 100%,
+      rgba(244, 114, 182, 0.45),
+      transparent 60%
+    ),
+    linear-gradient(135deg, #ecfeff, #fff7ed);
+  border: 1px solid rgba(251, 191, 36, 0.45);
+  position: relative;
+  overflow: hidden;
+}
+.pulse-referral-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: #0f172a;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-bottom: 10px;
+}
+.pulse-referral-title {
+  font-size: 18px;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: #0f172a;
+  margin-bottom: 6px;
+  line-height: 1.25;
+}
+.pulse-referral-body {
+  font-size: 14px;
+  line-height: 1.55;
+  color: #334155;
+  margin: 0;
+}
+.pulse-referral-body strong {
+  color: #0f172a;
+  font-weight: 800;
+  background: linear-gradient(120deg, #fde68a 0%, #fca5a5 100%);
+  padding: 1px 6px;
+  border-radius: 6px;
+}
+
+@media (max-width: 520px) {
+  .pulse-review-buttons {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* Confetti */
 .pulse-celebrate,
 .pulse-empathy {
