@@ -445,7 +445,7 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
                       <li>
                         Open your funnel in GHL using the{" "}
                         <span className="text-slate-200">Landing Page</span> link
-                        below (when connected).
+                        below.
                         {showGhlResources && (
                           <span className="mt-3 block rounded-xl border border-white/10 bg-slate-950/40 p-3">
                             {funnelsNeedsAuth && (
