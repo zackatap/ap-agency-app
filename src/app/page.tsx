@@ -30,6 +30,12 @@ export default function Home() {
           >
             Agency Rollup →
           </Link>
+          <Link
+            href="/pulse"
+            className="inline-block rounded-xl border border-white/20 bg-white/5 px-6 py-3 font-medium text-white transition-colors hover:bg-white/10"
+          >
+            Monthly Pulse →
+          </Link>
         </div>
       </main>
     </div>
