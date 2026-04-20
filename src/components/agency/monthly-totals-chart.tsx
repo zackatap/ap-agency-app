@@ -41,6 +41,7 @@ export function MonthlyTotalsChart({ months }: Props) {
           <XAxis dataKey="month" stroke="#94a3b8" fontSize={12} />
           <YAxis stroke="#94a3b8" fontSize={12} width={50} />
           <Tooltip
+            wrapperStyle={{ zIndex: 50, outline: "none" }}
             contentStyle={{
               backgroundColor: "#0f172a",
               border: "1px solid rgba(255,255,255,0.1)",

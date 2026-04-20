@@ -577,6 +577,7 @@ function GroupedComparisonChart({
               />
             )}
             <Tooltip
+              wrapperStyle={{ zIndex: 50, outline: "none" }}
               contentStyle={{
                 backgroundColor: "#0f172a",
                 border: "1px solid rgba(255,255,255,0.1)",
