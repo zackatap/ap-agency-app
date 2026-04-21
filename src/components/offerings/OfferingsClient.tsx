@@ -306,15 +306,15 @@ export default function OfferingsClient({
 
                 <div className="md:col-span-2 xl:col-span-3">
                   <Field label="Platform Engine ownership">
-                    <div className="inline-block w-fit rounded-xl bg-gradient-to-r from-indigo-300 via-fuchsia-300 to-emerald-300 p-px shadow-[0_0_24px_rgba(129,140,248,0.15)]">
+                    <div className="inline-block rounded-xl bg-gradient-to-r from-indigo-300 via-fuchsia-300 to-emerald-300 p-px shadow-[0_0_24px_rgba(129,140,248,0.15)] max-w-full">
                       <label className="flex items-center gap-3 rounded-[11px] bg-slate-950/95 px-4 py-3">
                         <input
                           type="checkbox"
                           checked={founderPricing}
                           onChange={(e) => setFounderPricing(e.target.checked)}
-                          className="h-4 w-4 accent-[#65E8B6]"
+                          className="h-4 w-4 shrink-0 accent-[#65E8B6]"
                         />
-                        <span className="whitespace-nowrap text-sm text-slate-100">
+                        <span className="text-sm text-slate-100">
                           Apply $4,995 ownership rate (vs. $7,995)
                         </span>
                       </label>

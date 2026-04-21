@@ -28,6 +28,12 @@ const LINKS: LinkCard[] = [
     accent: "emerald",
   },
   {
+    href: "/agency/discounts",
+    title: "Pricing Discounts",
+    description: "Manage custom promo URLs and discounted pricing.",
+    accent: "emerald",
+  },
+  {
     href: "/pulse",
     title: "Monthly Pulse",
     description: "Client feedback survey — writes responses to Google Sheets.",
