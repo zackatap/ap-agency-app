@@ -496,28 +496,19 @@ function ResultCard({
         </span>
       </div>
 
-      <div className="mt-5 grid gap-4 sm:grid-cols-2">
-        <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
+      <div className="mt-5">
+        <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4 text-center">
           <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">
             Total investment
           </p>
-          <p className="mt-1 text-3xl font-semibold tracking-tight">
-            {formatCurrency(total)}
-          </p>
-          <p className="mt-1 text-xs text-slate-400">
-            ~{formatCurrency(monthlyAvg)} avg / month
-          </p>
-        </div>
-        <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
-          <p className="text-[11px] font-semibold uppercase tracking-widest text-slate-400">
-            Breakeven patients/mo
-          </p>
-          <p className="mt-1 text-3xl font-semibold tracking-tight">
-            {formatPatients(patients2x / 2)}
-          </p>
-          <p className="mt-1 text-xs text-slate-400">
-            at {formatCurrency(ltv)} LTV
-          </p>
+          <div className="mt-1 flex items-baseline justify-center gap-2">
+            <p className="text-3xl font-semibold tracking-tight">
+              {formatCurrency(total)}
+            </p>
+            <p className="text-sm text-slate-400">
+              (~{formatCurrency(monthlyAvg)} avg / month)
+            </p>
+          </div>
         </div>
       </div>
 
@@ -572,19 +563,59 @@ function TargetCard({
   revenue: number;
   accent: string;
 }) {
+  const wholePatients = Math.ceil(patients);
+  const rows = Math.ceil(wholePatients / 5);
+
   return (
-    <div className="rounded-xl border border-white/10 bg-white/[0.03] p-4">
-      <p
-        className={`text-[11px] font-semibold uppercase tracking-widest ${accent}`}
-      >
-        {label}
-      </p>
-      <p className="mt-1 text-3xl font-semibold tracking-tight">
-        {formatPatients(patients)}
-      </p>
-      <p className="mt-1 text-xs text-slate-400">
-        patients/mo · {formatCurrency(revenue)} total revenue
-      </p>
+    <div className="flex flex-col justify-between rounded-xl border border-white/10 bg-white/[0.03] p-4">
+      <div>
+        <div className="flex items-center justify-between">
+          <p
+            className={`text-[11px] font-semibold uppercase tracking-widest ${accent}`}
+          >
+            {label}
+          </p>
+          <span className="text-xs font-medium text-slate-300">
+            {formatPatients(patients)} / mo
+          </span>
+        </div>
+
+        <div
+          className="mt-5 grid gap-1.5"
+          style={{ gridTemplateColumns: `repeat(5, minmax(0, 1fr))` }}
+        >
+          {Array.from({ length: rows * 5 }).map((_, i) => {
+            const isFilled = i < Math.floor(patients);
+            const isPartial = !isFilled && i === Math.floor(patients) && patients % 1 !== 0;
+            
+            return (
+              <div
+                key={i}
+                className={`flex aspect-square items-center justify-center rounded ${
+                  isFilled ? "bg-white/10 text-white" : isPartial ? "bg-white/5 text-white/30" : "opacity-0"
+                }`}
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="currentColor"
+                  className="h-5 w-5 sm:h-6 sm:w-6"
+                >
+                  <path d="M12 12a5 5 0 1 0 0-10 5 5 0 0 0 0 10Zm0-2a3 3 0 1 1 0-6 3 3 0 0 1 0 6Zm9 11a1 1 0 0 1-2 0c0-2.33-1.84-4.22-4.14-4.66a8 8 0 0 1-5.72 0C6.84 16.78 5 18.67 5 21a1 1 0 0 1-2 0c0-3.32 2.64-6.07 5.86-6.55a10 10 0 0 1 6.28 0C18.36 14.93 21 17.68 21 21Z" />
+                </svg>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="mt-4 border-t border-white/5 pt-3">
+        <p className="text-xs text-slate-400">
+          <span className="font-medium text-slate-200">
+            {formatCurrency(revenue)}
+          </span>{" "}
+          total revenue
+        </p>
+      </div>
     </div>
   );
 }
