@@ -4,14 +4,36 @@
  * The sheet must be shared with the service account email in
  * GOOGLE_SERVICE_ACCOUNT_JSON (Editor access is required to append rows).
  *
- * Defaults target the hard-coded Monthly Pulse sheet; both IDs can be
- * overridden via env vars for staging/testing:
+ * Env overrides:
  *   PULSE_SHEET_ID       – spreadsheet ID
  *   PULSE_SHEET_GID      – tab/sheet gid (numeric, from URL)
  *
- * Columns (must match the header row of the sheet tab):
- *   id, client_name, location_id, cid, score, sentiment, wins,
- *   issues, issue_detail, wants_zoom, user_agent, submitted_at, created_at
+ * Append logic is HEADER-AWARE: we read the first row of the tab and match
+ * each value to a column by its header name (normalized, case-insensitive).
+ * That means you can reorder columns, rename the tab, or even delete columns
+ * you don't want — as long as the header names match one of the supported
+ * field keys below, they'll be written. Unknown headers are left untouched.
+ *
+ * Supported column headers (first match wins, case-insensitive, spaces /
+ * hyphens / underscores are ignored, so "Client Name" == "client_name"):
+ *
+ *   id                  – auto-incremented from max numeric value in column
+ *   client_name
+ *   location_id
+ *   cid
+ *   score               – 0–10
+ *   sentiment           – "good" | "bad"
+ *   wins                – free text (good path)
+ *   issues              – comma-separated list (e.g. "Service, Quantity")
+ *   issue_quality       – TRUE/FALSE (recommended for filtering)
+ *   issue_quantity      – TRUE/FALSE
+ *   issue_service       – TRUE/FALSE
+ *   issue_roi           – TRUE/FALSE
+ *   issue_detail        – free text (bad path)
+ *   wants_zoom          – TRUE/FALSE
+ *   user_agent
+ *   submitted_at
+ *   created_at
  */
 
 import { google } from "googleapis";
@@ -37,7 +59,6 @@ function getAuth() {
     const credentials = JSON.parse(json);
     return new google.auth.GoogleAuth({
       credentials,
-      // Read+write scope — append requires write access.
       scopes: ["https://www.googleapis.com/auth/spreadsheets"],
     });
   } catch {
@@ -66,6 +87,22 @@ function quoteSheetRef(name: string): string {
     : name;
 }
 
+function colIndexToLetter(i: number): string {
+  let s = "";
+  do {
+    s = String.fromCharCode(65 + (i % 26)) + s;
+    i = Math.floor(i / 26) - 1;
+  } while (i >= 0);
+  return s;
+}
+
+/** Collapse whitespace / punctuation so "Client Name" matches "client_name". */
+function normalizeHeader(h: string): string {
+  return String(h ?? "")
+    .toLowerCase()
+    .replace(/[\s_\-./]+/g, "");
+}
+
 export interface PulseResponseRecord {
   clientName: string | null;
   locationId: string | null;
@@ -77,38 +114,10 @@ export interface PulseResponseRecord {
   issueDetail: string | null;
   wantsZoom: boolean;
   userAgent: string | null;
-  submittedAt: string; // ISO 8601
+  submittedAt: string;
 }
 
-/**
- * Next integer id based on the highest numeric value in column A (excluding
- * the header row). If column A is empty we start at 1. Best-effort only; if
- * the read fails we return null and skip the id column.
- */
-async function nextId(
-  sheets: ReturnType<typeof google.sheets>,
-  spreadsheetId: string,
-  sheetRef: string
-): Promise<number | null> {
-  try {
-    const res = await sheets.spreadsheets.values.get({
-      spreadsheetId,
-      range: `${sheetRef}!A2:A`,
-      majorDimension: "COLUMNS",
-    });
-    const col = (res.data.values?.[0] ?? []) as string[];
-    let max = 0;
-    for (const v of col) {
-      const n = Number(v);
-      if (Number.isFinite(n) && n > max) max = n;
-    }
-    return max + 1;
-  } catch {
-    return null;
-  }
-}
-
-/** YYYY-MM-DD HH:mm:ss+00 formatting to match the existing sheet style. */
+/** YYYY-MM-DD HH:mm:ss.SSS000+00 to match existing rows. */
 function formatTimestamp(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
@@ -121,6 +130,35 @@ function formatTimestamp(iso: string): string {
   const s = pad(d.getUTCSeconds());
   const ms = pad(d.getUTCMilliseconds(), 3);
   return `${Y}-${M}-${D} ${h}:${m}:${s}.${ms}000+00`;
+}
+
+/** Build the per-field value map for this record. */
+function buildFieldValues(record: PulseResponseRecord): Record<string, string | number> {
+  const issueSet = new Set(record.issues.map((t) => t.toLowerCase()));
+  const has = (tag: string) => issueSet.has(tag.toLowerCase());
+  const submittedAt = formatTimestamp(record.submittedAt);
+  const createdAt = formatTimestamp(new Date().toISOString());
+
+  return {
+    clientname: record.clientName ?? "",
+    locationid: record.locationId ?? "",
+    cid: record.cid ?? "",
+    score: record.score,
+    sentiment: record.sentiment,
+    wins: record.wins ?? "",
+    // Friendly comma-separated list. Easy to read, easy to filter by
+    // "Text contains" in Sheets. Empty string when no issues.
+    issues: record.issues.length ? record.issues.join(", ") : "",
+    issuequality: has("Quality") ? "TRUE" : "FALSE",
+    issuequantity: has("Quantity") ? "TRUE" : "FALSE",
+    issueservice: has("Service") ? "TRUE" : "FALSE",
+    issueroi: has("ROI") ? "TRUE" : "FALSE",
+    issuedetail: record.issueDetail ?? "",
+    wantszoom: record.wantsZoom ? "TRUE" : "FALSE",
+    useragent: record.userAgent ?? "",
+    submittedat: submittedAt,
+    createdat: createdAt,
+  };
 }
 
 export type AppendResult =
@@ -147,29 +185,51 @@ export async function appendPulseResponse(
     const title = await getSheetTitleByGid(sheets, spreadsheetId, gid);
     const sheetRef = quoteSheetRef(title);
 
-    const id = await nextId(sheets, spreadsheetId, sheetRef);
-    const submittedAt = formatTimestamp(record.submittedAt);
-    const createdAt = formatTimestamp(new Date().toISOString());
+    const headerRes = await sheets.spreadsheets.values.get({
+      spreadsheetId,
+      range: `${sheetRef}!1:1`,
+    });
+    const headerRow = (headerRes.data.values?.[0] ?? []) as string[];
+    if (headerRow.length === 0) {
+      return {
+        ok: false,
+        error:
+          "Sheet has no header row — add column headers to row 1 first.",
+      };
+    }
 
-    const row: (string | number)[] = [
-      id ?? "",
-      record.clientName ?? "",
-      record.locationId ?? "",
-      record.cid ?? "",
-      record.score,
-      record.sentiment,
-      record.wins ?? "",
-      record.issues.length ? JSON.stringify(record.issues) : "[]",
-      record.issueDetail ?? "",
-      record.wantsZoom ? "TRUE" : "FALSE",
-      record.userAgent ?? "",
-      submittedAt,
-      createdAt,
-    ];
+    const fieldValues = buildFieldValues(record);
 
+    const idColumnIndex = headerRow.findIndex(
+      (h) => normalizeHeader(h) === "id"
+    );
+    let nextId: number | null = null;
+    if (idColumnIndex >= 0) {
+      const letter = colIndexToLetter(idColumnIndex);
+      const idRes = await sheets.spreadsheets.values.get({
+        spreadsheetId,
+        range: `${sheetRef}!${letter}2:${letter}`,
+        majorDimension: "COLUMNS",
+      });
+      const col = (idRes.data.values?.[0] ?? []) as string[];
+      let max = 0;
+      for (const v of col) {
+        const n = Number(v);
+        if (Number.isFinite(n) && n > max) max = n;
+      }
+      nextId = max + 1;
+    }
+
+    const row: (string | number)[] = headerRow.map((h) => {
+      const key = normalizeHeader(h);
+      if (key === "id") return nextId ?? "";
+      return fieldValues[key] ?? "";
+    });
+
+    const lastCol = colIndexToLetter(headerRow.length - 1);
     await sheets.spreadsheets.values.append({
       spreadsheetId,
-      range: `${sheetRef}!A:M`,
+      range: `${sheetRef}!A:${lastCol}`,
       valueInputOption: "USER_ENTERED",
       insertDataOption: "INSERT_ROWS",
       requestBody: {
