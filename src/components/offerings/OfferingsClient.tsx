@@ -1,7 +1,10 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import Image from "next/image";
 import Link from "next/link";
+
+const ACCELERATOR_BASE_PRICE = 1795;
 
 function formatCurrency(value: number, fractionDigits = 0) {
   return value.toLocaleString("en-US", {
@@ -12,17 +15,33 @@ function formatCurrency(value: number, fractionDigits = 0) {
   });
 }
 
-export default function OfferingsClient() {
+type OfferingsClientProps = {
+  /** Override the Accelerator monthly price (e.g., promo URLs). */
+  acceleratorPrice?: number;
+  /** Short badge shown at the top of the page (e.g., "Liz Exclusive"). */
+  discountBadge?: string;
+};
+
+export default function OfferingsClient({
+  acceleratorPrice = ACCELERATOR_BASE_PRICE,
+  discountBadge,
+}: OfferingsClientProps = {}) {
   const [months, setMonths] = useState(12);
   const [ltv, setLtv] = useState(2000);
   const [adSpend, setAdSpend] = useState(2000);
   const [founderPricing, setFounderPricing] = useState(false);
 
+  const hasAcceleratorDiscount = acceleratorPrice < ACCELERATOR_BASE_PRICE;
+  const acceleratorMonthlySavings = Math.max(
+    0,
+    ACCELERATOR_BASE_PRICE - acceleratorPrice,
+  );
+
   const calc = useMemo(() => {
     const buildoutFee = founderPricing ? 4995 : 7995;
     const platformMonths = Math.max(0, months - 2);
 
-    const handsOnAgency = months * 1795;
+    const handsOnAgency = months * acceleratorPrice;
     const handsOnAds = months * adSpend;
     const handsOnTotal = handsOnAgency + handsOnAds;
 
@@ -57,7 +76,7 @@ export default function OfferingsClient() {
         patients5x: patientsFor(buildoutTotal, 5),
       },
     };
-  }, [months, ltv, adSpend, founderPricing]);
+  }, [months, ltv, adSpend, founderPricing, acceleratorPrice]);
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950 text-white">
@@ -66,9 +85,17 @@ export default function OfferingsClient() {
       <header className="relative z-10 mx-auto flex max-w-6xl items-center justify-between px-6 pt-8">
         <Link
           href="/"
-          className="text-sm font-semibold tracking-tight text-white/80 hover:text-white"
+          aria-label="Automated Practice"
+          className="inline-flex items-center opacity-90 transition hover:opacity-100"
         >
-          Automated Practice
+          <Image
+            src="/ap.png"
+            alt="Automated Practice"
+            width={1000}
+            height={310}
+            priority
+            className="h-8 w-auto sm:h-10"
+          />
         </Link>
         <a
           href="#calculator"
@@ -79,6 +106,15 @@ export default function OfferingsClient() {
       </header>
 
       <section className="relative z-10 mx-auto max-w-6xl px-6 pt-16 pb-10 text-center">
+        {hasAcceleratorDiscount && discountBadge ? (
+          <div className="mb-3 flex justify-center">
+            <div className="flex rounded-full bg-gradient-to-r from-indigo-300 via-fuchsia-300 to-emerald-300 p-px shadow-[0_0_30px_rgba(129,140,248,0.25)]">
+              <span className="inline-flex items-center rounded-full bg-slate-950/95 px-3 py-1 text-[11px] font-medium uppercase tracking-widest text-[#65E8B6]">
+                {discountBadge}
+              </span>
+            </div>
+          </div>
+        ) : null}
         <span className="inline-flex items-center rounded-full border border-white/15 bg-white/5 px-3 py-1 text-[11px] font-medium uppercase tracking-widest text-indigo-200">
           Two ways to grow with us
         </span>
@@ -91,8 +127,11 @@ export default function OfferingsClient() {
         <p className="mx-auto mt-6 max-w-2xl text-balance text-lg text-slate-300">
           Whether you want a fully hands-on growth partner or your own
           high-converting system installed in-house, we have an offering that
-          fits. Ad spend is always a separate investment that stays in your
-          account.
+          fits.{" "}
+          <strong className="font-semibold text-white">
+            Ad spend is always a separate investment that stays in your
+            account.
+          </strong>
         </p>
       </section>
 
@@ -101,25 +140,30 @@ export default function OfferingsClient() {
           <div className="absolute right-6 top-6 rounded-full bg-indigo-500/20 px-3 py-1 text-[11px] font-semibold uppercase tracking-widest text-indigo-200">
             Most hands-on
           </div>
-          <h2 className="text-sm font-medium uppercase tracking-widest text-indigo-200">
-            Package A
+          <h2 className="text-4xl font-semibold tracking-tight sm:text-5xl">
+            Accelerator
           </h2>
-          <p className="mt-2 text-3xl font-semibold tracking-tight">
-            Managed Growth Partner
-          </p>
-          <p className="mt-2 text-sm text-slate-300">
+          <p className="mt-3 text-sm text-slate-300">
             We run everything, month after month — proactive, not reactive.
           </p>
 
-          <div className="mt-8 flex items-baseline gap-2">
+          <div className="mt-8 flex flex-wrap items-baseline gap-x-3 gap-y-2">
             <span className="text-5xl font-semibold tracking-tight">
-              $1,795
+              {formatCurrency(acceleratorPrice)}
             </span>
+            {hasAcceleratorDiscount ? (
+              <span className="text-2xl font-medium text-slate-300 line-through decoration-rose-400/80 decoration-2">
+                {formatCurrency(ACCELERATOR_BASE_PRICE)}
+              </span>
+            ) : null}
             <span className="text-slate-400">/month</span>
+            {hasAcceleratorDiscount ? (
+              <span className="rounded-full bg-[#65E8B6]/15 px-2.5 py-0.5 text-xs font-semibold uppercase tracking-widest text-[#65E8B6]">
+                Save {formatCurrency(acceleratorMonthlySavings)}/mo
+              </span>
+            ) : null}
           </div>
-          <p className="mt-1 text-sm text-emerald-300">
-            No setup fee · Ad spend separate
-          </p>
+          <p className="mt-1 text-sm text-[#65E8B6]">No setup fee</p>
 
           <ul className="mt-8 space-y-3 text-sm text-slate-200">
             {[
@@ -129,7 +173,7 @@ export default function OfferingsClient() {
               "Continuous creative testing & strategy pivots",
               "Proactive optimization (not reactive)",
               "Hands-on, week-over-week account management",
-              "All assets & accounts stay in your possession",
+              "Live training session for your front desk",
             ].map((line) => (
               <li key={line} className="flex gap-3">
                 <span className="mt-0.5 flex h-5 w-5 flex-none items-center justify-center rounded-full bg-indigo-500/20 text-indigo-300">
@@ -139,64 +183,52 @@ export default function OfferingsClient() {
               </li>
             ))}
           </ul>
-
-          <a
-            href="#calculator"
-            className="mt-10 inline-flex w-full items-center justify-center rounded-2xl bg-indigo-500 px-6 py-3 text-sm font-semibold text-white transition hover:bg-indigo-400"
-          >
-            Calculate ROI for Package A
-          </a>
         </article>
 
-        <article className="group relative overflow-hidden rounded-3xl border border-white/10 bg-gradient-to-b from-white/5 to-slate-900/60 p-8 shadow-2xl shadow-slate-950/40 backdrop-blur">
-          <div className="absolute right-6 top-6 rounded-full bg-emerald-500/15 px-3 py-1 text-[11px] font-semibold uppercase tracking-widest text-emerald-200">
-            Founder pricing
+        <article className="group relative overflow-hidden rounded-3xl border border-[#65E8B6]/40 bg-gradient-to-b from-[#65E8B6]/15 to-slate-900/60 p-8 shadow-2xl shadow-emerald-950/40 backdrop-blur">
+          <div className="absolute right-6 top-6 rounded-full bg-[#65E8B6]/20 px-3 py-1 text-[11px] font-semibold uppercase tracking-widest text-[#65E8B6]">
+            Ownership
           </div>
-          <h2 className="text-sm font-medium uppercase tracking-widest text-emerald-200">
-            Package B
+          <h2 className="text-4xl font-semibold tracking-tight sm:text-5xl">
+            Platform Engine
           </h2>
-          <p className="mt-2 text-3xl font-semibold tracking-tight">
-            Done-For-You System Buildout
-          </p>
-          <p className="mt-2 text-sm text-slate-300">
+          <p className="mt-3 text-sm text-slate-300">
             We install the marketing system in your accounts — you own it.
           </p>
 
-          <div className="mt-8 flex items-baseline gap-3">
+          <div className="mt-8 flex flex-wrap items-baseline gap-x-3 gap-y-2">
             <span className="text-5xl font-semibold tracking-tight">
               $4,995
             </span>
-            <span className="text-lg text-slate-500 line-through">$7,995</span>
+            <span className="text-3xl font-medium text-slate-300 line-through decoration-rose-400/80 decoration-2">
+              $7,995
+            </span>
+            <span className="rounded-full bg-[#65E8B6]/15 px-2.5 py-0.5 text-xs font-semibold uppercase tracking-widest text-[#65E8B6]">
+              Save $3,000
+            </span>
           </div>
-          <p className="mt-1 text-sm text-emerald-300">
+          <p className="mt-1 text-sm text-[#65E8B6]">
             One-time buildout · then $295/mo platform &amp; support
           </p>
 
           <ul className="mt-8 space-y-3 text-sm text-slate-200">
             {[
               "Complete system installed within 30 days",
-              "60 days of active optimization & management",
-              "Live training session for your front desk",
-              "Built in your ad accounts, CRM & GoHighLevel",
+              "60 days of active DFY proactive ad management",
+              "Built in your own GoHighLevel & ad account",
               "$295/mo platform & support after buildout",
-              "Optional: 3-month DFY ad management — $3,500",
-              "Optional: 6-month DFY ad management — $5,500",
+              "Regular monthly live trainings with Q&A",
+              "Ability to add on 3 & 6-month DFY proactive ad management",
+              "All assets & accounts stay in your possession",
             ].map((line) => (
               <li key={line} className="flex gap-3">
-                <span className="mt-0.5 flex h-5 w-5 flex-none items-center justify-center rounded-full bg-emerald-500/15 text-emerald-300">
+                <span className="mt-0.5 flex h-5 w-5 flex-none items-center justify-center rounded-full bg-[#65E8B6]/20 text-[#65E8B6]">
                   ✓
                 </span>
                 <span>{line}</span>
               </li>
             ))}
           </ul>
-
-          <a
-            href="#calculator"
-            className="mt-10 inline-flex w-full items-center justify-center rounded-2xl border border-white/15 bg-white/10 px-6 py-3 text-sm font-semibold text-white transition hover:bg-white/20"
-          >
-            Calculate ROI for Package B
-          </a>
         </article>
       </section>
 
@@ -251,7 +283,7 @@ export default function OfferingsClient() {
                   </div>
                 </Field>
 
-                <Field label="Patient LTV" hint={formatCurrency(ltv)}>
+                <Field label="Patient LTV" hint="What's your patient worth?">
                   <CurrencyInput
                     value={ltv}
                     onChange={setLtv}
@@ -262,7 +294,7 @@ export default function OfferingsClient() {
 
                 <Field
                   label="Monthly ad spend"
-                  hint={`${formatCurrency(adSpend)}/mo · stays in your account`}
+                  hint="Factor in your additional investment"
                 >
                   <CurrencyInput
                     value={adSpend}
@@ -272,26 +304,30 @@ export default function OfferingsClient() {
                   />
                 </Field>
 
-                <Field label="Package B founder pricing">
-                  <label className="flex items-center gap-3 rounded-xl border border-white/10 bg-white/5 px-4 py-3">
-                    <input
-                      type="checkbox"
-                      checked={founderPricing}
-                      onChange={(e) => setFounderPricing(e.target.checked)}
-                      className="h-4 w-4 accent-emerald-500"
-                    />
-                    <span className="text-sm text-slate-200">
-                      Apply $4,995 founder rate (vs. $7,995)
-                    </span>
-                  </label>
-                </Field>
+                <div className="md:col-span-2 xl:col-span-3">
+                  <Field label="Platform Engine ownership">
+                    <div className="inline-block w-fit rounded-xl bg-gradient-to-r from-indigo-300 via-fuchsia-300 to-emerald-300 p-px shadow-[0_0_24px_rgba(129,140,248,0.15)]">
+                      <label className="flex items-center gap-3 rounded-[11px] bg-slate-950/95 px-4 py-3">
+                        <input
+                          type="checkbox"
+                          checked={founderPricing}
+                          onChange={(e) => setFounderPricing(e.target.checked)}
+                          className="h-4 w-4 accent-[#65E8B6]"
+                        />
+                        <span className="whitespace-nowrap text-sm text-slate-100">
+                          Apply $4,995 ownership rate (vs. $7,995)
+                        </span>
+                      </label>
+                    </div>
+                  </Field>
+                </div>
               </div>
             </div>
 
             <div className="grid gap-6 lg:grid-cols-2">
               <ResultCard
                 accent="indigo"
-                title="Package A — Managed Growth Partner"
+                title="Package A — Accelerator"
                 total={calc.handsOn.total}
                 months={months}
                 monthlyAvg={calc.handsOn.monthlyAvg}
@@ -300,7 +336,7 @@ export default function OfferingsClient() {
                 ltv={ltv}
                 lines={[
                   {
-                    label: `Agency fee · ${months} × $1,795`,
+                    label: `Agency fee · ${months} × ${formatCurrency(acceleratorPrice)}`,
                     value: calc.handsOn.agency,
                   },
                   {
@@ -313,7 +349,7 @@ export default function OfferingsClient() {
 
               <ResultCard
                 accent="emerald"
-                title="Package B — DFY System Buildout"
+                title="Package B — Platform Engine"
                 total={calc.buildout.total}
                 months={months}
                 monthlyAvg={calc.buildout.monthlyAvg}
@@ -322,7 +358,7 @@ export default function OfferingsClient() {
                 ltv={ltv}
                 lines={[
                   {
-                    label: `Buildout (${founderPricing ? "founder" : "standard"})`,
+                    label: `Buildout (${founderPricing ? "ownership" : "standard"})`,
                     value: calc.buildout.buildoutFee,
                   },
                   {
@@ -366,12 +402,12 @@ function Field({
 }) {
   return (
     <div className="flex h-full flex-col">
-      <div className="mb-2 flex min-h-[2.5rem] flex-wrap items-start justify-between gap-x-3 gap-y-1">
+      <div className="mb-2 flex min-h-[2.75rem] flex-col gap-1">
         <label className="text-xs font-semibold uppercase tracking-widest text-slate-400">
           {label}
         </label>
         {hint ? (
-          <span className="text-right text-xs text-slate-300">{hint}</span>
+          <span className="text-sm text-slate-300">{hint}</span>
         ) : null}
       </div>
       <div className="mt-auto">{children}</div>
@@ -440,10 +476,10 @@ function ResultCard({
       chip: "text-indigo-200",
     },
     emerald: {
-      border: "border-emerald-400/30",
-      bg: "from-emerald-500/10 to-slate-900/40",
-      pill: "bg-emerald-500/20 text-emerald-200",
-      chip: "text-emerald-200",
+      border: "border-[#65E8B6]/40",
+      bg: "from-[#65E8B6]/15 to-slate-900/40",
+      pill: "bg-[#65E8B6]/20 text-[#65E8B6]",
+      chip: "text-[#65E8B6]",
     },
   }[accent];
 
