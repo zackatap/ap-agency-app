@@ -8,8 +8,14 @@ const instrumentSans = Instrument_Sans({
 });
 
 export const metadata: Metadata = {
-  title: "Automated Practice | Conversions Dashboard",
-  description: "Pipeline conversion metrics for your practice",
+  title: "Automated Practice | Predictable Patient Acquisition",
+  description:
+    "Two offerings for growing your practice — fully managed growth or a done-for-you marketing system installed in your own accounts.",
+  icons: {
+    icon: "/favicon.ico",
+    shortcut: "/favicon.ico",
+    apple: "/favicon.ico",
+  },
 };
 
 export default function RootLayout({
