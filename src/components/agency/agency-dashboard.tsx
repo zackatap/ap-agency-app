@@ -93,6 +93,48 @@ function Kpi({ label, value, sub, diff, better, kind }: KpiProps) {
   );
 }
 
+function CollapsibleBlock({
+  id,
+  title,
+  open,
+  onToggle,
+  children,
+}: {
+  id: string;
+  title: string;
+  open: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="space-y-3">
+      <button
+        type="button"
+        id={`${id}-heading`}
+        aria-expanded={open}
+        aria-controls={`${id}-panel`}
+        onClick={onToggle}
+        className="flex w-full items-center justify-between gap-3 rounded-2xl border border-white/10 bg-slate-900/40 px-4 py-3 text-left transition-colors hover:bg-slate-900/55"
+      >
+        <span className="text-sm font-semibold uppercase tracking-wide text-slate-300">
+          {title}
+        </span>
+        <span
+          className={`shrink-0 text-slate-400 transition-transform duration-200 ${open ? "rotate-180" : ""}`}
+          aria-hidden
+        >
+          ▾
+        </span>
+      </button>
+      {open ? (
+        <div id={`${id}-panel`} role="region" aria-labelledby={`${id}-heading`}>
+          {children}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 /**
  * Count/money SUMS (leads, appts, showed, closed, value, spend) are totals
  * across every included campaign so the displayed numbers don't quietly
@@ -285,6 +327,9 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
   const [onTotals, setOnTotals] = useState(
     () => initial?.onTotals !== false
   );
+  const [metricsSectionOpen, setMetricsSectionOpen] = useState(true);
+  const [chartsSectionOpen, setChartsSectionOpen] = useState(true);
+  const [distributionSectionOpen, setDistributionSectionOpen] = useState(true);
 
   const leaderboardRef = useRef<HTMLElement | null>(null);
   const selectCampaignForCompare = (campaignKey: string) => {
@@ -682,129 +727,156 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
               </div>
             </div>
 
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-              {kpiCards.map((card, idx) => (
-                <Kpi key={idx} {...card} />
-              ))}
-            </div>
+            <CollapsibleBlock
+              id="agency-metrics"
+              title="Key metrics"
+              open={metricsSectionOpen}
+              onToggle={() => setMetricsSectionOpen((v) => !v)}
+            >
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+                {kpiCards.map((card, idx) => (
+                  <Kpi key={idx} {...card} />
+                ))}
+              </div>
+            </CollapsibleBlock>
           </section>
 
-          <section className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-            <div className="rounded-2xl border border-white/10 bg-slate-900/30 p-5">
-              <div className="flex items-baseline justify-between">
-                <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-300">
-                  Agency totals per month
-                </h2>
-                <span className="text-xs text-slate-500">
-                  {months.length} months
-                </span>
-              </div>
-              <div className="mt-4">
-                <MonthlyTotalsChart months={months} />
-              </div>
-            </div>
-
-            <div className="rounded-2xl border border-white/10 bg-slate-900/30 p-5">
-              <div className="flex flex-wrap items-baseline justify-between gap-3">
-                <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-300">
-                  Conversion rates
-                </h2>
-                <div className="flex items-center gap-2 rounded-lg bg-slate-800/50 p-1 text-xs">
-                  <button
-                    onClick={() => setRatesMode("simple")}
-                    className={`rounded-md px-3 py-1 transition-colors ${
-                      ratesMode === "simple"
-                        ? "bg-indigo-600 text-white"
-                        : "text-slate-300 hover:text-white"
-                    }`}
-                    title="Average of each campaign's rate (campaigns weighted equally)"
-                  >
-                    Simple avg
-                  </button>
-                  <button
-                    onClick={() => setRatesMode("weighted")}
-                    className={`rounded-md px-3 py-1 transition-colors ${
-                      ratesMode === "weighted"
-                        ? "bg-indigo-600 text-white"
-                        : "text-slate-300 hover:text-white"
-                    }`}
-                    title="Sum across all campaigns (big accounts dominate)"
-                  >
-                    Weighted
-                  </button>
+          <CollapsibleBlock
+            id="agency-charts"
+            title="Totals & rates"
+            open={chartsSectionOpen}
+            onToggle={() => setChartsSectionOpen((v) => !v)}
+          >
+            <section className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+              <div className="rounded-2xl border border-white/10 bg-slate-900/30 p-5">
+                <div className="flex items-baseline justify-between">
+                  <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-300">
+                    Agency totals per month
+                  </h2>
+                  <span className="text-xs text-slate-500">
+                    {months.length} months
+                  </span>
+                </div>
+                <div className="mt-4">
+                  <MonthlyTotalsChart months={months} />
                 </div>
               </div>
-              <div className="mt-4">
-                <RatesChart months={months} mode={ratesMode} />
-              </div>
-            </div>
-          </section>
 
-          <section className="rounded-2xl border border-white/10 bg-slate-900/30 p-5">
-            <div className="flex flex-wrap items-baseline justify-between gap-3">
-              <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-300">
-                Campaign distribution
-              </h2>
-              <div className="flex flex-wrap items-center gap-2 text-xs">
-                <select
-                  value={distributionMetric}
-                  onChange={(e) =>
-                    setDistributionMetric(e.target.value as MetricKey)
-                  }
-                  className="rounded-lg border border-white/10 bg-slate-950/60 px-2 py-1 text-slate-200"
-                >
-                  {METRIC_ORDER.map((key) => (
-                    <option key={key} value={key}>
-                      {METRIC_META[key].label}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  value={selectedMonthKey}
-                  onChange={(e) =>
-                    setSelectedMonthKey(
-                      e.target.value as string | "total"
-                    )
-                  }
-                  className="rounded-lg border border-white/10 bg-slate-950/60 px-2 py-1 text-slate-200"
-                >
-                  <option value="total">Selected date range</option>
-                  {months.map((m) => (
-                    <option key={m.monthKey} value={m.monthKey}>
-                      {formatMonthLabel(m.monthKey)}
-                    </option>
-                  ))}
-                </select>
+              <div className="rounded-2xl border border-white/10 bg-slate-900/30 p-5">
+                <div className="flex flex-wrap items-baseline justify-between gap-3">
+                  <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-300">
+                    Conversion rates
+                  </h2>
+                  <div className="flex items-center gap-2 rounded-lg bg-slate-800/50 p-1 text-xs">
+                    <button
+                      type="button"
+                      onClick={() => setRatesMode("simple")}
+                      className={`rounded-md px-3 py-1 transition-colors ${
+                        ratesMode === "simple"
+                          ? "bg-indigo-600 text-white"
+                          : "text-slate-300 hover:text-white"
+                      }`}
+                      title="Average of each campaign's rate (campaigns weighted equally)"
+                    >
+                      Simple avg
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setRatesMode("weighted")}
+                      className={`rounded-md px-3 py-1 transition-colors ${
+                        ratesMode === "weighted"
+                          ? "bg-indigo-600 text-white"
+                          : "text-slate-300 hover:text-white"
+                      }`}
+                      title="Sum across all campaigns (big accounts dominate)"
+                    >
+                      Weighted
+                    </button>
+                  </div>
+                </div>
+                <div className="mt-4">
+                  <RatesChart months={months} mode={ratesMode} />
+                </div>
               </div>
-            </div>
-            <p className="mt-2 text-xs text-slate-400">
-              Each dot is one campaign. The indigo bar covers the middle 50%
-              of campaigns; the vertical line is the agency average. Click any
-              dot to open that campaign&apos;s benchmark.
-            </p>
-            <div className="mt-4">
-              <DistributionStrip
-                campaigns={includedCampaigns}
-                metric={distributionMetric}
-                monthKey={selectedMonthKey}
-                excludedKeys={excludedKeys}
-                highlightedCampaignKey={compareCampaignKey || undefined}
-                onSelect={(campaign) =>
-                  selectCampaignForCompare(campaign.campaignKey)
-                }
-              />
-            </div>
-          </section>
+            </section>
+          </CollapsibleBlock>
+
+          <CollapsibleBlock
+            id="agency-distribution"
+            title="Campaign distribution"
+            open={distributionSectionOpen}
+            onToggle={() => setDistributionSectionOpen((v) => !v)}
+          >
+            <section className="rounded-2xl border border-white/10 bg-slate-900/30 p-5">
+              <div className="flex flex-wrap items-baseline justify-between gap-3">
+                <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-300">
+                  Campaign distribution
+                </h2>
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <select
+                    value={distributionMetric}
+                    onChange={(e) =>
+                      setDistributionMetric(e.target.value as MetricKey)
+                    }
+                    className="rounded-lg border border-white/10 bg-slate-950/60 px-2 py-1 text-slate-200"
+                  >
+                    {METRIC_ORDER.map((key) => (
+                      <option key={key} value={key}>
+                        {METRIC_META[key].label}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    value={selectedMonthKey}
+                    onChange={(e) =>
+                      setSelectedMonthKey(
+                        e.target.value as string | "total"
+                      )
+                    }
+                    className="rounded-lg border border-white/10 bg-slate-950/60 px-2 py-1 text-slate-200"
+                  >
+                    <option value="total">Selected date range</option>
+                    {months.map((m) => (
+                      <option key={m.monthKey} value={m.monthKey}>
+                        {formatMonthLabel(m.monthKey)}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <p className="mt-2 text-xs text-slate-400">
+                Each dot is one campaign. The indigo bar covers the middle 50%
+                of campaigns; the vertical line is the agency average. Click any
+                dot to open that campaign&apos;s benchmark.
+              </p>
+              <div className="mt-4">
+                <DistributionStrip
+                  campaigns={includedCampaigns}
+                  metric={distributionMetric}
+                  monthKey={selectedMonthKey}
+                  excludedKeys={excludedKeys}
+                  highlightedCampaignKey={compareCampaignKey || undefined}
+                  onSelect={(campaign) =>
+                    selectCampaignForCompare(campaign.campaignKey)
+                  }
+                />
+              </div>
+            </section>
+          </CollapsibleBlock>
 
           <section ref={leaderboardRef} className="scroll-mt-8 space-y-3">
-            <div className="flex flex-wrap items-baseline justify-between gap-3">
-              <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-300">
-                Client leaderboard
-              </h2>
-              <p className="text-xs text-slate-500">
-                Click <span className="text-slate-300">Compare</span> on any
-                row to see that client benchmarked against the agency inline.
-              </p>
+            <div
+              className="sticky top-0 z-30 -mx-4 border-b border-white/10 bg-slate-950/90 px-4 py-3 shadow-[0_8px_24px_-12px_rgba(0,0,0,0.65)] backdrop-blur-md sm:-mx-8 sm:px-8"
+            >
+              <div className="flex flex-wrap items-baseline justify-between gap-3">
+                <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-300">
+                  Client leaderboard
+                </h2>
+                <p className="text-xs text-slate-500">
+                  Click <span className="text-slate-300">Compare</span> on any
+                  row to see that client benchmarked against the agency inline.
+                </p>
+              </div>
             </div>
             <LeaderboardTable
               campaigns={includedCampaigns}
