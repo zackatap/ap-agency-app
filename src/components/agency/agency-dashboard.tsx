@@ -21,6 +21,7 @@ import { ClientBenchmark } from "./client-benchmark";
 import { ClientMap } from "./client-map";
 import {
   aggregateCampaignWindow,
+  aggregateCampaignWindowTopFraction,
   type FilteredAggregate,
   buildExcludedSet,
   type ExclusionLevel,
@@ -37,6 +38,7 @@ interface Props {
 }
 
 type DashboardTab = "performance" | "map";
+type KpiSummaryMode = "average" | "top20";
 
 function delta(
   current: number | null | undefined,
@@ -150,9 +152,15 @@ function buildKpiCards(
   sums: FilteredAggregate,
   priorSums: FilteredAggregate,
   rates: FilteredAggregate,
-  priorRates: FilteredAggregate
+  priorRates: FilteredAggregate,
+  summaryMode: KpiSummaryMode
 ): KpiProps[] {
-  const avgSub = "Avg across clients";
+  const rateSub =
+    summaryMode === "average"
+      ? "Avg across clients"
+      : "Mean of top 20% (by each metric)";
+  const volumeSub =
+    summaryMode === "average" ? undefined : "Mean of top 20% (by each metric)";
   return [
     {
       label: "Leads",
@@ -160,6 +168,7 @@ function buildKpiCards(
       diff: delta(sums.leads, priorSums.leads),
       better: "up",
       kind: "count",
+      sub: volumeSub,
     },
     {
       label: "Appointments",
@@ -167,6 +176,7 @@ function buildKpiCards(
       diff: delta(sums.totalAppts, priorSums.totalAppts),
       better: "up",
       kind: "count",
+      sub: volumeSub,
     },
     {
       label: "Showed",
@@ -174,6 +184,7 @@ function buildKpiCards(
       diff: delta(sums.showed, priorSums.showed),
       better: "up",
       kind: "count",
+      sub: volumeSub,
     },
     {
       label: "Closed",
@@ -181,11 +192,12 @@ function buildKpiCards(
       diff: delta(sums.closed, priorSums.closed),
       better: "up",
       kind: "count",
+      sub: volumeSub,
     },
     {
       label: "Booking rate",
       value: formatMetricValue(rates.bookingRate, "rate"),
-      sub: avgSub,
+      sub: rateSub,
       diff: delta(rates.bookingRate, priorRates.bookingRate),
       better: "up",
       kind: "rate",
@@ -193,7 +205,7 @@ function buildKpiCards(
     {
       label: "Show rate",
       value: formatMetricValue(rates.showRate, "rate"),
-      sub: avgSub,
+      sub: rateSub,
       diff: delta(rates.showRate, priorRates.showRate),
       better: "up",
       kind: "rate",
@@ -201,7 +213,7 @@ function buildKpiCards(
     {
       label: "Close rate",
       value: formatMetricValue(rates.closeRate, "rate"),
-      sub: avgSub,
+      sub: rateSub,
       diff: delta(rates.closeRate, priorRates.closeRate),
       better: "up",
       kind: "rate",
@@ -209,7 +221,7 @@ function buildKpiCards(
     {
       label: "ROAS",
       value: formatMetricValue(rates.roas, "ratio"),
-      sub: avgSub,
+      sub: rateSub,
       diff: delta(rates.roas, priorRates.roas),
       better: "up",
       kind: "ratio",
@@ -220,6 +232,7 @@ function buildKpiCards(
       diff: delta(sums.successValue, priorSums.successValue),
       better: "up",
       kind: "money",
+      sub: volumeSub,
     },
     {
       label: "Ad spend",
@@ -227,11 +240,12 @@ function buildKpiCards(
       diff: delta(sums.adSpend, priorSums.adSpend),
       better: "down",
       kind: "money",
+      sub: volumeSub,
     },
     {
       label: "Cost / Lead",
       value: formatMetricValue(rates.cpl, "money"),
-      sub: avgSub,
+      sub: rateSub,
       diff: delta(rates.cpl, priorRates.cpl),
       better: "down",
       kind: "money",
@@ -239,7 +253,7 @@ function buildKpiCards(
     {
       label: "Cost / Close",
       value: formatMetricValue(rates.cpClose, "money"),
-      sub: avgSub,
+      sub: rateSub,
       diff: delta(rates.cpClose, priorRates.cpClose),
       better: "down",
       kind: "money",
@@ -330,6 +344,7 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
   const [metricsSectionOpen, setMetricsSectionOpen] = useState(true);
   const [chartsSectionOpen, setChartsSectionOpen] = useState(true);
   const [distributionSectionOpen, setDistributionSectionOpen] = useState(true);
+  const [kpiSummaryMode, setKpiSummaryMode] = useState<KpiSummaryMode>("average");
 
   const leaderboardRef = useRef<HTMLElement | null>(null);
   const selectCampaignForCompare = (campaignKey: string) => {
@@ -462,28 +477,45 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
 
   const months = view?.months ?? [];
 
-  // Count sums come from ALL included campaigns over the selected range.
-  const currentSums = useMemo(
-    () => aggregateCampaignWindow(includedCampaigns, "totals"),
-    [includedCampaigns]
-  );
-  const priorSums = useMemo(
-    () => aggregateCampaignWindow(includedCampaigns, "priorTotals"),
-    [includedCampaigns]
-  );
-  // Rate KPIs use the TRUSTED subset — one vote per campaign.
-  const currentRates = useMemo(
-    () => aggregateCampaignWindow(trustedCampaigns, "totals"),
-    [trustedCampaigns]
-  );
-  const priorRates = useMemo(
-    () => aggregateCampaignWindow(trustedCampaigns, "priorTotals"),
-    [trustedCampaigns]
-  );
+  const { currentSums, priorSums, currentRates, priorRates } = useMemo(() => {
+    if (kpiSummaryMode === "average") {
+      return {
+        currentSums: aggregateCampaignWindow(includedCampaigns, "totals"),
+        priorSums: aggregateCampaignWindow(includedCampaigns, "priorTotals"),
+        currentRates: aggregateCampaignWindow(trustedCampaigns, "totals"),
+        priorRates: aggregateCampaignWindow(trustedCampaigns, "priorTotals"),
+      };
+    }
+    const cur = aggregateCampaignWindowTopFraction(
+      includedCampaigns,
+      trustedCampaigns,
+      "totals",
+      0.2
+    );
+    const pri = aggregateCampaignWindowTopFraction(
+      includedCampaigns,
+      trustedCampaigns,
+      "priorTotals",
+      0.2
+    );
+    return {
+      currentSums: cur,
+      priorSums: pri,
+      currentRates: cur,
+      priorRates: pri,
+    };
+  }, [includedCampaigns, trustedCampaigns, kpiSummaryMode]);
 
   const kpiCards = useMemo(
-    () => buildKpiCards(currentSums, priorSums, currentRates, priorRates),
-    [currentSums, priorSums, currentRates, priorRates]
+    () =>
+      buildKpiCards(
+        currentSums,
+        priorSums,
+        currentRates,
+        priorRates,
+        kpiSummaryMode
+      ),
+    [currentSums, priorSums, currentRates, priorRates, kpiSummaryMode]
   );
 
   const activeLocationCount = useMemo(() => {
@@ -733,7 +765,39 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
               open={metricsSectionOpen}
               onToggle={() => setMetricsSectionOpen((v) => !v)}
             >
-              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/10 bg-slate-900/30 px-4 py-3">
+                <p className="text-xs text-slate-500">
+                  {kpiSummaryMode === "average"
+                    ? "Agency-wide totals for volumes; simple average across clients for rates."
+                    : "Each card uses the mean of the best 20% of campaigns for that metric (trusted clients for rates & costs)."}
+                </p>
+                <div className="flex shrink-0 items-center gap-1 rounded-lg bg-slate-800/50 p-1 text-xs">
+                  <button
+                    type="button"
+                    onClick={() => setKpiSummaryMode("average")}
+                    className={`rounded-md px-3 py-1.5 transition-colors ${
+                      kpiSummaryMode === "average"
+                        ? "bg-indigo-600 text-white"
+                        : "text-slate-300 hover:text-white"
+                    }`}
+                  >
+                    Agency avg
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setKpiSummaryMode("top20")}
+                    className={`rounded-md px-3 py-1.5 transition-colors ${
+                      kpiSummaryMode === "top20"
+                        ? "bg-indigo-600 text-white"
+                        : "text-slate-300 hover:text-white"
+                    }`}
+                    title="Mean of the top 20% of campaigns for each metric independently"
+                  >
+                    Top 20%
+                  </button>
+                </div>
+              </div>
+              <div className="mt-3 grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
                 {kpiCards.map((card, idx) => (
                   <Kpi key={idx} {...card} />
                 ))}

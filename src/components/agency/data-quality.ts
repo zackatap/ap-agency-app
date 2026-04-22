@@ -271,6 +271,199 @@ export function aggregateCampaignWindow(
 }
 
 /**
+ * How many values fall in the top `fraction` of a sorted list (at least 1).
+ */
+function topSliceSize(n: number, fraction: number): number {
+  if (n <= 0) return 0;
+  return Math.max(1, Math.ceil(n * fraction));
+}
+
+/**
+ * Mean of the best `fraction` of values for this metric (each value is one
+ * campaign). "Best" = descending sort when `higherIsBetter`, else ascending
+ * (e.g. CPL — lower cost is better).
+ */
+function topFractionMean(
+  values: number[],
+  higherIsBetter: boolean,
+  fraction: number,
+  decimals: number
+): number | null {
+  if (values.length === 0) return null;
+  const k = topSliceSize(values.length, fraction);
+  const sorted = [...values].sort((a, b) =>
+    higherIsBetter ? b - a : a - b
+  );
+  const slice = sorted.slice(0, k);
+  return roundAvg(slice, decimals);
+}
+
+function volumeTopFraction(
+  campaigns: ClientCampaignSummary[],
+  which: TotalsKey,
+  pick: (t: ClientCampaignSummary["totals"]) => number,
+  higherIsBetter: boolean,
+  fraction: number,
+  decimals: number
+): number {
+  const vals = campaigns
+    .map((c) => pick(c[which]))
+    .filter((v) => typeof v === "number" && !Number.isNaN(v));
+  return topFractionMean(vals, higherIsBetter, fraction, decimals) ?? 0;
+}
+
+function rateTopFraction(
+  campaigns: ClientCampaignSummary[],
+  which: TotalsKey,
+  pick: (t: ClientCampaignSummary["totals"]) => number | null,
+  higherIsBetter: boolean,
+  fraction: number,
+  decimals: number
+): number | null {
+  const vals = campaigns
+    .map((c) => pick(c[which]))
+    .filter((v): v is number => v != null && !Number.isNaN(v));
+  return topFractionMean(vals, higherIsBetter, fraction, decimals);
+}
+
+/**
+ * Like {@link aggregateCampaignWindow}, but each KPI uses the **mean of the
+ * top `fraction` of campaigns** for **that** metric alone (ranked best →
+ * worst, then average the leading slice). Volume campaigns = included list;
+ * rate/cost metrics = trusted list (same hygiene policy as simple averages).
+ */
+export function aggregateCampaignWindowTopFraction(
+  volumeCampaigns: ClientCampaignSummary[],
+  rateCampaigns: ClientCampaignSummary[],
+  which: TotalsKey,
+  fraction: number = 0.2
+): FilteredAggregate {
+  const f = fraction;
+  const leads = volumeTopFraction(
+    volumeCampaigns,
+    which,
+    (t) => t.leads,
+    true,
+    f,
+    0
+  );
+  const totalAppts = volumeTopFraction(
+    volumeCampaigns,
+    which,
+    (t) => t.totalAppts,
+    true,
+    f,
+    0
+  );
+  const showed = volumeTopFraction(
+    volumeCampaigns,
+    which,
+    (t) => t.showed,
+    true,
+    f,
+    0
+  );
+  const noShow = volumeTopFraction(
+    volumeCampaigns,
+    which,
+    (t) => t.noShow,
+    false,
+    f,
+    0
+  );
+  const closed = volumeTopFraction(
+    volumeCampaigns,
+    which,
+    (t) => t.closed,
+    true,
+    f,
+    0
+  );
+  const totalValue = volumeTopFraction(
+    volumeCampaigns,
+    which,
+    (t) => t.totalValue,
+    true,
+    f,
+    2
+  );
+  const successValue = volumeTopFraction(
+    volumeCampaigns,
+    which,
+    (t) => t.successValue,
+    true,
+    f,
+    2
+  );
+  const adSpend = volumeTopFraction(
+    volumeCampaigns,
+    which,
+    (t) => t.adSpend,
+    true,
+    f,
+    2
+  );
+
+  const bookingRate = rateTopFraction(
+    rateCampaigns,
+    which,
+    (t) => t.bookingRate,
+    true,
+    f,
+    1
+  );
+  const showRate = rateTopFraction(
+    rateCampaigns,
+    which,
+    (t) => t.showRate,
+    true,
+    f,
+    1
+  );
+  const closeRate = rateTopFraction(
+    rateCampaigns,
+    which,
+    (t) => t.closeRate,
+    true,
+    f,
+    1
+  );
+  const cpl = rateTopFraction(rateCampaigns, which, (t) => t.cpl, false, f, 2);
+  const cps = rateTopFraction(rateCampaigns, which, (t) => t.cps, false, f, 2);
+  const cpClose = rateTopFraction(
+    rateCampaigns,
+    which,
+    (t) => t.cpClose,
+    false,
+    f,
+    2
+  );
+  const roas = rateTopFraction(rateCampaigns, which, (t) => t.roas, true, f, 2);
+
+  const contributingCampaigns =
+    rateCampaigns.length > 0 ? topSliceSize(rateCampaigns.length, f) : 0;
+
+  return {
+    contributingCampaigns,
+    leads,
+    totalAppts,
+    showed,
+    noShow,
+    closed,
+    totalValue,
+    successValue,
+    adSpend,
+    bookingRate,
+    showRate,
+    closeRate,
+    cpl,
+    cps,
+    cpClose,
+    roas,
+  };
+}
+
+/**
  * Simple (unweighted) mean of the sample list, rounded to `decimals` places.
  * Returns null for empty lists so the KPI card shows "—" instead of "0%".
  */
