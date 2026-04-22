@@ -152,6 +152,74 @@ export async function fetchSpendByMonth(
   }
 }
 
+/**
+ * Fetch ad spend bucketed by DAY over an inclusive `[since, until]` window.
+ * Returns a map keyed by YYYY-MM-DD (empty object on error). Used by the
+ * agency rollup so KPIs can be sliced to arbitrary ranges.
+ */
+export async function fetchSpendByDay(
+  nodeId: string,
+  isCampaign: boolean,
+  since: string,
+  until: string
+): Promise<{ spendByDate: Record<string, number>; error?: string }> {
+  const token = getAccessToken();
+  if (!token) {
+    return { spendByDate: {}, error: "META_ACCESS_TOKEN not configured" };
+  }
+
+  const graphId = isCampaign ? nodeId : normalizeAdAccountId(nodeId);
+  if (!graphId) {
+    return { spendByDate: {}, error: "Invalid ad account or campaign ID" };
+  }
+
+  const params = new URLSearchParams({
+    fields: "spend",
+    access_token: token,
+    time_range: JSON.stringify({ since, until }),
+    time_increment: "1", // daily
+  });
+
+  let url: string | null = `${META_GRAPH}/${META_API_VERSION}/${graphId}/insights?${params}`;
+  const spendByDate: Record<string, number> = {};
+
+  try {
+    // Meta paginates day-bucket responses — follow `paging.next` until exhausted.
+    while (url) {
+      const res: Response = await fetch(url);
+      const json = (await res.json()) as {
+        data?: Array<{ date_start?: string; spend?: string }>;
+        paging?: { next?: string };
+        error?: { message?: string };
+      };
+      if (json.error) {
+        return {
+          spendByDate,
+          error: json.error.message ?? String(json.error),
+        };
+      }
+      const data = Array.isArray(json.data) ? json.data : [];
+      for (const row of data) {
+        const day = row.date_start;
+        const spendVal = row.spend;
+        if (day && spendVal != null) {
+          const val = parseFloat(String(spendVal));
+          if (!Number.isNaN(val) && val > 0) {
+            spendByDate[day] = (spendByDate[day] ?? 0) + val;
+          }
+        }
+      }
+      url = json.paging?.next ?? null;
+    }
+    return { spendByDate };
+  } catch (err) {
+    return {
+      spendByDate,
+      error: err instanceof Error ? err.message : "Failed to fetch daily insights",
+    };
+  }
+}
+
 export type MetaInsightsLevel = "campaign" | "adset" | "ad";
 
 /**

@@ -34,7 +34,7 @@
 
 import type {
   ClientCampaignSummary,
-  ClientCampaignMonth,
+  ClientCampaignWindowTotals,
 } from "./types";
 
 export const EXCLUSION_LEVELS = ["off", "light", "moderate", "aggressive"] as const;
@@ -141,8 +141,6 @@ export function buildExcludedSet(
 }
 
 export interface FilteredAggregate {
-  /** Number of months the window covers. */
-  monthsCount: number;
   /** Number of campaigns that contributed non-zero data to the rate averages. */
   contributingCampaigns: number;
   leads: number;
@@ -162,30 +160,29 @@ export interface FilteredAggregate {
   roas: number | null;
 }
 
+type TotalsKey = "totals" | "priorTotals";
+
 /**
- * Re-aggregate a specific month-window from a subset of campaigns for the
- * KPI cards.
+ * Aggregate window totals across a subset of campaigns for the KPI cards.
  *
  *   - Sums (leads, appts, showed, closed, adSpend, value) are pooled totals
- *     across every contributing campaign so "total Leads" still means what
+ *     across every campaign in the list so "total Leads" still means what
  *     it says.
  *   - Rates and cost ratios use a **simple (unweighted) average across
- *     campaigns**: each campaign computes its own window-level rate from
- *     its own counts, then we average those rates. Every client gets one
- *     vote regardless of size — a 3,000-lead client doesn't drown out a
- *     300-lead client. This matches the benchmark chart's agency avg line
- *     and the individual dashboard's per-client rate.
+ *     campaigns**: the server has already computed each campaign's rate
+ *     over the exact date range, and we just average those values. Every
+ *     client gets one vote regardless of size — a 3,000-lead client
+ *     doesn't drown out a 300-lead client.
  *
- * A campaign only contributes to a rate when its denominator is positive
- * (e.g. a campaign with zero leads doesn't vote on booking rate — it has no
- * opinion, not a "0%" opinion).
+ * Only rates with a non-null value (i.e. the campaign had a non-zero
+ * denominator over the window) contribute — a campaign with zero leads
+ * doesn't vote on booking rate.
  */
-export function aggregateCampaignsOverMonths(
+export function aggregateCampaignWindow(
   campaigns: ClientCampaignSummary[],
-  monthKeys: string[]
+  which: TotalsKey = "totals"
 ): FilteredAggregate {
-  const monthSet = new Set(monthKeys);
-  const totals = {
+  const sums = {
     leads: 0,
     totalAppts: 0,
     showed: 0,
@@ -195,9 +192,6 @@ export function aggregateCampaignsOverMonths(
     successValue: 0,
     adSpend: 0,
   };
-
-  // Per-campaign rate samples. Null entries are intentionally omitted so
-  // they don't drag the average down — no denominator = no vote.
   const bookingSamples: number[] = [];
   const showSamples: number[] = [];
   const closeSamples: number[] = [];
@@ -208,80 +202,52 @@ export function aggregateCampaignsOverMonths(
   let contributingCampaigns = 0;
 
   for (const c of campaigns) {
-    const perCampaign = {
-      leads: 0,
-      totalAppts: 0,
-      showed: 0,
-      noShow: 0,
-      closed: 0,
-      totalValue: 0,
-      successValue: 0,
-      adSpend: 0,
-    };
-    let hasAnyMonth = false;
-    for (const m of c.months) {
-      if (!monthSet.has(m.monthKey)) continue;
-      hasAnyMonth = true;
-      accumulate(perCampaign, m);
-    }
-    if (!hasAnyMonth) continue;
-
-    // Fold per-campaign totals into the agency-wide sums.
-    totals.leads += perCampaign.leads;
-    totals.totalAppts += perCampaign.totalAppts;
-    totals.showed += perCampaign.showed;
-    totals.noShow += perCampaign.noShow;
-    totals.closed += perCampaign.closed;
-    totals.totalValue += perCampaign.totalValue;
-    totals.successValue += perCampaign.successValue;
-    totals.adSpend += perCampaign.adSpend;
-
-    // Compute this campaign's window-level rates. No-shows count as booked
-    // but not showed — matches applyRollup in funnel-metrics.ts.
-    const apptPool =
-      perCampaign.totalAppts +
-      perCampaign.showed +
-      perCampaign.noShow +
-      perCampaign.closed;
-    const leadPool = perCampaign.leads + apptPool;
-    const showPool = perCampaign.showed + perCampaign.closed;
+    const t: ClientCampaignWindowTotals = c[which];
+    if (!t) continue;
+    sums.leads += t.leads;
+    sums.totalAppts += t.totalAppts;
+    sums.showed += t.showed;
+    sums.noShow += t.noShow;
+    sums.closed += t.closed;
+    sums.totalValue += t.totalValue;
+    sums.successValue += t.successValue;
+    sums.adSpend += t.adSpend;
 
     let voted = false;
-    if (leadPool > 0) {
-      bookingSamples.push((apptPool / leadPool) * 100);
+    if (t.bookingRate != null) {
+      bookingSamples.push(t.bookingRate);
       voted = true;
     }
-    if (apptPool > 0) {
-      showSamples.push(((perCampaign.showed + perCampaign.closed) / apptPool) * 100);
+    if (t.showRate != null) {
+      showSamples.push(t.showRate);
       voted = true;
     }
-    if (showPool > 0) {
-      closeSamples.push((perCampaign.closed / showPool) * 100);
+    if (t.closeRate != null) {
+      closeSamples.push(t.closeRate);
       voted = true;
     }
-    if (perCampaign.adSpend > 0 && perCampaign.leads > 0) {
-      cplSamples.push(perCampaign.adSpend / perCampaign.leads);
+    if (t.cpl != null) {
+      cplSamples.push(t.cpl);
       voted = true;
     }
-    if (perCampaign.adSpend > 0 && perCampaign.showed > 0) {
-      cpsSamples.push(perCampaign.adSpend / perCampaign.showed);
+    if (t.cps != null) {
+      cpsSamples.push(t.cps);
       voted = true;
     }
-    if (perCampaign.adSpend > 0 && perCampaign.closed > 0) {
-      cpCloseSamples.push(perCampaign.adSpend / perCampaign.closed);
+    if (t.cpClose != null) {
+      cpCloseSamples.push(t.cpClose);
       voted = true;
     }
-    if (perCampaign.adSpend > 0) {
-      roasSamples.push(perCampaign.successValue / perCampaign.adSpend);
+    if (t.roas != null) {
+      roasSamples.push(t.roas);
       voted = true;
     }
     if (voted) contributingCampaigns += 1;
   }
 
   return {
-    monthsCount: monthKeys.length,
     contributingCampaigns,
-    ...totals,
+    ...sums,
     bookingRate: roundAvg(bookingSamples, 1),
     showRate: roundAvg(showSamples, 1),
     closeRate: roundAvg(closeSamples, 1),
@@ -301,27 +267,4 @@ function roundAvg(samples: number[], decimals: number): number | null {
   const mean = samples.reduce((a, b) => a + b, 0) / samples.length;
   const scale = Math.pow(10, decimals);
   return Math.round(mean * scale) / scale;
-}
-
-function accumulate(
-  totals: {
-    leads: number;
-    totalAppts: number;
-    showed: number;
-    noShow: number;
-    closed: number;
-    totalValue: number;
-    successValue: number;
-    adSpend: number;
-  },
-  m: ClientCampaignMonth
-): void {
-  totals.leads += m.leads;
-  totals.totalAppts += m.totalAppts;
-  totals.showed += m.showed;
-  totals.noShow += m.noShow;
-  totals.closed += m.closed;
-  totals.totalValue += m.totalValue;
-  totals.successValue += m.successValue;
-  totals.adSpend += m.adSpend;
 }

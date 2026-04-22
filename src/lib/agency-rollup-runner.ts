@@ -28,7 +28,7 @@
 import { getToken } from "@/lib/oauth-tokens";
 import {
   getPipelines,
-  getOpportunityCountsByStagePerMonth,
+  getOpportunityCountsByStagePerDay,
   type GHLOpportunity,
   type GHLPipeline,
 } from "@/lib/ghl-oauth";
@@ -41,7 +41,7 @@ import { getMonthsBack } from "@/lib/date-ranges";
 import { getLocationSettings } from "@/lib/location-settings";
 import {
   fetchCampaigns,
-  fetchSpendByMonth,
+  fetchSpendByDay,
   type FacebookCampaign,
 } from "@/lib/facebook-ads";
 import {
@@ -51,12 +51,13 @@ import {
 import {
   createSnapshot,
   finishSnapshot,
-  insertCampaignMonths,
+  insertCampaignDays,
   updateSnapshotProgress,
   upsertCampaigns,
+  upsertCampaignRuns,
   getRunningSnapshot,
   expireStaleRunningSnapshots,
-  type AgencyCampaignMonth,
+  type AgencyCampaignDay,
   type AgencySnapshot,
 } from "@/lib/agency-rollup-store";
 
@@ -184,26 +185,23 @@ class QualityAccumulator {
 }
 
 /**
- * Movement ratio = (showed + noShow + closed) / (requested + confirmed +
- * showed + noShow + closed) across all "aged" months in the window. Months
- * whose endDate falls within MOVEMENT_GRACE_DAYS of today are excluded so
- * we don't penalize legitimately-in-flight appointments. Returns null when
- * there's not enough signal (no appointments at all in aged months).
+ * Movement ratio = (showed + noShow + closed) / (totalAppts + showed +
+ * noShow + closed) across all "aged" days in the window. Days within
+ * MOVEMENT_GRACE_DAYS of today are excluded so we don't penalize
+ * legitimately-in-flight appointments. Returns null when there's not enough
+ * signal (no appointments at all in aged days).
  */
 function computeMovementRatio(
-  monthRows: Array<{
-    endDate: string;
-    metrics: FunnelMetrics;
-  }>
+  dayRows: Array<{ date: string; metrics: FunnelMetrics }>
 ): number | null {
   const cutoffMs = Date.now() - MOVEMENT_GRACE_DAYS * 86400_000;
   let movedPast = 0;
   let totalReached = 0;
-  for (const row of monthRows) {
-    const endMs = Date.parse(row.endDate);
-    if (!Number.isFinite(endMs) || endMs > cutoffMs) continue;
+  for (const row of dayRows) {
+    const t = Date.parse(row.date);
+    if (!Number.isFinite(t) || t > cutoffMs) continue;
     const m = row.metrics;
-    const reached = m.requested + m.confirmed + m.showed + m.noShow + m.closed;
+    const reached = m.totalAppts + m.showed + m.noShow + m.closed;
     if (reached <= 0) continue;
     totalReached += reached;
     movedPast += m.showed + m.noShow + m.closed;
@@ -317,6 +315,15 @@ async function executeRollup(
   }
 
   const monthRanges = getMonthsBack(months);
+  // The widest date window we need — earliest month's startDate through
+  // latest month's endDate. Used for day-grained GHL + Meta fetches.
+  const sortedRanges = monthRanges
+    .slice()
+    .sort((a, b) => a.startDate.localeCompare(b.startDate));
+  const windowRange = {
+    startDate: sortedRanges[0]?.startDate ?? "",
+    endDate: sortedRanges[sortedRanges.length - 1]?.endDate ?? "",
+  };
 
   // Group campaigns by locationId so we can share GHL work (one token lookup
   // + one pipeline list fetch per location instead of per campaign).
@@ -364,7 +371,7 @@ async function executeRollup(
           snapshotId,
           locationId,
           campaignsAtLocation,
-          monthRanges,
+          windowRange,
           getFbCampaigns,
           onCampaignResult: (result) => {
             if (result === "ok") included += 1;
@@ -387,13 +394,15 @@ async function executeRollup(
           });
           try {
             await upsertCampaignWithoutPipeline(campaign, message);
-            await insertEmptyMonthRows(
-              snapshotId,
-              campaign,
-              monthRanges,
-              message,
-              "error"
-            );
+            await upsertCampaignRuns([
+              {
+                snapshotId,
+                campaignKey: campaign.campaignKey,
+                locationId: campaign.locationId,
+                status: "error",
+                errorMessage: message,
+              },
+            ]);
           } catch (inner) {
             console.error(
               "[agency-rollup-runner] recovery insert failed:",
@@ -426,13 +435,15 @@ async function executeRollup(
 /**
  * Process every campaign that belongs to a single GHL location. We fetch the
  * location's OAuth token and pipeline list exactly once, then resolve each
- * campaign individually and fetch its opportunity counts + Meta spend.
+ * campaign individually and fetch its opportunity counts + Meta spend at
+ * day grain. Each OK campaign writes one row per day that had activity; a
+ * `campaign_runs` row is written for every campaign regardless of outcome.
  */
 async function processLocation(args: {
   snapshotId: number;
   locationId: string;
   campaignsAtLocation: ActiveCampaign[];
-  monthRanges: Array<{ monthKey: string; startDate: string; endDate: string }>;
+  windowRange: { startDate: string; endDate: string };
   getFbCampaigns: (
     adAccountId: string
   ) => Promise<{ campaigns: FacebookCampaign[]; error?: string }>;
@@ -443,7 +454,7 @@ async function processLocation(args: {
     snapshotId,
     locationId,
     campaignsAtLocation,
-    monthRanges,
+    windowRange,
     getFbCampaigns,
     onCampaignResult,
     pushError,
@@ -454,13 +465,15 @@ async function processLocation(args: {
     const reason = "No OAuth token — app not installed for this location.";
     for (const c of campaignsAtLocation) {
       await upsertCampaignWithoutPipeline(c, reason);
-      await insertEmptyMonthRows(
-        snapshotId,
-        c,
-        monthRanges,
-        reason,
-        "skipped"
-      );
+      await upsertCampaignRuns([
+        {
+          snapshotId,
+          campaignKey: c.campaignKey,
+          locationId: c.locationId,
+          status: "skipped",
+          errorMessage: reason,
+        },
+      ]);
       onCampaignResult("skipped");
       pushError({
         campaignKey: c.campaignKey,
@@ -477,16 +490,13 @@ async function processLocation(args: {
     getLocationSettings(locationId),
   ]);
 
-  // Cache opportunity counts per pipeline: two campaigns pointing at the same
-  // pipeline (uncommon but possible) only fetch once. The cache also holds
-  // the quality accumulator that was fed during the fetch so callers get
-  // both results in one shot.
+  // Per-pipeline cache: two campaigns pointing at the same pipeline (rare
+  // but possible) only fetch once. Also holds the quality accumulator that
+  // was fed during the fetch so callers pick up both results in one shot.
   const oppCountsCache = new Map<
     string,
     Promise<{
-      perMonth: Awaited<
-        ReturnType<typeof getOpportunityCountsByStagePerMonth>
-      >;
+      perDay: Awaited<ReturnType<typeof getOpportunityCountsByStagePerDay>>;
       quality: QualityAccumulator;
     }>
   >();
@@ -495,13 +505,15 @@ async function processLocation(args: {
     const resolution = resolvePipeline(campaign, pipelines);
     if (!resolution.pipeline) {
       await upsertCampaignWithoutPipeline(campaign, resolution.reason);
-      await insertEmptyMonthRows(
-        snapshotId,
-        campaign,
-        monthRanges,
-        resolution.reason,
-        "skipped"
-      );
+      await upsertCampaignRuns([
+        {
+          snapshotId,
+          campaignKey: campaign.campaignKey,
+          locationId: campaign.locationId,
+          status: "skipped",
+          errorMessage: resolution.reason,
+        },
+      ]);
       onCampaignResult("skipped");
       pushError({
         campaignKey: campaign.campaignKey,
@@ -519,47 +531,51 @@ async function processLocation(args: {
     let oppFetch = oppCountsCache.get(pipeline.id);
     if (!oppFetch) {
       const quality = new QualityAccumulator(customMappings);
-      oppFetch = getOpportunityCountsByStagePerMonth(
+      oppFetch = getOpportunityCountsByStagePerDay(
         locationId,
         pipeline,
         stored.access_token,
-        monthRanges,
+        windowRange,
         attributionMode,
         { onOpp: quality.accept }
-      ).then((perMonth) => ({ perMonth, quality }));
+      ).then((perDay) => ({ perDay, quality }));
       oppCountsCache.set(pipeline.id, oppFetch);
     }
-    const { perMonth, quality } = await oppFetch;
+    const { perDay, quality } = await oppFetch;
 
-    const monthKeys = monthRanges.map((m) => m.monthKey);
+    // Manual spend overrides live at monthly granularity (set per pipeline
+    // in location settings). We treat each month's override as a flat spend
+    // applied to every day of that month that has ad activity — the old
+    // monthly rollup effectively did the same thing.
     const configuredAdSpend = settings?.adSpend?.[pipeline.id] ?? {};
 
-    const fbSpend = await resolveCampaignSpend({
+    const fbSpendByDay = await resolveCampaignSpendByDay({
       campaign,
-      monthKeys,
+      windowRange,
       getFbCampaigns,
     });
 
-    const monthRows = perMonth.map((m) => {
-      const metrics = calculateFunnelMetrics(
-        m.counts,
-        m.values,
+    const daysWithMetrics = perDay.map((d) => ({
+      date: d.date,
+      metrics: calculateFunnelMetrics(
+        d.counts,
+        d.values,
         pipeline.stages ?? undefined,
         customMappings
-      );
-      const manualSpend = Number(configuredAdSpend[m.monthKey] ?? 0);
-      const apiSpend = Number(fbSpend[m.monthKey] ?? 0);
-      const adSpend = manualSpend > 0 ? manualSpend : apiSpend;
-      return {
-        monthKey: m.monthKey,
-        startDate: m.startDate,
-        endDate: m.endDate,
-        metrics,
-        adSpend,
-      };
+      ),
+    }));
+
+    const dayRows = buildDayRows({
+      snapshotId,
+      campaign,
+      daysWithMetrics,
+      fbSpendByDay,
+      configuredAdSpend,
     });
 
-    const qualitySignals = quality.finalize(computeMovementRatio(monthRows));
+    const qualitySignals = quality.finalize(
+      computeMovementRatio(daysWithMetrics)
+    );
 
     await upsertCampaigns([
       {
@@ -580,23 +596,106 @@ async function processLocation(args: {
       },
     ]);
 
-    await insertCampaignMonths(
-      monthRows.map<AgencyCampaignMonth>((row) => ({
+    if (dayRows.length > 0) await insertCampaignDays(dayRows);
+    await upsertCampaignRuns([
+      {
         snapshotId,
         campaignKey: campaign.campaignKey,
         locationId: campaign.locationId,
-        monthKey: row.monthKey,
-        startDate: row.startDate,
-        endDate: row.endDate,
-        metrics: row.metrics,
-        adSpend: row.adSpend,
         status: "ok",
         errorMessage: null,
-      }))
-    );
+      },
+    ]);
 
     onCampaignResult("ok");
   }
+}
+
+/**
+ * Merge GHL per-day metrics with per-day ad spend into flat day rows.
+ *
+ * Manual ad-spend overrides live at MONTHLY granularity (set once per
+ * pipeline in location settings). To preserve the per-month total at day
+ * grain, we evenly distribute a month's manual value across every day of
+ * that month and ignore the API daily spend for the same month — matching
+ * the old monthly behavior where manual fully replaced the API number.
+ *
+ * A day that only has ad spend (no GHL activity) still gets a row so ROAS
+ * / CPL charts over partial-month windows include the spend.
+ */
+function buildDayRows(args: {
+  snapshotId: number;
+  campaign: ActiveCampaign;
+  daysWithMetrics: Array<{ date: string; metrics: FunnelMetrics }>;
+  fbSpendByDay: Record<string, number>;
+  configuredAdSpend: Record<string, number>;
+}): AgencyCampaignDay[] {
+  const { snapshotId, campaign, daysWithMetrics, fbSpendByDay, configuredAdSpend } =
+    args;
+
+  const metricsByDate = new Map<string, FunnelMetrics>();
+  for (const d of daysWithMetrics) metricsByDate.set(d.date, d.metrics);
+
+  // Compute manual daily spend per month (manual total / days in month).
+  const manualDailyByMonth = new Map<string, number>();
+  for (const [monthKey, manualTotal] of Object.entries(configuredAdSpend)) {
+    const total = Number(manualTotal ?? 0);
+    if (!(total > 0)) continue;
+    const [yStr, mStr] = monthKey.split("-");
+    const y = Number(yStr);
+    const m = Number(mStr);
+    if (!y || !m) continue;
+    // JS: new Date(y, m, 0) returns last day of month m.
+    const daysInMonth = new Date(y, m, 0).getDate();
+    if (daysInMonth > 0) manualDailyByMonth.set(monthKey, total / daysInMonth);
+  }
+
+  // Union of days with any activity — keeps the table sparse.
+  const activeDays = new Set<string>();
+  for (const d of daysWithMetrics) activeDays.add(d.date);
+  for (const day of Object.keys(fbSpendByDay)) {
+    if (fbSpendByDay[day] > 0) activeDays.add(day);
+  }
+  // Also include every day of a manual-override month so the monthly total
+  // is preserved even when there's no GHL activity on some days.
+  if (manualDailyByMonth.size > 0) {
+    for (const monthKey of manualDailyByMonth.keys()) {
+      const [yStr, mStr] = monthKey.split("-");
+      const y = Number(yStr);
+      const m = Number(mStr);
+      if (!y || !m) continue;
+      const daysInMonth = new Date(y, m, 0).getDate();
+      for (let d = 1; d <= daysInMonth; d++) {
+        activeDays.add(`${monthKey}-${String(d).padStart(2, "0")}`);
+      }
+    }
+  }
+
+  const rows: AgencyCampaignDay[] = [];
+  for (const date of activeDays) {
+    const m = metricsByDate.get(date);
+    const monthKey = date.slice(0, 7);
+    const manualDaily = manualDailyByMonth.get(monthKey);
+    // Manual override fully replaces API when set (legacy behavior).
+    const adSpend =
+      manualDaily != null ? manualDaily : Number(fbSpendByDay[date] ?? 0);
+
+    rows.push({
+      snapshotId,
+      campaignKey: campaign.campaignKey,
+      locationId: campaign.locationId,
+      date,
+      leads: m?.leads ?? 0,
+      totalAppts: m?.totalAppts ?? 0,
+      showed: m?.showed ?? 0,
+      noShow: m?.noShow ?? 0,
+      closed: m?.closed ?? 0,
+      totalValue: m?.totalValue ?? 0,
+      successValue: m?.successValue ?? 0,
+      adSpend,
+    });
+  }
+  return rows;
 }
 
 interface PipelineResolution {
@@ -668,39 +767,45 @@ function resolvePipeline(
   };
 }
 
-async function resolveCampaignSpend(args: {
+/**
+ * Resolve ad spend for a campaign at DAY granularity over the window. Meta
+ * is called with time_increment=1 so we get one row per spend-day. Returns
+ * a sparse `{ "YYYY-MM-DD": spend }` map — days with zero spend are absent.
+ */
+async function resolveCampaignSpendByDay(args: {
   campaign: ActiveCampaign;
-  monthKeys: string[];
+  windowRange: { startDate: string; endDate: string };
   getFbCampaigns: (
     adAccountId: string
   ) => Promise<{ campaigns: FacebookCampaign[]; error?: string }>;
 }): Promise<Record<string, number>> {
-  const { campaign, monthKeys, getFbCampaigns } = args;
+  const { campaign, windowRange, getFbCampaigns } = args;
   if (!campaign.adAccountId) return {};
+  const { startDate, endDate } = windowRange;
+  if (!startDate || !endDate) return {};
 
   const keyword = campaign.campaignKeyword?.trim();
 
-  // No keyword → account-level total (matches old behavior and the per-location
-  // dashboard's "all campaigns" mode).
   if (!keyword) {
     try {
-      const { spendByMonth } = await fetchSpendByMonth(
+      const { spendByDate } = await fetchSpendByDay(
         campaign.adAccountId,
         false,
-        monthKeys
+        startDate,
+        endDate
       );
-      return spendByMonth;
+      return spendByDate;
     } catch (err) {
       console.warn(
-        `[agency-rollup-runner] account-level spend failed for ${campaign.locationId}:`,
+        `[agency-rollup-runner] account-level daily spend failed for ${campaign.locationId}:`,
         err
       );
       return {};
     }
   }
 
-  // Keyword filter: list FB campaigns (cached per ad account), match by name,
-  // aggregate monthly spend across matches.
+  // Keyword filter: list FB campaigns (cached per ad account), match by
+  // name, aggregate daily spend across matches.
   const { campaigns: fbCampaigns, error } = await getFbCampaigns(
     campaign.adAccountId
   );
@@ -717,27 +822,24 @@ async function resolveCampaignSpend(args: {
   const matches = fbCampaigns.filter((c) =>
     (c.name ?? "").toLowerCase().includes(kwLower)
   );
-  if (matches.length === 0) {
-    return Object.fromEntries(monthKeys.map((k) => [k, 0]));
-  }
+  if (matches.length === 0) return {};
 
-  const aggregated: Record<string, number> = Object.fromEntries(
-    monthKeys.map((k) => [k, 0])
-  );
+  const aggregated: Record<string, number> = {};
   for (const fb of matches) {
     try {
-      const { spendByMonth, error: spendErr } = await fetchSpendByMonth(
+      const { spendByDate, error: spendErr } = await fetchSpendByDay(
         fb.id,
         true,
-        monthKeys
+        startDate,
+        endDate
       );
       if (spendErr) continue;
-      for (const [mk, amount] of Object.entries(spendByMonth)) {
-        aggregated[mk] = (aggregated[mk] ?? 0) + amount;
+      for (const [date, amount] of Object.entries(spendByDate)) {
+        aggregated[date] = (aggregated[date] ?? 0) + amount;
       }
     } catch (err) {
       console.warn(
-        `[agency-rollup-runner] spend failed for FB campaign ${fb.id}:`,
+        `[agency-rollup-runner] daily spend failed for FB campaign ${fb.id}:`,
         err
       );
     }
@@ -771,53 +873,6 @@ async function upsertCampaignWithoutPipeline(
       lastManualStageChangeAt: null,
     },
   ]);
-}
-
-async function insertEmptyMonthRows(
-  snapshotId: number,
-  campaign: ActiveCampaign,
-  monthRanges: Array<{ monthKey: string; startDate: string; endDate: string }>,
-  reason: string,
-  status: "skipped" | "error"
-): Promise<void> {
-  await insertCampaignMonths(
-    monthRanges.map<AgencyCampaignMonth>((range) => ({
-      snapshotId,
-      campaignKey: campaign.campaignKey,
-      locationId: campaign.locationId,
-      monthKey: range.monthKey,
-      startDate: range.startDate,
-      endDate: range.endDate,
-      metrics: emptyMetrics(),
-      adSpend: 0,
-      status,
-      errorMessage: reason,
-    }))
-  );
-}
-
-function emptyMetrics(): FunnelMetrics {
-  return {
-    leads: 0,
-    requested: 0,
-    confirmed: 0,
-    totalAppts: 0,
-    showed: 0,
-    noShow: 0,
-    success: 0,
-    closed: 0,
-    total: 0,
-    totalApptsRaw: 0,
-    bookingRate: null,
-    confirmationRate: null,
-    showRate: null,
-    showedConversionRate: null,
-    totalValue: 0,
-    showedValue: 0,
-    successValue: 0,
-    requestedValue: 0,
-    confirmedValue: 0,
-  };
 }
 
 /** Minimal concurrency helper — keeps at most `concurrency` tasks in flight. */

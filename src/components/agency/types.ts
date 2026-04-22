@@ -6,6 +6,13 @@ export type { MetricKey };
 
 export type CampaignStatusLabel = "ACTIVE" | "2ND CMPN";
 
+export interface ClientDateRange {
+  preset: string;
+  startDate: string;
+  endDate: string;
+  label?: string;
+}
+
 export interface ClientMonthTotals {
   monthKey: string;
   startDate: string;
@@ -56,6 +63,24 @@ export interface ClientCampaignMonth {
   roas: number | null;
 }
 
+export interface ClientCampaignWindowTotals {
+  leads: number;
+  totalAppts: number;
+  showed: number;
+  noShow: number;
+  closed: number;
+  totalValue: number;
+  successValue: number;
+  adSpend: number;
+  bookingRate: number | null;
+  showRate: number | null;
+  closeRate: number | null;
+  cpl: number | null;
+  cps: number | null;
+  cpClose: number | null;
+  roas: number | null;
+}
+
 export interface ClientCampaignDataQuality {
   movementRatio: number | null;
   openCount: number | null;
@@ -80,7 +105,10 @@ export interface ClientCampaignSummary {
   errorMessage: string | null;
   needsSetupReason: string | null;
   dataQuality: ClientCampaignDataQuality;
-  totals: Omit<ClientCampaignMonth, "monthKey">;
+  /** Totals over the currently-selected date range. */
+  totals: ClientCampaignWindowTotals;
+  /** Totals over the immediately-prior period of equal length. */
+  priorTotals: ClientCampaignWindowTotals;
   latestMonth: ClientCampaignMonth | null;
   months: ClientCampaignMonth[];
 }
@@ -108,6 +136,8 @@ export interface ClientAgencySnapshot {
 
 export interface ClientRollupView {
   snapshot: ClientAgencySnapshot;
+  range: ClientDateRange;
+  priorRange: ClientDateRange;
   months: ClientMonthTotals[];
   campaigns: ClientCampaignSummary[];
 }
@@ -135,7 +165,8 @@ export interface ClientLeaderboardRow {
   statuses: CampaignStatusLabel[];
   included: boolean;
   errorMessage: string | null;
-  totals: Omit<ClientCampaignMonth, "monthKey">;
+  totals: ClientCampaignWindowTotals;
+  priorTotals?: ClientCampaignWindowTotals;
   months: ClientCampaignMonth[];
   children: ClientCampaignSummary[];
 }

@@ -104,6 +104,53 @@ export interface AgencyCampaignMonth {
   errorMessage: string | null;
 }
 
+/**
+ * Per-day funnel snapshot for a single campaign inside a rollup run.
+ * Replaces the month-grained {@link AgencyCampaignMonth} as the primary
+ * storage grain: KPIs can now be aggregated over any arbitrary window
+ * (Last 30 days, custom range, etc.) by summing these rows.
+ *
+ * Only stores the 5 funnel counts + 2 value sums + ad_spend — the full
+ * stage-breakdown JSON is expensive at day granularity and unused by the
+ * agency UI. The counts here use the SAME semantics as FunnelMetrics:
+ *   - leads          = opps attributed to this day whose stage maps to "leads"
+ *   - totalAppts     = opps in requested+confirmed stages (NOT including
+ *                      showed/noShow/closed — those are counted separately)
+ *   - showed         = opps in showed stages
+ *   - noShow         = opps in noShow stages
+ *   - closed         = opps in closed/success stages
+ *   - totalValue     = sum of monetaryValue across ALL stages above
+ *   - successValue   = sum of monetaryValue for closed/success opps
+ */
+export interface AgencyCampaignDay {
+  snapshotId: number;
+  campaignKey: string;
+  locationId: string;
+  /** YYYY-MM-DD, local timezone. */
+  date: string;
+  leads: number;
+  totalAppts: number;
+  showed: number;
+  noShow: number;
+  closed: number;
+  totalValue: number;
+  successValue: number;
+  adSpend: number;
+}
+
+/**
+ * Per-snapshot campaign run status. One row per (snapshot, campaign). Keeps
+ * status/error off the dense day rows so we don't have to insert 365+
+ * empty error rows for every failed campaign.
+ */
+export interface AgencyCampaignRun {
+  snapshotId: number;
+  campaignKey: string;
+  locationId: string;
+  status: CampaignRowStatus;
+  errorMessage: string | null;
+}
+
 function getDb() {
   const url = process.env.DATABASE_URL;
   if (!url) return null;
@@ -232,6 +279,45 @@ async function ensureSchema(sql: Sql): Promise<void> {
     await sql`
       CREATE INDEX IF NOT EXISTS idx_agency_campaign_months_snapshot
         ON agency_rollup_campaign_months (snapshot_id)
+    `;
+  });
+  await runIfNotExists(sql, "agency_rollup_campaign_days", async () => {
+    await sql`
+      CREATE TABLE IF NOT EXISTS agency_rollup_campaign_days (
+        snapshot_id BIGINT NOT NULL REFERENCES agency_rollup_snapshots(id) ON DELETE CASCADE,
+        campaign_key TEXT NOT NULL,
+        location_id TEXT NOT NULL,
+        date DATE NOT NULL,
+        leads INTEGER NOT NULL DEFAULT 0,
+        total_appts INTEGER NOT NULL DEFAULT 0,
+        showed INTEGER NOT NULL DEFAULT 0,
+        no_show INTEGER NOT NULL DEFAULT 0,
+        closed INTEGER NOT NULL DEFAULT 0,
+        total_value NUMERIC(14,2) NOT NULL DEFAULT 0,
+        success_value NUMERIC(14,2) NOT NULL DEFAULT 0,
+        ad_spend NUMERIC(14,2) NOT NULL DEFAULT 0,
+        PRIMARY KEY (snapshot_id, campaign_key, date)
+      )
+    `;
+    await sql`
+      CREATE INDEX IF NOT EXISTS idx_agency_campaign_days_snapshot_date
+        ON agency_rollup_campaign_days (snapshot_id, date)
+    `;
+  });
+  await runIfNotExists(sql, "agency_rollup_campaign_runs", async () => {
+    await sql`
+      CREATE TABLE IF NOT EXISTS agency_rollup_campaign_runs (
+        snapshot_id BIGINT NOT NULL REFERENCES agency_rollup_snapshots(id) ON DELETE CASCADE,
+        campaign_key TEXT NOT NULL,
+        location_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'ok',
+        error_message TEXT,
+        PRIMARY KEY (snapshot_id, campaign_key)
+      )
+    `;
+    await sql`
+      CREATE INDEX IF NOT EXISTS idx_agency_campaign_runs_snapshot
+        ON agency_rollup_campaign_runs (snapshot_id)
     `;
   });
   schemaReady = true;
@@ -622,6 +708,169 @@ export async function listSnapshotCampaignMonths(
           : String(r.end_date),
       metrics: r.metrics as FunnelMetrics,
       adSpend: Number(r.ad_spend ?? 0),
+      status: (r.status as CampaignRowStatus) ?? "ok",
+      errorMessage: (r.error_message as string) ?? null,
+    };
+  });
+}
+
+/**
+ * Bulk-insert per-day funnel counts for a snapshot. Batches into one
+ * multi-row INSERT per chunk to keep 30×13 rows/campaign × ~80 campaigns
+ * manageable on Neon's serverless driver.
+ */
+export async function insertCampaignDays(
+  rows: AgencyCampaignDay[]
+): Promise<void> {
+  const sql = getDb();
+  if (!sql || rows.length === 0) return;
+  await ensureSchema(sql);
+  // Neon's tagged-template driver can't splat a VALUES list in one shot, so
+  // we chunk the rows and issue one INSERT per chunk with a UNION-ALL-style
+  // subquery to keep round-trips down.
+  const CHUNK = 500;
+  for (let i = 0; i < rows.length; i += CHUNK) {
+    const chunk = rows.slice(i, i + CHUNK);
+    // Build parallel arrays so the driver can bind them as typed arrays.
+    const snapshotIds = chunk.map((r) => r.snapshotId);
+    const campaignKeys = chunk.map((r) => r.campaignKey);
+    const locationIds = chunk.map((r) => r.locationId);
+    const dates = chunk.map((r) => r.date);
+    const leads = chunk.map((r) => r.leads);
+    const totalAppts = chunk.map((r) => r.totalAppts);
+    const showed = chunk.map((r) => r.showed);
+    const noShow = chunk.map((r) => r.noShow);
+    const closed = chunk.map((r) => r.closed);
+    const totalValue = chunk.map((r) => r.totalValue);
+    const successValue = chunk.map((r) => r.successValue);
+    const adSpend = chunk.map((r) => r.adSpend);
+    await sql`
+      INSERT INTO agency_rollup_campaign_days (
+        snapshot_id, campaign_key, location_id, date,
+        leads, total_appts, showed, no_show, closed,
+        total_value, success_value, ad_spend
+      )
+      SELECT * FROM UNNEST(
+        ${snapshotIds}::bigint[],
+        ${campaignKeys}::text[],
+        ${locationIds}::text[],
+        ${dates}::date[],
+        ${leads}::int[],
+        ${totalAppts}::int[],
+        ${showed}::int[],
+        ${noShow}::int[],
+        ${closed}::int[],
+        ${totalValue}::numeric[],
+        ${successValue}::numeric[],
+        ${adSpend}::numeric[]
+      )
+      ON CONFLICT (snapshot_id, campaign_key, date) DO UPDATE SET
+        leads = EXCLUDED.leads,
+        total_appts = EXCLUDED.total_appts,
+        showed = EXCLUDED.showed,
+        no_show = EXCLUDED.no_show,
+        closed = EXCLUDED.closed,
+        total_value = EXCLUDED.total_value,
+        success_value = EXCLUDED.success_value,
+        ad_spend = EXCLUDED.ad_spend
+    `;
+  }
+}
+
+/**
+ * Read all day rows for a snapshot, optionally filtered to a date range
+ * (inclusive). When no range is passed we return every day in the snapshot
+ * — used by the "Maximum" preset.
+ */
+export async function listSnapshotCampaignDays(
+  snapshotId: number,
+  range?: { startDate: string; endDate: string }
+): Promise<AgencyCampaignDay[]> {
+  const sql = getDb();
+  if (!sql) return [];
+  await ensureSchema(sql);
+  const rows = range
+    ? await sql`
+        SELECT snapshot_id, campaign_key, location_id, date,
+               leads, total_appts, showed, no_show, closed,
+               total_value, success_value, ad_spend
+        FROM agency_rollup_campaign_days
+        WHERE snapshot_id = ${snapshotId}
+          AND date >= ${range.startDate}::date
+          AND date <= ${range.endDate}::date
+        ORDER BY campaign_key, date
+      `
+    : await sql`
+        SELECT snapshot_id, campaign_key, location_id, date,
+               leads, total_appts, showed, no_show, closed,
+               total_value, success_value, ad_spend
+        FROM agency_rollup_campaign_days
+        WHERE snapshot_id = ${snapshotId}
+        ORDER BY campaign_key, date
+      `;
+  return rows.map((row) => {
+    const r = row as Record<string, unknown>;
+    return {
+      snapshotId: Number(r.snapshot_id),
+      campaignKey: String(r.campaign_key),
+      locationId: String(r.location_id),
+      date:
+        r.date instanceof Date
+          ? (r.date as Date).toISOString().slice(0, 10)
+          : String(r.date),
+      leads: Number(r.leads ?? 0),
+      totalAppts: Number(r.total_appts ?? 0),
+      showed: Number(r.showed ?? 0),
+      noShow: Number(r.no_show ?? 0),
+      closed: Number(r.closed ?? 0),
+      totalValue: Number(r.total_value ?? 0),
+      successValue: Number(r.success_value ?? 0),
+      adSpend: Number(r.ad_spend ?? 0),
+    };
+  });
+}
+
+/**
+ * Upsert a campaign-run status row. Called once per (snapshot, campaign)
+ * when the runner finishes with that campaign — ok / skipped / error.
+ */
+export async function upsertCampaignRuns(
+  runs: AgencyCampaignRun[]
+): Promise<void> {
+  const sql = getDb();
+  if (!sql || runs.length === 0) return;
+  await ensureSchema(sql);
+  for (const r of runs) {
+    await sql`
+      INSERT INTO agency_rollup_campaign_runs
+        (snapshot_id, campaign_key, location_id, status, error_message)
+      VALUES
+        (${r.snapshotId}, ${r.campaignKey}, ${r.locationId}, ${r.status}, ${r.errorMessage})
+      ON CONFLICT (snapshot_id, campaign_key) DO UPDATE SET
+        location_id = EXCLUDED.location_id,
+        status = EXCLUDED.status,
+        error_message = EXCLUDED.error_message
+    `;
+  }
+}
+
+export async function listSnapshotCampaignRuns(
+  snapshotId: number
+): Promise<AgencyCampaignRun[]> {
+  const sql = getDb();
+  if (!sql) return [];
+  await ensureSchema(sql);
+  const rows = await sql`
+    SELECT snapshot_id, campaign_key, location_id, status, error_message
+    FROM agency_rollup_campaign_runs
+    WHERE snapshot_id = ${snapshotId}
+  `;
+  return rows.map((row) => {
+    const r = row as Record<string, unknown>;
+    return {
+      snapshotId: Number(r.snapshot_id),
+      campaignKey: String(r.campaign_key),
+      locationId: String(r.location_id),
       status: (r.status as CampaignRowStatus) ?? "ok",
       errorMessage: (r.error_message as string) ?? null,
     };

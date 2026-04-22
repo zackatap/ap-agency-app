@@ -412,6 +412,139 @@ export async function getOpportunityCountsByStagePerMonth(
   });
 }
 
+/**
+ * Fetch all opportunities once and bucket counts/values by **day** (YYYY-MM-DD
+ * in the configured OPPORTUNITY_TIMEZONE). Returns one entry per day that had
+ * at least one opportunity fall into it — sparse, so a zero-activity day is
+ * simply absent.
+ *
+ * The `window` param is used to short-circuit pagination: we stop once a page
+ * contains only opps older than `window.startDate` (paired with GHL's
+ * default date-desc sort). Opps outside the window are discarded for bucket
+ * purposes but still fire the `onOpp` callback — data-quality signals like
+ * stale-open backlog need to see every opp regardless of window.
+ */
+export async function getOpportunityCountsByStagePerDay(
+  locationId: string,
+  pipeline: GHLPipeline,
+  accessToken: string,
+  window: { startDate: string; endDate: string },
+  attributionMode: AttributionMode = "lastUpdated",
+  opts?: {
+    onOpp?: (opp: GHLOpportunity, stageName: string) => void;
+  }
+): Promise<
+  Array<{
+    date: string;
+    counts: Record<string, number>;
+    values: Record<string, number>;
+  }>
+> {
+  const stageIdToName = buildStageIdToName(pipeline.stages);
+  const limit = 100;
+  let page = 1;
+
+  // Sparse map: only days that saw at least one opp get an entry.
+  const byDay = new Map<
+    string,
+    { counts: Record<string, number>; values: Record<string, number> }
+  >();
+  const seenOpp = new Set<string>();
+
+  while (page <= GHL_MAX_PAGES) {
+    if (page > 1) await ghlDelay(GHL_DELAY_MS);
+
+    const searchUrl = new URL(`${GHL_BASE}/opportunities/search`);
+    searchUrl.searchParams.set("location_id", locationId);
+    searchUrl.searchParams.set("pipeline_id", pipeline.id);
+    searchUrl.searchParams.set("status", "all");
+    searchUrl.searchParams.set("limit", String(limit));
+    searchUrl.searchParams.set("page", String(page));
+
+    const searchRes = await fetch(searchUrl.toString(), {
+      method: "GET",
+      headers: ghlAuthHeaders(accessToken),
+    });
+
+    if (searchRes.status === 429) {
+      await ghlDelay(GHL_429_RETRY_MS);
+      continue;
+    }
+
+    if (!searchRes.ok) {
+      const err = await searchRes.text();
+      throw new Error(`GHL getOpportunities failed: ${searchRes.status} ${err}`);
+    }
+
+    const data = await searchRes.json();
+    const opportunities: GHLOpportunity[] = data.opportunities ?? data.data ?? [];
+    const total = data.total ?? data.totalCount ?? 0;
+
+    let minDateInPage: string | null = null;
+
+    for (const opp of opportunities) {
+      if (seenOpp.has(opp.id)) continue;
+      seenOpp.add(opp.id);
+
+      const resolvedStageName =
+        opp.stageName ??
+        (opp.pipelineStageId
+          ? stageIdToName.get(opp.pipelineStageId as string)
+          : null) ??
+        (opp.pipelineStageId as string) ??
+        "Unknown";
+
+      // Quality callback sees every opp regardless of window.
+      opts?.onOpp?.(opp, resolvedStageName);
+
+      const dateStr = getOpportunityAttributionLocalDate(opp, attributionMode);
+      if (!dateStr) continue;
+      if (!minDateInPage || dateStr < minDateInPage) minDateInPage = dateStr;
+
+      // Opps outside the window are ignored for bucket totals.
+      if (dateStr < window.startDate || dateStr > window.endDate) continue;
+
+      let bucket = byDay.get(dateStr);
+      if (!bucket) {
+        bucket = { counts: {}, values: {} };
+        byDay.set(dateStr, bucket);
+      }
+
+      const val =
+        typeof opp.monetaryValue === "number"
+          ? opp.monetaryValue
+          : typeof (opp as Record<string, unknown>).monetary_value === "number"
+            ? ((opp as Record<string, unknown>).monetary_value as number)
+            : 0;
+
+      if (isOpportunityWon(opp)) {
+        bucket.counts[STATUS_WON_KEY] = (bucket.counts[STATUS_WON_KEY] ?? 0) + 1;
+        bucket.values[STATUS_WON_KEY] = (bucket.values[STATUS_WON_KEY] ?? 0) + val;
+      } else {
+        bucket.counts[resolvedStageName] =
+          (bucket.counts[resolvedStageName] ?? 0) + 1;
+        bucket.values[resolvedStageName] =
+          (bucket.values[resolvedStageName] ?? 0) + val;
+      }
+    }
+
+    if (opportunities.length < limit) break;
+    if (total > 0 && page * limit >= total) break;
+    // Page sort is date-desc by default; once we see a page fully older than
+    // the window start there's nothing more to collect.
+    if (minDateInPage && minDateInPage < window.startDate) break;
+    page += 1;
+  }
+
+  return Array.from(byDay.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([date, bucket]) => ({
+      date,
+      counts: bucket.counts,
+      values: bucket.values,
+    }));
+}
+
 /** Shape for rollup drill-down groups (matches funnel-metrics RollupGroup) */
 interface RollupGroup {
   label: string;

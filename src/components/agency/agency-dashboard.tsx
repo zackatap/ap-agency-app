@@ -1,10 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import type {
   ClientAgencySnapshot,
-  ClientMonthTotals,
   ClientRollupView,
   MetricKey,
 } from "./types";
@@ -21,117 +20,23 @@ import { RefreshControls } from "./refresh-controls";
 import { ClientBenchmark } from "./client-benchmark";
 import { ClientMap } from "./client-map";
 import {
-  aggregateCampaignsOverMonths,
+  aggregateCampaignWindow,
+  type FilteredAggregate,
   buildExcludedSet,
   type ExclusionLevel,
 } from "./data-quality";
+import {
+  DATE_RANGE_LABELS,
+  type DateRangePreset,
+  getTodayLocal,
+} from "@/lib/date-ranges";
 
 interface Props {
   initial: ClientRollupView | null;
   initialLatest: ClientAgencySnapshot | null;
 }
 
-type PeriodSize = 1 | 3 | 6 | 12;
 type DashboardTab = "performance" | "map";
-
-interface WindowAggregate {
-  monthsCount: number;
-  leads: number;
-  totalAppts: number;
-  showed: number;
-  noShow: number;
-  closed: number;
-  totalValue: number;
-  successValue: number;
-  adSpend: number;
-  bookingRate: number | null;
-  showRate: number | null;
-  closeRate: number | null;
-  cpl: number | null;
-  cps: number | null;
-  cpClose: number | null;
-  roas: number | null;
-  /** Peak of `clientCount` during the window — the number of campaigns
-   *  that reported at least one signal in their best month. */
-  peakCampaignCount: number;
-}
-
-function aggregateWindow(slice: ClientMonthTotals[]): WindowAggregate {
-  const base = {
-    monthsCount: slice.length,
-    leads: 0,
-    totalAppts: 0,
-    showed: 0,
-    noShow: 0,
-    closed: 0,
-    totalValue: 0,
-    successValue: 0,
-    adSpend: 0,
-    peakCampaignCount: 0,
-  };
-  for (const m of slice) {
-    base.leads += m.leads;
-    base.totalAppts += m.totalAppts;
-    base.showed += m.showed;
-    base.noShow += m.noShow;
-    base.closed += m.closed;
-    base.totalValue += m.totalValue;
-    base.successValue += m.successValue;
-    base.adSpend += m.adSpend;
-    if (m.clientCount > base.peakCampaignCount) {
-      base.peakCampaignCount = m.clientCount;
-    }
-  }
-  // Include no-shows in the booked/appt pool to match applyRollup in
-  // funnel-metrics.ts (the individual dashboard's "On Totals" formula).
-  const apptPool = base.totalAppts + base.showed + base.noShow + base.closed;
-  const leadPool = base.leads + apptPool;
-  const showPool = base.showed + base.closed;
-  return {
-    ...base,
-    bookingRate:
-      leadPool > 0 ? Math.round((apptPool / leadPool) * 1000) / 10 : null,
-    showRate:
-      apptPool > 0 ? Math.round((showPool / apptPool) * 1000) / 10 : null,
-    closeRate:
-      showPool > 0 ? Math.round((base.closed / showPool) * 1000) / 10 : null,
-    cpl:
-      base.adSpend > 0 && base.leads > 0
-        ? Math.round((base.adSpend / base.leads) * 100) / 100
-        : null,
-    cps:
-      base.adSpend > 0 && base.showed > 0
-        ? Math.round((base.adSpend / base.showed) * 100) / 100
-        : null,
-    cpClose:
-      base.adSpend > 0 && base.closed > 0
-        ? Math.round((base.adSpend / base.closed) * 100) / 100
-        : null,
-    roas:
-      base.adSpend > 0
-        ? Math.round((base.successValue / base.adSpend) * 100) / 100
-        : null,
-  };
-}
-
-function getWindowSlices(
-  months: ClientMonthTotals[],
-  period: PeriodSize
-): { current: ClientMonthTotals[]; prior: ClientMonthTotals[] } {
-  if (months.length === 0) return { current: [], prior: [] };
-  const n = Math.min(period, months.length);
-  const current = months.slice(months.length - n, months.length);
-  const priorEnd = months.length - n;
-  const priorStart = Math.max(0, priorEnd - n);
-  const prior = months.slice(priorStart, priorEnd);
-  return { current, prior };
-}
-
-function describePeriodRange(slice: ClientMonthTotals[]): string {
-  if (slice.length === 0) return "—";
-  if (slice.length === 1) return formatMonthLabel(slice[0].monthKey);
-  return `${formatMonthLabel(slice[0].monthKey)} – ${formatMonthLabel(slice[slice.length - 1].monthKey)}`;
-}
 
 function delta(
   current: number | null | undefined,
@@ -188,130 +93,112 @@ function Kpi({ label, value, sub, diff, better, kind }: KpiProps) {
   );
 }
 
-const PERIOD_OPTIONS: Array<{ value: PeriodSize; label: string }> = [
-  { value: 1, label: "Latest month" },
-  { value: 3, label: "Last 3 months" },
-  { value: 6, label: "Last 6 months" },
-  { value: 12, label: "Last 12 months" },
-];
-
-interface RateAggregate {
-  bookingRate: number | null;
-  showRate: number | null;
-  closeRate: number | null;
-  cpl: number | null;
-  cps: number | null;
-  cpClose: number | null;
-  roas: number | null;
-}
-
 /**
  * Count/money SUMS (leads, appts, showed, closed, value, spend) are totals
- * across every campaign so the displayed numbers don't quietly shrink when
- * the hygiene toggle is flipped.
+ * across every included campaign so the displayed numbers don't quietly
+ * shrink when the hygiene toggle is flipped.
  *
  * RATES and COST RATIOS (booking/show/close rate, ROAS, CPL, cost-per-close)
- * come from `rates`, which is a **simple average across trusted campaigns**:
- * each campaign computes its own rate over the window, and every client gets
- * one equal vote. A 3,000-lead client doesn't drown out a 300-lead client.
- * This matches the per-client view on the individual dashboards and the
- * dashed agency line on the benchmark chart.
+ * use a **simple average across trusted campaigns**: each campaign computes
+ * its own rate over the window (server-side, same formula the individual
+ * dashboard uses), and every client gets one equal vote. A 3,000-lead client
+ * doesn't drown out a 300-lead client.
  */
 function buildKpiCards(
-  current: WindowAggregate,
-  prior: WindowAggregate,
-  currentRates: RateAggregate,
-  priorRates: RateAggregate
+  sums: FilteredAggregate,
+  priorSums: FilteredAggregate,
+  rates: FilteredAggregate,
+  priorRates: FilteredAggregate
 ): KpiProps[] {
   const avgSub = "Avg across clients";
   return [
     {
       label: "Leads",
-      value: formatMetricValue(current.leads, "count"),
-      diff: delta(current.leads, prior.leads),
+      value: formatMetricValue(sums.leads, "count"),
+      diff: delta(sums.leads, priorSums.leads),
       better: "up",
       kind: "count",
     },
     {
       label: "Appointments",
-      value: formatMetricValue(current.totalAppts, "count"),
-      diff: delta(current.totalAppts, prior.totalAppts),
+      value: formatMetricValue(sums.totalAppts, "count"),
+      diff: delta(sums.totalAppts, priorSums.totalAppts),
       better: "up",
       kind: "count",
     },
     {
       label: "Showed",
-      value: formatMetricValue(current.showed, "count"),
-      diff: delta(current.showed, prior.showed),
+      value: formatMetricValue(sums.showed, "count"),
+      diff: delta(sums.showed, priorSums.showed),
       better: "up",
       kind: "count",
     },
     {
       label: "Closed",
-      value: formatMetricValue(current.closed, "count"),
-      diff: delta(current.closed, prior.closed),
+      value: formatMetricValue(sums.closed, "count"),
+      diff: delta(sums.closed, priorSums.closed),
       better: "up",
       kind: "count",
     },
     {
       label: "Booking rate",
-      value: formatMetricValue(currentRates.bookingRate, "rate"),
+      value: formatMetricValue(rates.bookingRate, "rate"),
       sub: avgSub,
-      diff: delta(currentRates.bookingRate, priorRates.bookingRate),
+      diff: delta(rates.bookingRate, priorRates.bookingRate),
       better: "up",
       kind: "rate",
     },
     {
       label: "Show rate",
-      value: formatMetricValue(currentRates.showRate, "rate"),
+      value: formatMetricValue(rates.showRate, "rate"),
       sub: avgSub,
-      diff: delta(currentRates.showRate, priorRates.showRate),
+      diff: delta(rates.showRate, priorRates.showRate),
       better: "up",
       kind: "rate",
     },
     {
       label: "Close rate",
-      value: formatMetricValue(currentRates.closeRate, "rate"),
+      value: formatMetricValue(rates.closeRate, "rate"),
       sub: avgSub,
-      diff: delta(currentRates.closeRate, priorRates.closeRate),
+      diff: delta(rates.closeRate, priorRates.closeRate),
       better: "up",
       kind: "rate",
     },
     {
       label: "ROAS",
-      value: formatMetricValue(currentRates.roas, "ratio"),
+      value: formatMetricValue(rates.roas, "ratio"),
       sub: avgSub,
-      diff: delta(currentRates.roas, priorRates.roas),
+      diff: delta(rates.roas, priorRates.roas),
       better: "up",
       kind: "ratio",
     },
     {
       label: "Closed value",
-      value: formatMetricValue(current.successValue, "money"),
-      diff: delta(current.successValue, prior.successValue),
+      value: formatMetricValue(sums.successValue, "money"),
+      diff: delta(sums.successValue, priorSums.successValue),
       better: "up",
       kind: "money",
     },
     {
       label: "Ad spend",
-      value: formatMetricValue(current.adSpend, "money"),
-      diff: delta(current.adSpend, prior.adSpend),
+      value: formatMetricValue(sums.adSpend, "money"),
+      diff: delta(sums.adSpend, priorSums.adSpend),
       better: "down",
       kind: "money",
     },
     {
       label: "Cost / Lead",
-      value: formatMetricValue(currentRates.cpl, "money"),
+      value: formatMetricValue(rates.cpl, "money"),
       sub: avgSub,
-      diff: delta(currentRates.cpl, priorRates.cpl),
+      diff: delta(rates.cpl, priorRates.cpl),
       better: "down",
       kind: "money",
     },
     {
       label: "Cost / Close",
-      value: formatMetricValue(currentRates.cpClose, "money"),
+      value: formatMetricValue(rates.cpClose, "money"),
       sub: avgSub,
-      diff: delta(currentRates.cpClose, priorRates.cpClose),
+      diff: delta(rates.cpClose, priorRates.cpClose),
       better: "down",
       kind: "money",
     },
@@ -348,9 +235,28 @@ const EXCLUSION_OPTIONS: Array<{
   },
 ];
 
+const DATE_RANGE_ORDER: DateRangePreset[] = [
+  "this_month",
+  "last_month",
+  "last_30",
+  "last_60",
+  "last_90",
+  "maximum",
+  "custom",
+];
+
+function formatRangeLabel(
+  preset: DateRangePreset,
+  startDate: string,
+  endDate: string
+): string {
+  const label = DATE_RANGE_LABELS[preset];
+  if (preset === "maximum") return "All time";
+  return `${label} · ${startDate} → ${endDate}`;
+}
+
 export function AgencyDashboard({ initial, initialLatest }: Props) {
   const [view, setView] = useState<ClientRollupView | null>(initial);
-  const [period, setPeriod] = useState<PeriodSize>(1);
   const [selectedMonthKey, setSelectedMonthKey] = useState<string | "total">(
     () => initial?.months[initial.months.length - 1]?.monthKey ?? "total"
   );
@@ -362,6 +268,20 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
     initialLatest
   );
   const [activeTab, setActiveTab] = useState<DashboardTab>("performance");
+
+  // Date range state — mirrors the client dashboard (select + optional custom
+  // from/to + Apply button for custom).
+  const [dateRangePreset, setDateRangePreset] = useState<DateRangePreset>(
+    () => (initial?.range.preset as DateRangePreset) ?? "last_30"
+  );
+  const [customDateFrom, setCustomDateFrom] = useState<string>(
+    () => (initial?.range.preset === "custom" ? initial.range.startDate : "")
+  );
+  const [customDateTo, setCustomDateTo] = useState<string>(
+    () => (initial?.range.preset === "custom" ? initial.range.endDate : "")
+  );
+  const [rangeLoading, setRangeLoading] = useState(false);
+
   const leaderboardRef = useRef<HTMLElement | null>(null);
   const selectCampaignForCompare = (campaignKey: string) => {
     setCompareCampaignKey(campaignKey);
@@ -371,14 +291,29 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
     });
   };
 
-  const reloadSnapshot = async () => {
-    try {
-      const [viewRes, statusRes] = await Promise.all([
-        fetch("/api/agency/rollup/latest", { cache: "no-store" }),
-        fetch("/api/agency/rollup/status", { cache: "no-store" }),
-      ]);
-      if (viewRes.ok) {
-        const body = (await viewRes.json()) as ClientRollupView & {
+  /**
+   * Fetch the latest rollup view for a given date-range preset. Custom ranges
+   * require both `from` and `to` to be set — we skip the fetch otherwise
+   * (mirroring the client dashboard's "Apply" button behavior).
+   */
+  const fetchRollup = useCallback(
+    async (preset: DateRangePreset, from?: string, to?: string) => {
+      const params = new URLSearchParams();
+      params.set("preset", preset);
+      params.set("clientDate", getTodayLocal());
+      if (preset === "custom") {
+        if (!from || !to) return;
+        params.set("from", from);
+        params.set("to", to);
+      }
+      setRangeLoading(true);
+      try {
+        const res = await fetch(
+          `/api/agency/rollup/latest?${params.toString()}`,
+          { cache: "no-store" }
+        );
+        if (!res.ok) return;
+        const body = (await res.json()) as ClientRollupView & {
           message?: string;
         };
         if (body.snapshot) {
@@ -389,7 +324,20 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
         } else {
           setView(null);
         }
+      } catch {
+        // ignore
+      } finally {
+        setRangeLoading(false);
       }
+    },
+    []
+  );
+
+  const reloadSnapshot = useCallback(async () => {
+    try {
+      const statusRes = await fetch("/api/agency/rollup/status", {
+        cache: "no-store",
+      });
       if (statusRes.ok) {
         const body = (await statusRes.json()) as {
           latest: ClientAgencySnapshot | null;
@@ -399,13 +347,28 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
     } catch {
       // ignore
     }
-  };
+    // Re-pull the range view using the current preset so new snapshot data
+    // flows through immediately.
+    await fetchRollup(dateRangePreset, customDateFrom, customDateTo);
+  }, [dateRangePreset, customDateFrom, customDateTo, fetchRollup]);
 
   useEffect(() => {
     if (!currentLatest || currentLatest.status !== "running") return;
     const id = setInterval(reloadSnapshot, 15_000);
     return () => clearInterval(id);
-  }, [currentLatest]);
+  }, [currentLatest, reloadSnapshot]);
+
+  const handleDateRangeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const preset = e.target.value as DateRangePreset;
+    setDateRangePreset(preset);
+    if (preset === "custom") return;
+    fetchRollup(preset);
+  };
+
+  const handleCustomDateApply = () => {
+    if (!customDateFrom || !customDateTo) return;
+    fetchRollup("custom", customDateFrom, customDateTo);
+  };
 
   const campaigns = view?.campaigns ?? [];
   const includedCampaigns = useMemo(
@@ -431,43 +394,28 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
 
   const months = view?.months ?? [];
 
-  const { current: currentSlice, prior: priorSlice } = useMemo(
-    () => getWindowSlices(months, period),
-    [months, period]
+  // Count sums come from ALL included campaigns over the selected range.
+  const currentSums = useMemo(
+    () => aggregateCampaignWindow(includedCampaigns, "totals"),
+    [includedCampaigns]
   );
-  const currentAggregate = useMemo(
-    () => aggregateWindow(currentSlice),
-    [currentSlice]
+  const priorSums = useMemo(
+    () => aggregateCampaignWindow(includedCampaigns, "priorTotals"),
+    [includedCampaigns]
   );
-  const priorAggregate = useMemo(() => aggregateWindow(priorSlice), [priorSlice]);
+  // Rate KPIs use the TRUSTED subset — one vote per campaign.
+  const currentRates = useMemo(
+    () => aggregateCampaignWindow(trustedCampaigns, "totals"),
+    [trustedCampaigns]
+  );
+  const priorRates = useMemo(
+    () => aggregateCampaignWindow(trustedCampaigns, "priorTotals"),
+    [trustedCampaigns]
+  );
 
-  // Rate KPIs are pooled over the TRUSTED campaign subset; count sums stay
-  // on the full pool so "Total Leads" always matches the underlying data.
-  const currentRateAggregate = useMemo(
-    () =>
-      aggregateCampaignsOverMonths(
-        trustedCampaigns,
-        currentSlice.map((m) => m.monthKey)
-      ),
-    [trustedCampaigns, currentSlice]
-  );
-  const priorRateAggregate = useMemo(
-    () =>
-      aggregateCampaignsOverMonths(
-        trustedCampaigns,
-        priorSlice.map((m) => m.monthKey)
-      ),
-    [trustedCampaigns, priorSlice]
-  );
   const kpiCards = useMemo(
-    () =>
-      buildKpiCards(
-        currentAggregate,
-        priorAggregate,
-        currentRateAggregate,
-        priorRateAggregate
-      ),
-    [currentAggregate, priorAggregate, currentRateAggregate, priorRateAggregate]
+    () => buildKpiCards(currentSums, priorSums, currentRates, priorRates),
+    [currentSums, priorSums, currentRates, priorRates]
   );
 
   const compareCampaign = useMemo(
@@ -475,6 +423,8 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
       campaigns.find((c) => c.campaignKey === compareCampaignKey) ?? null,
     [campaigns, compareCampaignKey]
   );
+  // silence unused-var warning until inline-benchmark needs it
+  void compareCampaign;
 
   const activeLocationCount = useMemo(() => {
     const set = new Set<string>();
@@ -482,12 +432,39 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
     return set.size;
   }, [includedCampaigns]);
 
+  // Number of campaigns that actually reported at least one signal over the
+  // selected window. Used as the "X/Y campaigns reporting" stat.
+  const reportingCampaignCount = useMemo(() => {
+    let n = 0;
+    for (const c of includedCampaigns) {
+      const t = c.totals;
+      if (
+        t.leads > 0 ||
+        t.totalAppts > 0 ||
+        t.showed > 0 ||
+        t.closed > 0 ||
+        t.adSpend > 0 ||
+        t.successValue > 0
+      ) {
+        n += 1;
+      }
+    }
+    return n;
+  }, [includedCampaigns]);
+
   const latestSnapshotFinished =
     view?.snapshot.finishedAt ?? initial?.snapshot.finishedAt ?? null;
 
-  const currentRangeLabel = describePeriodRange(currentSlice);
-  const priorRangeLabel = describePeriodRange(priorSlice);
-  const hasPriorWindow = priorSlice.length > 0;
+  const currentRangeLabel = view
+    ? formatRangeLabel(
+        (view.range.preset as DateRangePreset) ?? "last_30",
+        view.range.startDate,
+        view.range.endDate
+      )
+    : "—";
+  const priorRangeLabel = view
+    ? `${view.priorRange.startDate} → ${view.priorRange.endDate}`
+    : "—";
 
   return (
     <div className="mx-auto max-w-7xl space-y-8 px-4 py-8 sm:px-8">
@@ -502,9 +479,6 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
               : "Every client from the Client DB sheet plotted on a map. Filter by status to focus the view; each pin is one client even when they have multiple campaigns."}
           </p>
         </div>
-        {/* Refresh rebuilds the rollup snapshot, which only drives the
-            Performance tab. Keep it scoped there so nobody clicks it on the
-            map tab and kicks off a 1–3 minute job they didn't need. */}
         {activeTab === "performance" && (
           <RefreshControls
             latest={currentLatest}
@@ -559,22 +533,18 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
                 </div>
                 <div className="mt-1 text-lg font-semibold text-white">
                   {currentRangeLabel}
+                  {rangeLoading && (
+                    <span className="ml-2 text-xs font-normal text-slate-400">
+                      loading…
+                    </span>
+                  )}
                 </div>
                 <div className="mt-0.5 text-xs text-slate-400">
-                  {hasPriorWindow ? (
-                    <>
-                      Compared with{" "}
-                      <span className="text-slate-300">{priorRangeLabel}</span>{" "}
-                      · {currentAggregate.peakCampaignCount}/{campaigns.length}{" "}
-                      campaigns reporting · {activeLocationCount} locations
-                    </>
-                  ) : (
-                    <>
-                      Not enough history for a comparison window ·{" "}
-                      {currentAggregate.peakCampaignCount}/{campaigns.length}{" "}
-                      campaigns reporting
-                    </>
-                  )}
+                  Compared with{" "}
+                  <span className="text-slate-300">{priorRangeLabel}</span>
+                  {" · "}
+                  {reportingCampaignCount}/{campaigns.length} campaigns
+                  reporting · {activeLocationCount} locations
                   {excludedKeys.size > 0 && (
                     <>
                       {" · "}
@@ -585,20 +555,64 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
                   )}
                 </div>
               </div>
-              <div className="flex items-center gap-2 rounded-lg bg-slate-800/50 p-1 text-xs">
-                {PERIOD_OPTIONS.map((opt) => (
-                  <button
-                    key={opt.value}
-                    onClick={() => setPeriod(opt.value)}
-                    className={`rounded-md px-3 py-1.5 transition-colors ${
-                      period === opt.value
-                        ? "bg-indigo-600 text-white"
-                        : "text-slate-300 hover:text-white"
-                    }`}
+              <div className="flex flex-wrap items-end gap-3 text-sm">
+                <div>
+                  <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">
+                    Date range
+                  </label>
+                  <select
+                    value={dateRangePreset}
+                    onChange={handleDateRangeChange}
+                    disabled={rangeLoading}
+                    className="rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2 text-slate-100 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                   >
-                    {opt.label}
-                  </button>
-                ))}
+                    {DATE_RANGE_ORDER.map((p) => (
+                      <option
+                        key={p}
+                        value={p}
+                        className="bg-slate-900 text-white"
+                      >
+                        {DATE_RANGE_LABELS[p]}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {dateRangePreset === "custom" && (
+                  <div className="flex items-end gap-2">
+                    <div>
+                      <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">
+                        From
+                      </label>
+                      <input
+                        type="date"
+                        value={customDateFrom}
+                        onChange={(e) => setCustomDateFrom(e.target.value)}
+                        className="rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2 text-slate-100 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">
+                        To
+                      </label>
+                      <input
+                        type="date"
+                        value={customDateTo}
+                        onChange={(e) => setCustomDateTo(e.target.value)}
+                        className="rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2 text-slate-100 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleCustomDateApply}
+                      disabled={
+                        !customDateFrom || !customDateTo || rangeLoading
+                      }
+                      className="rounded-lg bg-indigo-600 px-4 py-2 font-medium text-white transition-colors hover:bg-indigo-500 disabled:opacity-50"
+                    >
+                      Apply
+                    </button>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -719,7 +733,7 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
                   }
                   className="rounded-lg border border-white/10 bg-slate-950/60 px-2 py-1 text-slate-200"
                 >
-                  <option value="total">13-month total</option>
+                  <option value="total">Selected date range</option>
                   {months.map((m) => (
                     <option key={m.monthKey} value={m.monthKey}>
                       {formatMonthLabel(m.monthKey)}
@@ -739,10 +753,10 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
                 metric={distributionMetric}
                 monthKey={selectedMonthKey}
                 excludedKeys={excludedKeys}
-                highlightedCampaignKey={
-                  compareCampaign?.campaignKey ?? undefined
+                highlightedCampaignKey={compareCampaignKey || undefined}
+                onSelect={(campaign) =>
+                  selectCampaignForCompare(campaign.campaignKey)
                 }
-                onSelect={(campaign) => selectCampaignForCompare(campaign.campaignKey)}
               />
             </div>
           </section>

@@ -1,26 +1,36 @@
 /**
  * Builds the payload served to the agency dashboard from a stored snapshot.
  *
- * Grain: one entry per CAMPAIGN (a.k.a. per sheet row). A location with
- * ACTIVE + 2ND CMPN contributes two CampaignSummary objects. The UI decides
- * whether to display them grouped by CID (with an accordion) or flat.
+ * v3 shape (day-grained storage):
+ *   - Days table is the source of truth.
+ *   - Caller passes a {@link DateRange} ({@link DateRangePreset} resolved on
+ *     the API route); we also compute the immediately-prior period of equal
+ *     length for the KPI comparison.
+ *   - Per-campaign `totals` / `priorTotals` are pre-aggregated over the
+ *     selected range so the UI never has to reason about partial months.
+ *   - `months[]` (both agency-level and per-campaign) always spans the
+ *     full 13 calendar months covered by the snapshot so the trend charts
+ *     keep their long-range context regardless of the selected KPI range.
  *
- * Averages policy:
- *   - "Simple average" = mean of each campaign's per-month rate. Each
- *     campaign counted once per month.
- *   - "Weighted average" = sum(numerator) / sum(denominator) across
- *     campaigns. Shown as context.
+ * Averages policy (unchanged from v2):
+ *   - Sum metrics (leads, appts, showed, closed, spend, value) pool across
+ *     every campaign.
+ *   - Rate metrics (booking/show/close, cpl/cps/cpclose/roas) are computed
+ *     per campaign over its totals and then simple-averaged across
+ *     contributing campaigns. A campaign with zero denominator doesn't
+ *     "vote" with 0%.
  */
 
-import { getMonthsBack } from "@/lib/date-ranges";
-import type { FunnelMetrics } from "@/lib/funnel-metrics";
+import { getMonthsBack, getPreviousPeriod } from "@/lib/date-ranges";
 import {
   getLatestCompleteSnapshot,
   getSnapshotById,
   listCampaigns,
-  listSnapshotCampaignMonths,
+  listSnapshotCampaignDays,
+  listSnapshotCampaignRuns,
+  type AgencyCampaignDay,
   type AgencyCampaignRecord,
-  type AgencyCampaignMonth,
+  type AgencyCampaignRun,
   type AgencySnapshot,
 } from "@/lib/agency-rollup-store";
 import type { CampaignStatus } from "@/lib/agency-clients";
@@ -40,6 +50,13 @@ export type MetricKey =
   | "cps"
   | "cpClose"
   | "roas";
+
+export interface DateRangeDescriptor {
+  preset: string;
+  startDate: string;
+  endDate: string;
+  label?: string;
+}
 
 export interface MonthTotals {
   monthKey: string;
@@ -72,7 +89,24 @@ export interface CampaignMonthly {
   leads: number;
   totalAppts: number;
   showed: number;
-  /** Opps marked no-show. Counted as "booked" in booking rate, excluded from show-rate numerator. */
+  noShow: number;
+  closed: number;
+  totalValue: number;
+  successValue: number;
+  adSpend: number;
+  bookingRate: number | null;
+  showRate: number | null;
+  closeRate: number | null;
+  cpl: number | null;
+  cps: number | null;
+  cpClose: number | null;
+  roas: number | null;
+}
+
+export interface CampaignWindowTotals {
+  leads: number;
+  totalAppts: number;
+  showed: number;
   noShow: number;
   closed: number;
   totalValue: number;
@@ -88,28 +122,14 @@ export interface CampaignMonthly {
 }
 
 export interface CampaignDataQuality {
-  /**
-   * Fraction (0..1) of appointments that were moved out of the automated
-   * Requested/Confirmed stages into a manual stage (showed/noShow/closed)
-   * over the aged portion of the window. Low ⇒ the client is leaving
-   * opportunities in the automated stages.
-   */
   movementRatio: number | null;
-  /** Current count of open opps sitting in automated stages. */
   openCount: number | null;
-  /** Of `openCount`, how many haven't had a stage change in >21 days. */
   staleOpenCount: number | null;
-  /** staleOpenCount / openCount when openCount > 0. */
   staleOpenPct: number | null;
-  /**
-   * Most recent timestamp at which any opp in a manual stage
-   * (showed/noShow/closed) had its stage touched. ISO string.
-   */
   lastManualStageChangeAt: string | null;
 }
 
 export interface CampaignSummary {
-  /** `${locationId}:${pipelineKeywordOrStatus}` — unique across the agency. */
   campaignKey: string;
   locationId: string;
   status: CampaignStatus;
@@ -122,37 +142,21 @@ export interface CampaignSummary {
   campaignKeyword: string | null;
   adAccountId: string | null;
   included: boolean;
-  /** When not included: "skipped" or "error" plus a reason. */
   errorMessage: string | null;
   needsSetupReason: string | null;
   dataQuality: CampaignDataQuality;
-  totals: Omit<CampaignMonthly, "monthKey">;
+  totals: CampaignWindowTotals;
+  priorTotals: CampaignWindowTotals;
   latestMonth: CampaignMonthly | null;
   months: CampaignMonthly[];
 }
 
 export interface AgencyRollupView {
   snapshot: AgencySnapshot;
+  range: DateRangeDescriptor;
+  priorRange: DateRangeDescriptor;
   months: MonthTotals[];
   campaigns: CampaignSummary[];
-}
-
-interface MonthlyAccum {
-  monthKey: string;
-  startDate: string;
-  endDate: string;
-  leads: number;
-  totalAppts: number;
-  showed: number;
-  noShow: number;
-  closed: number;
-  totalValue: number;
-  successValue: number;
-  adSpend: number;
-  clientCount: number;
-  bookingRates: number[];
-  showRates: number[];
-  closeRates: number[];
 }
 
 function rateOrNull(num: number, den: number): number | null {
@@ -171,97 +175,77 @@ function average(values: number[]): number | null {
   return Math.round((sum / values.length) * 10) / 10;
 }
 
-function buildCampaignMonth(
-  monthKey: string,
-  metrics: FunnelMetrics | null,
-  adSpend: number
-): CampaignMonthly {
-  const leads = metrics?.leads ?? 0;
-  const totalAppts = metrics?.totalAppts ?? 0;
-  const showed = metrics?.showed ?? 0;
-  const noShow = metrics?.noShow ?? 0;
-  const closed = metrics?.closed ?? 0;
-  const totalValue = metrics?.totalValue ?? 0;
-  const successValue = metrics?.successValue ?? 0;
-
-  /*
-   * Match the individual dashboard's "On Totals" formula (applyRollup in
-   * funnel-metrics.ts): everyone who reached an appointment stage — including
-   * no-shows — counts as "booked" in the booking rate. No-shows sit in the
-   * show-rate denominator (they booked) but NOT the numerator (they didn't
-   * show). Close rate is unaffected.
-   */
-  const leadPool = leads + totalAppts + showed + noShow + closed;
-  const bookedCount = totalAppts + showed + noShow + closed;
-  const bookingRate = leadPool > 0 ? rateOrNull(bookedCount, leadPool) : null;
-  const showRate =
-    bookedCount > 0 ? rateOrNull(showed + closed, bookedCount) : null;
-  const closeRate = rateOrNull(closed, showed + closed);
-
+/**
+ * Compute funnel rates + cost ratios from a raw sum-of-counts/values bucket.
+ * Used for both per-campaign window totals and per-campaign-per-month rows.
+ * No-shows count as booked (matches applyRollup in funnel-metrics.ts).
+ */
+function deriveRates(base: {
+  leads: number;
+  totalAppts: number;
+  showed: number;
+  noShow: number;
+  closed: number;
+  totalValue: number;
+  successValue: number;
+  adSpend: number;
+}): CampaignWindowTotals {
+  const apptPool = base.totalAppts + base.showed + base.noShow + base.closed;
+  const leadPool = base.leads + apptPool;
+  const showPool = base.showed + base.closed;
   return {
-    monthKey,
-    leads,
-    totalAppts,
-    showed,
-    noShow,
-    closed,
-    totalValue,
-    successValue,
-    adSpend,
-    bookingRate,
-    showRate,
-    closeRate,
-    cpl: adSpend > 0 ? moneyOrNull(adSpend, leads) : null,
-    cps: adSpend > 0 ? moneyOrNull(adSpend, showed) : null,
-    cpClose: adSpend > 0 ? moneyOrNull(adSpend, closed) : null,
-    roas: adSpend > 0 ? moneyOrNull(successValue, adSpend) : null,
+    ...base,
+    bookingRate: leadPool > 0 ? rateOrNull(apptPool, leadPool) : null,
+    showRate: apptPool > 0 ? rateOrNull(base.showed + base.closed, apptPool) : null,
+    closeRate: rateOrNull(base.closed, showPool),
+    cpl: base.adSpend > 0 && base.leads > 0 ? moneyOrNull(base.adSpend, base.leads) : null,
+    cps: base.adSpend > 0 && base.showed > 0 ? moneyOrNull(base.adSpend, base.showed) : null,
+    cpClose:
+      base.adSpend > 0 && base.closed > 0
+        ? moneyOrNull(base.adSpend, base.closed)
+        : null,
+    roas: base.adSpend > 0 ? moneyOrNull(base.successValue, base.adSpend) : null,
   };
 }
 
-function sumCampaignMonthly(
-  months: CampaignMonthly[]
-): Omit<CampaignMonthly, "monthKey"> {
-  const totals = months.reduce(
-    (acc, m) => {
-      acc.leads += m.leads;
-      acc.totalAppts += m.totalAppts;
-      acc.showed += m.showed;
-      acc.noShow += m.noShow;
-      acc.closed += m.closed;
-      acc.totalValue += m.totalValue;
-      acc.successValue += m.successValue;
-      acc.adSpend += m.adSpend;
-      return acc;
-    },
-    {
-      leads: 0,
-      totalAppts: 0,
-      showed: 0,
-      noShow: 0,
-      closed: 0,
-      totalValue: 0,
-      successValue: 0,
-      adSpend: 0,
-    }
-  );
-  const bookedCount =
-    totals.totalAppts + totals.showed + totals.noShow + totals.closed;
-  const leadPool = totals.leads + bookedCount;
+function emptyAccumulator(): {
+  leads: number;
+  totalAppts: number;
+  showed: number;
+  noShow: number;
+  closed: number;
+  totalValue: number;
+  successValue: number;
+  adSpend: number;
+} {
   return {
-    ...totals,
-    bookingRate: leadPool > 0 ? rateOrNull(bookedCount, leadPool) : null,
-    showRate:
-      bookedCount > 0
-        ? rateOrNull(totals.showed + totals.closed, bookedCount)
-        : null,
-    closeRate: rateOrNull(totals.closed, totals.showed + totals.closed),
-    cpl: totals.adSpend > 0 ? moneyOrNull(totals.adSpend, totals.leads) : null,
-    cps: totals.adSpend > 0 ? moneyOrNull(totals.adSpend, totals.showed) : null,
-    cpClose:
-      totals.adSpend > 0 ? moneyOrNull(totals.adSpend, totals.closed) : null,
-    roas:
-      totals.adSpend > 0 ? moneyOrNull(totals.successValue, totals.adSpend) : null,
+    leads: 0,
+    totalAppts: 0,
+    showed: 0,
+    noShow: 0,
+    closed: 0,
+    totalValue: 0,
+    successValue: 0,
+    adSpend: 0,
   };
+}
+
+function accumulateDay(
+  acc: ReturnType<typeof emptyAccumulator>,
+  row: AgencyCampaignDay
+): void {
+  acc.leads += row.leads;
+  acc.totalAppts += row.totalAppts;
+  acc.showed += row.showed;
+  acc.noShow += row.noShow;
+  acc.closed += row.closed;
+  acc.totalValue += row.totalValue;
+  acc.successValue += row.successValue;
+  acc.adSpend += row.adSpend;
+}
+
+function inRange(date: string, start: string, end: string): boolean {
+  return date >= start && date <= end;
 }
 
 function extractDataQuality(
@@ -297,42 +281,86 @@ function displayBusinessName(record: AgencyCampaignRecord | undefined): string {
   return record.locationId;
 }
 
-export async function buildAgencyRollupView(
-  snapshotId?: number
-): Promise<AgencyRollupView | null> {
-  const snapshot = snapshotId
-    ? await getSnapshotById(snapshotId)
+function emptyWindowTotals(): CampaignWindowTotals {
+  return deriveRates(emptyAccumulator());
+}
+
+function emptyMonth(monthKey: string): CampaignMonthly {
+  return {
+    monthKey,
+    ...deriveRates(emptyAccumulator()),
+  };
+}
+
+export async function buildAgencyRollupView(params?: {
+  snapshotId?: number;
+  range?: DateRangeDescriptor;
+}): Promise<AgencyRollupView | null> {
+  const snapshot = params?.snapshotId
+    ? await getSnapshotById(params.snapshotId)
     : await getLatestCompleteSnapshot();
   if (!snapshot) return null;
 
-  const [campaignRecords, campaignMonths] = await Promise.all([
-    listCampaigns(),
-    listSnapshotCampaignMonths(snapshot.id),
-  ]);
-
-  const recordByKey = new Map(
-    campaignRecords.map((c) => [c.campaignKey, c])
-  );
+  // Default range = most recent calendar month (matches old "Latest month"
+  // default). The API route resolves real presets; this fallback only kicks
+  // in if the caller doesn't specify one.
   const monthRanges = getMonthsBack(snapshot.monthsCovered);
   const orderedMonthKeys = monthRanges
     .map((m) => ({ monthKey: m.monthKey, startDate: m.startDate, endDate: m.endDate }))
     .sort((a, b) => a.monthKey.localeCompare(b.monthKey));
 
-  const monthlyAccum = new Map<string, MonthlyAccum>(
+  const defaultRange: DateRangeDescriptor = params?.range ?? {
+    preset: "last_month",
+    startDate: orderedMonthKeys[orderedMonthKeys.length - 1]?.startDate ?? "",
+    endDate: orderedMonthKeys[orderedMonthKeys.length - 1]?.endDate ?? "",
+  };
+  const priorRaw = getPreviousPeriod({
+    startDate: defaultRange.startDate,
+    endDate: defaultRange.endDate,
+  });
+  const priorRange: DateRangeDescriptor = {
+    preset: "prior",
+    startDate: priorRaw.startDate,
+    endDate: priorRaw.endDate,
+  };
+
+  const [campaignRecords, days, runs] = await Promise.all([
+    listCampaigns(),
+    listSnapshotCampaignDays(snapshot.id),
+    listSnapshotCampaignRuns(snapshot.id),
+  ]);
+
+  const recordByKey = new Map(campaignRecords.map((c) => [c.campaignKey, c]));
+  const runByKey = new Map<string, AgencyCampaignRun>(
+    runs.map((r) => [r.campaignKey, r])
+  );
+
+  const daysByCampaign = new Map<string, AgencyCampaignDay[]>();
+  for (const row of days) {
+    const list = daysByCampaign.get(row.campaignKey) ?? [];
+    list.push(row);
+    daysByCampaign.set(row.campaignKey, list);
+  }
+
+  interface AgencyMonthAccum {
+    monthKey: string;
+    startDate: string;
+    endDate: string;
+    sums: ReturnType<typeof emptyAccumulator>;
+    clientCount: number;
+    bookingRates: number[];
+    showRates: number[];
+    closeRates: number[];
+  }
+
+  const monthlyAccum = new Map<string, AgencyMonthAccum>(
     orderedMonthKeys.map((m) => [
       m.monthKey,
       {
         monthKey: m.monthKey,
         startDate: m.startDate,
         endDate: m.endDate,
-        leads: 0,
-        totalAppts: 0,
-        showed: 0,
-        noShow: 0,
-        closed: 0,
-        totalValue: 0,
-        successValue: 0,
-        adSpend: 0,
+        sums: emptyAccumulator(),
         clientCount: 0,
         bookingRates: [],
         showRates: [],
@@ -341,54 +369,75 @@ export async function buildAgencyRollupView(
     ])
   );
 
-  const monthsByCampaign = new Map<string, AgencyCampaignMonth[]>();
-  for (const row of campaignMonths) {
-    const list = monthsByCampaign.get(row.campaignKey) ?? [];
-    list.push(row);
-    monthsByCampaign.set(row.campaignKey, list);
-  }
-
+  const seenCampaignKeys = new Set<string>();
   const campaignSummaries: CampaignSummary[] = [];
 
-  for (const [campaignKey, rows] of monthsByCampaign.entries()) {
-    const byKey = new Map<string, AgencyCampaignMonth>(
-      rows.map((r) => [r.monthKey, r])
-    );
-    const months: CampaignMonthly[] = orderedMonthKeys.map(({ monthKey }) => {
-      const row = byKey.get(monthKey);
-      return buildCampaignMonth(monthKey, row?.metrics ?? null, row?.adSpend ?? 0);
-    });
+  // Iterate per-campaign. Each campaign's days array is already filtered
+  // to that campaign; we bucket by (monthKey, current, prior) in one pass.
+  for (const [campaignKey, rows] of daysByCampaign.entries()) {
+    seenCampaignKeys.add(campaignKey);
 
-    const anyError = rows.find((r) => r.status !== "ok");
-    const included = !anyError;
+    const monthSums = new Map<string, ReturnType<typeof emptyAccumulator>>();
+    for (const m of orderedMonthKeys) monthSums.set(m.monthKey, emptyAccumulator());
 
-    if (included) {
-      for (const m of months) {
-        const bucket = monthlyAccum.get(m.monthKey);
-        if (!bucket) continue;
-        bucket.leads += m.leads;
-        bucket.totalAppts += m.totalAppts;
-        bucket.showed += m.showed;
-        bucket.noShow += m.noShow;
-        bucket.closed += m.closed;
-        bucket.totalValue += m.totalValue;
-        bucket.successValue += m.successValue;
-        bucket.adSpend += m.adSpend;
-        const hasSignal =
-          m.leads > 0 ||
-          m.totalAppts > 0 ||
-          m.showed > 0 ||
-          m.noShow > 0 ||
-          m.closed > 0 ||
-          m.adSpend > 0;
-        if (hasSignal) bucket.clientCount += 1;
-        if (m.bookingRate != null) bucket.bookingRates.push(m.bookingRate);
-        if (m.showRate != null) bucket.showRates.push(m.showRate);
-        if (m.closeRate != null) bucket.closeRates.push(m.closeRate);
+    const currentSums = emptyAccumulator();
+    const priorSums = emptyAccumulator();
+
+    for (const row of rows) {
+      const monthKey = row.date.slice(0, 7);
+      const monthBucket = monthSums.get(monthKey);
+      if (monthBucket) accumulateDay(monthBucket, row);
+
+      if (inRange(row.date, defaultRange.startDate, defaultRange.endDate)) {
+        accumulateDay(currentSums, row);
+      }
+      if (inRange(row.date, priorRange.startDate, priorRange.endDate)) {
+        accumulateDay(priorSums, row);
       }
     }
 
+    const months: CampaignMonthly[] = orderedMonthKeys.map(({ monthKey }) => {
+      const sum = monthSums.get(monthKey)!;
+      return { monthKey, ...deriveRates(sum) };
+    });
+
+    const totals = deriveRates(currentSums);
+    const priorTotals = deriveRates(priorSums);
+
+    const run = runByKey.get(campaignKey);
     const record = recordByKey.get(campaignKey);
+    const included = !run || run.status === "ok";
+    // Most snapshots will have a run row; legacy rows without a run row
+    // but with day data are treated as ok.
+    const errorMessage = run && run.status !== "ok" ? run.errorMessage : null;
+
+    // Roll the campaign's monthly sums into the agency monthly accumulator.
+    if (included) {
+      for (const month of months) {
+        const bucket = monthlyAccum.get(month.monthKey);
+        if (!bucket) continue;
+        bucket.sums.leads += month.leads;
+        bucket.sums.totalAppts += month.totalAppts;
+        bucket.sums.showed += month.showed;
+        bucket.sums.noShow += month.noShow;
+        bucket.sums.closed += month.closed;
+        bucket.sums.totalValue += month.totalValue;
+        bucket.sums.successValue += month.successValue;
+        bucket.sums.adSpend += month.adSpend;
+        const hasSignal =
+          month.leads > 0 ||
+          month.totalAppts > 0 ||
+          month.showed > 0 ||
+          month.noShow > 0 ||
+          month.closed > 0 ||
+          month.adSpend > 0;
+        if (hasSignal) bucket.clientCount += 1;
+        if (month.bookingRate != null) bucket.bookingRates.push(month.bookingRate);
+        if (month.showRate != null) bucket.showRates.push(month.showRate);
+        if (month.closeRate != null) bucket.closeRates.push(month.closeRate);
+      }
+    }
+
     const ownerName = record
       ? [record.ownerFirstName, record.ownerLastName]
           .filter(Boolean)
@@ -409,21 +458,24 @@ export async function buildAgencyRollupView(
       campaignKeyword: record?.campaignKeyword ?? null,
       adAccountId: record?.adAccountId ?? null,
       included,
-      errorMessage: anyError?.errorMessage ?? null,
+      errorMessage,
       needsSetupReason: record?.needsSetupReason ?? null,
       dataQuality: extractDataQuality(record),
-      totals: sumCampaignMonthly(months),
+      totals,
+      priorTotals,
       latestMonth: months[months.length - 1] ?? null,
       months,
     });
   }
 
-  // Include campaigns that have no month rows yet (edge case — sheet row
-  // added between rollup runs). These show as "needs setup" in the UI.
+  // Campaigns that exist in the roster but produced no day rows (new sheet
+  // row, needs-setup, or fully failed). Surface them with empty data so the
+  // UI can show a "needs setup" row.
   for (const record of campaignRecords) {
-    if (monthsByCampaign.has(record.campaignKey)) continue;
+    if (seenCampaignKeys.has(record.campaignKey)) continue;
+    const run = runByKey.get(record.campaignKey);
     const months: CampaignMonthly[] = orderedMonthKeys.map(({ monthKey }) =>
-      buildCampaignMonth(monthKey, null, 0)
+      emptyMonth(monthKey)
     );
     const ownerName =
       [record.ownerFirstName, record.ownerLastName]
@@ -443,10 +495,12 @@ export async function buildAgencyRollupView(
       campaignKeyword: record.campaignKeyword,
       adAccountId: record.adAccountId,
       included: false,
-      errorMessage: record.needsSetupReason,
+      errorMessage:
+        run?.status !== "ok" ? run?.errorMessage ?? record.needsSetupReason : null,
       needsSetupReason: record.needsSetupReason,
       dataQuality: extractDataQuality(record),
-      totals: sumCampaignMonthly(months),
+      totals: emptyWindowTotals(),
+      priorTotals: emptyWindowTotals(),
       latestMonth: months[months.length - 1] ?? null,
       months,
     });
@@ -455,30 +509,28 @@ export async function buildAgencyRollupView(
   campaignSummaries.sort((a, b) => {
     const nameCmp = a.businessName.localeCompare(b.businessName);
     if (nameCmp !== 0) return nameCmp;
-    // ACTIVE before 2ND CMPN at the same business.
     if (a.status !== b.status) return a.status === "ACTIVE" ? -1 : 1;
     return a.campaignKey.localeCompare(b.campaignKey);
   });
 
   const monthTotals: MonthTotals[] = orderedMonthKeys.map(({ monthKey }) => {
     const bucket = monthlyAccum.get(monthKey)!;
-    const weightedApptsPool =
-      bucket.totalAppts + bucket.showed + bucket.noShow + bucket.closed;
-    const weightedLeadPool = bucket.leads + weightedApptsPool;
-    const weightedShowPool = bucket.showed + bucket.closed;
-
+    const s = bucket.sums;
+    const weightedApptsPool = s.totalAppts + s.showed + s.noShow + s.closed;
+    const weightedLeadPool = s.leads + weightedApptsPool;
+    const weightedShowPool = s.showed + s.closed;
     return {
       monthKey: bucket.monthKey,
       startDate: bucket.startDate,
       endDate: bucket.endDate,
-      leads: bucket.leads,
-      totalAppts: bucket.totalAppts,
-      showed: bucket.showed,
-      noShow: bucket.noShow,
-      closed: bucket.closed,
-      totalValue: bucket.totalValue,
-      successValue: bucket.successValue,
-      adSpend: bucket.adSpend,
+      leads: s.leads,
+      totalAppts: s.totalAppts,
+      showed: s.showed,
+      noShow: s.noShow,
+      closed: s.closed,
+      totalValue: s.totalValue,
+      successValue: s.successValue,
+      adSpend: s.adSpend,
       clientCount: bucket.clientCount,
       bookingRateSimple: average(bucket.bookingRates),
       bookingRateWeighted:
@@ -488,31 +540,23 @@ export async function buildAgencyRollupView(
       showRateSimple: average(bucket.showRates),
       showRateWeighted:
         weightedApptsPool > 0
-          ? rateOrNull(bucket.showed + bucket.closed, weightedApptsPool)
+          ? rateOrNull(s.showed + s.closed, weightedApptsPool)
           : null,
       closeRateSimple: average(bucket.closeRates),
-      closeRateWeighted: rateOrNull(bucket.closed, weightedShowPool),
-      cpl:
-        bucket.adSpend > 0 && bucket.leads > 0
-          ? moneyOrNull(bucket.adSpend, bucket.leads)
-          : null,
+      closeRateWeighted: rateOrNull(s.closed, weightedShowPool),
+      cpl: s.adSpend > 0 && s.leads > 0 ? moneyOrNull(s.adSpend, s.leads) : null,
       cps:
-        bucket.adSpend > 0 && bucket.showed > 0
-          ? moneyOrNull(bucket.adSpend, bucket.showed)
-          : null,
+        s.adSpend > 0 && s.showed > 0 ? moneyOrNull(s.adSpend, s.showed) : null,
       cpClose:
-        bucket.adSpend > 0 && bucket.closed > 0
-          ? moneyOrNull(bucket.adSpend, bucket.closed)
-          : null,
-      roas:
-        bucket.adSpend > 0
-          ? moneyOrNull(bucket.successValue, bucket.adSpend)
-          : null,
+        s.adSpend > 0 && s.closed > 0 ? moneyOrNull(s.adSpend, s.closed) : null,
+      roas: s.adSpend > 0 ? moneyOrNull(s.successValue, s.adSpend) : null,
     };
   });
 
   return {
     snapshot,
+    range: defaultRange,
+    priorRange,
     months: monthTotals,
     campaigns: campaignSummaries,
   };
@@ -575,6 +619,44 @@ export function getCampaignMetricValue(
       return monthly.cpClose;
     case "roas":
       return monthly.roas;
+    default:
+      return null;
+  }
+}
+
+export function getCampaignTotalsMetricValue(
+  totals: CampaignWindowTotals,
+  metric: MetricKey
+): number | null {
+  switch (metric) {
+    case "leads":
+      return totals.leads;
+    case "totalAppts":
+      return totals.totalAppts;
+    case "showed":
+      return totals.showed;
+    case "closed":
+      return totals.closed;
+    case "totalValue":
+      return totals.totalValue;
+    case "successValue":
+      return totals.successValue;
+    case "adSpend":
+      return totals.adSpend;
+    case "bookingRate":
+      return totals.bookingRate;
+    case "showRate":
+      return totals.showRate;
+    case "closeRate":
+      return totals.closeRate;
+    case "cpl":
+      return totals.cpl;
+    case "cps":
+      return totals.cps;
+    case "cpClose":
+      return totals.cpClose;
+    case "roas":
+      return totals.roas;
     default:
       return null;
   }

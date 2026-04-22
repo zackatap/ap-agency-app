@@ -1,14 +1,57 @@
 import { NextResponse } from "next/server";
 import { buildAgencyRollupView } from "@/lib/agency-rollup-view";
+import {
+  getDateRangeForPreset,
+  DATE_RANGE_LABELS,
+  type DateRangePreset,
+} from "@/lib/date-ranges";
 
-export async function GET() {
-  const view = await buildAgencyRollupView();
+const PRESETS: DateRangePreset[] = [
+  "this_month",
+  "last_month",
+  "last_30",
+  "last_60",
+  "last_90",
+  "maximum",
+  "custom",
+];
+
+function isPreset(v: string | null): v is DateRangePreset {
+  return !!v && (PRESETS as string[]).includes(v);
+}
+
+export async function GET(req: Request) {
+  const url = new URL(req.url);
+  const presetParam = url.searchParams.get("preset");
+  const customFrom = url.searchParams.get("from") ?? undefined;
+  const customTo = url.searchParams.get("to") ?? undefined;
+  const clientDate = url.searchParams.get("clientDate") ?? undefined;
+
+  const preset: DateRangePreset = isPreset(presetParam) ? presetParam : "last_30";
+  const { startDate, endDate } = getDateRangeForPreset(
+    preset,
+    customFrom,
+    customTo,
+    clientDate
+  );
+
+  const view = await buildAgencyRollupView({
+    range: {
+      preset,
+      startDate,
+      endDate,
+      label: DATE_RANGE_LABELS[preset],
+    },
+  });
+
   if (!view) {
     return NextResponse.json(
       {
         snapshot: null,
+        range: { preset, startDate, endDate, label: DATE_RANGE_LABELS[preset] },
+        priorRange: null,
         months: [],
-        locations: [],
+        campaigns: [],
         message:
           "No rollup snapshot yet — click Refresh data to generate the first one.",
       },
