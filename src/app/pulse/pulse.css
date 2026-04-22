@@ -698,6 +698,31 @@
   border-radius: 6px;
 }
 
+.pulse-referral-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+  padding: 12px 18px;
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 700;
+  text-decoration: none;
+  color: #fff;
+  background: linear-gradient(135deg, #0f172a, #312e81);
+  box-shadow: 0 10px 20px -8px rgba(49, 46, 129, 0.5);
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.2s ease;
+}
+.pulse-referral-cta:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 14px 28px -10px rgba(49, 46, 129, 0.55);
+}
+.pulse-referral-cta:active {
+  transform: translateY(0);
+}
+
 @media (max-width: 520px) {
   .pulse-review-buttons {
     grid-template-columns: 1fr;

@@ -455,9 +455,19 @@ export default function PulseForm({
                   <p className="pulse-referral-body">
                     Love working with us? Send practices our way. Our top
                     referrer doesn&apos;t pay us a dime —{" "}
-                    <strong>we pay him over $2,500/month</strong>. Ask your
-                    account lead how the program works.
+                    <strong>we pay him over $2,500/month</strong>. Earn
+                    $150/mo per active client you refer, and they get $500 in
+                    ad spend to start.
                   </p>
+                  <a
+                    className="pulse-referral-cta"
+                    href="https://referralkit.com/join/automated-practice"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Join the referral program
+                    <span aria-hidden>→</span>
+                  </a>
                 </div>
               </>
             )}
