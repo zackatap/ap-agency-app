@@ -139,15 +139,11 @@ function BenchmarkCompareColumn({
   metricKey,
   header,
   row,
-  onSelect,
-  isFocused,
   borderLeft,
 }: {
   metricKey: MetricKey;
   header: string;
   row: RankSummaryRow | undefined;
-  onSelect: () => void;
-  isFocused: boolean;
   borderLeft?: boolean;
 }) {
   const meta = row?.meta ?? METRIC_META[metricKey];
@@ -161,15 +157,9 @@ function BenchmarkCompareColumn({
       (!meta.higherIsBetter && value <= average));
 
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      className={`min-w-0 text-left outline-none transition-colors ${
+    <div
+      className={`min-w-0 text-left ${
         borderLeft ? "border-l border-white/[0.04] pl-3" : "pr-3"
-      } ${
-        isFocused
-          ? "rounded-lg ring-1 ring-indigo-400/60 ring-offset-2 ring-offset-slate-950"
-          : "hover:bg-white/[0.02] rounded-lg"
       }`}
     >
       <div className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
@@ -195,48 +185,36 @@ function BenchmarkCompareColumn({
           {ordinalSuffix(rank.rank)} of {rank.of} · {rank.percentile}th percentile
         </div>
       )}
-    </button>
+    </div>
   );
 }
 
 function BenchmarkComparePairCard({
   pair,
   rankByKey,
-  focusMetric,
-  onSelectMetric,
 }: {
   pair: KpiPairConfig;
   rankByKey: Map<MetricKey, RankSummaryRow>;
-  focusMetric: MetricKey;
-  onSelectMetric: (key: MetricKey) => void;
 }) {
   const rowA = rankByKey.get(pair.a as MetricKey);
   const rowB = rankByKey.get(pair.b as MetricKey);
-  const focused =
-    focusMetric === (pair.a as MetricKey) || focusMetric === (pair.b as MetricKey);
 
   return (
     <div
       role="group"
       aria-label={pair.cardTitle}
-      className={`rounded-xl border bg-slate-900/40 p-4 transition-colors ${
-        focused ? "border-indigo-400/50" : "border-white/10"
-      }`}
+      className="rounded-xl border border-white/10 bg-slate-900/40 p-4"
     >
       <div className="grid grid-cols-2 gap-x-0">
         <BenchmarkCompareColumn
           metricKey={pair.a as MetricKey}
           header={KPI_INLINE_LABEL[pair.a as DashboardKpiMetric]}
           row={rowA}
-          onSelect={() => onSelectMetric(pair.a as MetricKey)}
-          isFocused={focusMetric === (pair.a as MetricKey)}
         />
         <BenchmarkCompareColumn
           metricKey={pair.b as MetricKey}
           header={KPI_INLINE_LABEL[pair.b as DashboardKpiMetric]}
           row={rowB}
-          onSelect={() => onSelectMetric(pair.b as MetricKey)}
-          isFocused={focusMetric === (pair.b as MetricKey)}
           borderLeft
         />
       </div>
@@ -423,7 +401,6 @@ export function ClientBenchmark({
     );
   }
 
-  const focusMeta = METRIC_META[focusMetric];
   const showCampaignPicker = campaignsAtLocation.length > 1;
 
   return (
@@ -508,8 +485,7 @@ export function ClientBenchmark({
             Client vs agency
           </h2>
           <p className="mt-1 text-xs text-slate-400">
-            Same groupings as the agency key metrics. Click a metric to focus the
-            distribution strip below.
+            Same groupings as the agency key metrics.
           </p>
         </div>
         {KPI_SECTIONS.map((sec) => (
@@ -524,8 +500,6 @@ export function ClientBenchmark({
                   key={pair.id}
                   pair={pair}
                   rankByKey={rankByKey}
-                  focusMetric={focusMetric}
-                  onSelectMetric={setFocusMetric}
                 />
               ))}
             </div>
@@ -560,13 +534,31 @@ export function ClientBenchmark({
       </section>
 
       <section className="rounded-2xl border border-white/10 bg-slate-900/30 p-5">
-        <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-300">
-          Where this client stands — {focusMeta.label}
-        </h2>
-        <p className="mt-1 text-xs text-slate-400">
-          Every dot is one campaign in the selected period. This client&apos;s
-          position is highlighted in gold.
-        </p>
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div>
+            <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-300">
+              Where this client stands
+            </h2>
+            <p className="mt-1 text-xs text-slate-400">
+              Every dot is one campaign in the selected period. This client&apos;s
+              position is highlighted in gold.
+            </p>
+          </div>
+          <label className="flex flex-col gap-1 text-xs text-slate-500">
+            <span className="font-medium uppercase tracking-wide">Metric</span>
+            <select
+              value={focusMetric}
+              onChange={(e) => setFocusMetric(e.target.value as MetricKey)}
+              className="rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2 text-sm text-slate-200"
+            >
+              {METRIC_ORDER.map((key) => (
+                <option key={key} value={key}>
+                  {METRIC_META[key].label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
         <div className="mt-4">
           <DistributionStrip
             campaigns={includedCampaigns}
