@@ -138,6 +138,8 @@ export interface ClientRollupView {
   snapshot: ClientAgencySnapshot;
   range: ClientDateRange;
   priorRange: ClientDateRange;
+  /** When true, funnel counts use "On Totals" semantics (default). */
+  onTotals: boolean;
   months: ClientMonthTotals[];
   campaigns: ClientCampaignSummary[];
 }

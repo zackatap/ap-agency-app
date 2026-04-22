@@ -281,6 +281,10 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
     () => (initial?.range.preset === "custom" ? initial.range.endDate : "")
   );
   const [rangeLoading, setRangeLoading] = useState(false);
+  /** Funnel count semantics — matches the client dashboard rollup toggle (default on). */
+  const [onTotals, setOnTotals] = useState(
+    () => initial?.onTotals !== false
+  );
 
   const leaderboardRef = useRef<HTMLElement | null>(null);
   const selectCampaignForCompare = (campaignKey: string) => {
@@ -297,10 +301,17 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
    * (mirroring the client dashboard's "Apply" button behavior).
    */
   const fetchRollup = useCallback(
-    async (preset: DateRangePreset, from?: string, to?: string) => {
+    async (
+      preset: DateRangePreset,
+      from?: string,
+      to?: string,
+      onTotalsOverride?: boolean
+    ) => {
+      const ot = onTotalsOverride ?? onTotals;
       const params = new URLSearchParams();
       params.set("preset", preset);
       params.set("clientDate", getTodayLocal());
+      if (!ot) params.set("onTotals", "false");
       if (preset === "custom") {
         if (!from || !to) return;
         params.set("from", from);
@@ -330,7 +341,7 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
         setRangeLoading(false);
       }
     },
-    []
+    [onTotals]
   );
 
   const reloadSnapshot = useCallback(async () => {
@@ -370,6 +381,13 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
     fetchRollup("custom", customDateFrom, customDateTo);
   };
 
+  const handleOnTotalsModeChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const v = e.target.value === "onTotals";
+    setOnTotals(v);
+    if (dateRangePreset === "custom" && (!customDateFrom || !customDateTo)) return;
+    void fetchRollup(dateRangePreset, customDateFrom, customDateTo, v);
+  };
+
   const campaigns = view?.campaigns ?? [];
   const includedCampaigns = useMemo(
     () => campaigns.filter((c) => c.included),
@@ -380,8 +398,13 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
   // opportunity board. They're included in the total counts (they still
   // produce leads/appts) but excluded from rate-based metrics/averages.
   const excludedMap = useMemo(
-    () => buildExcludedSet(includedCampaigns, exclusionLevel),
-    [includedCampaigns, exclusionLevel]
+    () =>
+      buildExcludedSet(
+        includedCampaigns,
+        exclusionLevel,
+        view?.onTotals !== false
+      ),
+    [includedCampaigns, exclusionLevel, view?.onTotals]
   );
   const excludedKeys = useMemo(
     () => new Set(excludedMap.keys()),
@@ -418,14 +441,6 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
     [currentSums, priorSums, currentRates, priorRates]
   );
 
-  const compareCampaign = useMemo(
-    () =>
-      campaigns.find((c) => c.campaignKey === compareCampaignKey) ?? null,
-    [campaigns, compareCampaignKey]
-  );
-  // silence unused-var warning until inline-benchmark needs it
-  void compareCampaign;
-
   const activeLocationCount = useMemo(() => {
     const set = new Set<string>();
     for (const c of includedCampaigns) set.add(c.locationId);
@@ -443,6 +458,7 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
         t.totalAppts > 0 ||
         t.showed > 0 ||
         t.closed > 0 ||
+        t.noShow > 0 ||
         t.adSpend > 0 ||
         t.successValue > 0
       ) {
@@ -575,6 +591,25 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
                         {DATE_RANGE_LABELS[p]}
                       </option>
                     ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">
+                    Funnel totals
+                  </label>
+                  <select
+                    value={onTotals ? "onTotals" : "currentStage"}
+                    onChange={handleOnTotalsModeChange}
+                    disabled={rangeLoading}
+                    title="On Totals counts each opportunity in every stage it reached (matches the client dashboard). Current stage only counts each opportunity once, in its present stage."
+                    className="max-w-[200px] rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2 text-slate-100 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  >
+                    <option value="onTotals" className="bg-slate-900">
+                      On Totals
+                    </option>
+                    <option value="currentStage" className="bg-slate-900">
+                      Current stage only
+                    </option>
                   </select>
                 </div>
                 {dateRangePreset === "custom" && (

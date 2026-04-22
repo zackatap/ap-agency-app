@@ -26,6 +26,8 @@ export async function GET(req: Request) {
   const customFrom = url.searchParams.get("from") ?? undefined;
   const customTo = url.searchParams.get("to") ?? undefined;
   const clientDate = url.searchParams.get("clientDate") ?? undefined;
+  const onTotalsParam = url.searchParams.get("onTotals");
+  const onTotals = onTotalsParam !== "false" && onTotalsParam !== "0";
 
   const preset: DateRangePreset = isPreset(presetParam) ? presetParam : "last_30";
   const { startDate, endDate } = getDateRangeForPreset(
@@ -36,6 +38,7 @@ export async function GET(req: Request) {
   );
 
   const view = await buildAgencyRollupView({
+    onTotals,
     range: {
       preset,
       startDate,
@@ -50,6 +53,7 @@ export async function GET(req: Request) {
         snapshot: null,
         range: { preset, startDate, endDate, label: DATE_RANGE_LABELS[preset] },
         priorRange: null,
+        onTotals,
         months: [],
         campaigns: [],
         message:

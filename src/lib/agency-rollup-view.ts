@@ -12,9 +12,15 @@
  *     full 13 calendar months covered by the snapshot so the trend charts
  *     keep their long-range context regardless of the selected KPI range.
  *
+ * Count semantics (`onTotals` param, default true):
+ *   - On Totals: funnel counts match {@link applyRollup} — everyone in a
+ *     later stage is counted in earlier stages too (matches the client
+ *     dashboard default).
+ *   - Current stage only: each opportunity appears in exactly one bucket.
+ *
  * Averages policy (unchanged from v2):
  *   - Sum metrics (leads, appts, showed, closed, spend, value) pool across
- *     every campaign.
+ *     every campaign (after applying the selected count semantics).
  *   - Rate metrics (booking/show/close, cpl/cps/cpclose/roas) are computed
  *     per campaign over its totals and then simple-averaged across
  *     contributing campaigns. A campaign with zero denominator doesn't
@@ -155,6 +161,12 @@ export interface AgencyRollupView {
   snapshot: AgencySnapshot;
   range: DateRangeDescriptor;
   priorRange: DateRangeDescriptor;
+  /**
+   * When true, funnel **counts** match the client dashboard "On Totals" mode
+   * (downstream stages roll into upstream totals). When false, counts are
+   * current-stage-only (each opp in one bucket).
+   */
+  onTotals: boolean;
   months: MonthTotals[];
   campaigns: CampaignSummary[];
 }
@@ -173,39 +185,6 @@ function average(values: number[]): number | null {
   if (values.length === 0) return null;
   const sum = values.reduce((a, b) => a + b, 0);
   return Math.round((sum / values.length) * 10) / 10;
-}
-
-/**
- * Compute funnel rates + cost ratios from a raw sum-of-counts/values bucket.
- * Used for both per-campaign window totals and per-campaign-per-month rows.
- * No-shows count as booked (matches applyRollup in funnel-metrics.ts).
- */
-function deriveRates(base: {
-  leads: number;
-  totalAppts: number;
-  showed: number;
-  noShow: number;
-  closed: number;
-  totalValue: number;
-  successValue: number;
-  adSpend: number;
-}): CampaignWindowTotals {
-  const apptPool = base.totalAppts + base.showed + base.noShow + base.closed;
-  const leadPool = base.leads + apptPool;
-  const showPool = base.showed + base.closed;
-  return {
-    ...base,
-    bookingRate: leadPool > 0 ? rateOrNull(apptPool, leadPool) : null,
-    showRate: apptPool > 0 ? rateOrNull(base.showed + base.closed, apptPool) : null,
-    closeRate: rateOrNull(base.closed, showPool),
-    cpl: base.adSpend > 0 && base.leads > 0 ? moneyOrNull(base.adSpend, base.leads) : null,
-    cps: base.adSpend > 0 && base.showed > 0 ? moneyOrNull(base.adSpend, base.showed) : null,
-    cpClose:
-      base.adSpend > 0 && base.closed > 0
-        ? moneyOrNull(base.adSpend, base.closed)
-        : null,
-    roas: base.adSpend > 0 ? moneyOrNull(base.successValue, base.adSpend) : null,
-  };
 }
 
 function emptyAccumulator(): {
@@ -228,6 +207,88 @@ function emptyAccumulator(): {
     successValue: 0,
     adSpend: 0,
   };
+}
+
+type CountAccumulator = ReturnType<typeof emptyAccumulator>;
+
+/**
+ * Day rows store **disjoint** stage buckets from {@link calculateFunnelMetrics}:
+ * `leads` = l, `totalAppts` = requested+confirmed (r+c), `showed`, `noShow`,
+ * `closed`. This maps them to the same count semantics as
+ * {@link applyRollup} in funnel-metrics.ts ("On Totals" on the client).
+ */
+function disjointToOnTotalsCounts(acc: CountAccumulator): CountAccumulator {
+  const l = acc.leads;
+  const rc = acc.totalAppts;
+  const s = acc.showed;
+  const n = acc.noShow;
+  const cl = acc.closed;
+  return {
+    leads: l + rc + s + n + cl,
+    totalAppts: rc + s + n + cl,
+    showed: s + cl,
+    noShow: n,
+    closed: cl,
+    totalValue: acc.totalValue,
+    successValue: acc.successValue,
+    adSpend: acc.adSpend,
+  };
+}
+
+/**
+ * Compute funnel rates + cost ratios from **disjoint** sum-of-counts buckets
+ * (current-stage tallies). No-shows count as booked in the appt pool.
+ */
+function deriveRatesFromDisjointCounts(base: CountAccumulator): CampaignWindowTotals {
+  const apptPool = base.totalAppts + base.showed + base.noShow + base.closed;
+  const leadPool = base.leads + apptPool;
+  const showPool = base.showed + base.closed;
+  return {
+    ...base,
+    bookingRate: leadPool > 0 ? rateOrNull(apptPool, leadPool) : null,
+    showRate: apptPool > 0 ? rateOrNull(base.showed + base.closed, apptPool) : null,
+    closeRate: rateOrNull(base.closed, showPool),
+    cpl: base.adSpend > 0 && base.leads > 0 ? moneyOrNull(base.adSpend, base.leads) : null,
+    cps: base.adSpend > 0 && base.showed > 0 ? moneyOrNull(base.adSpend, base.showed) : null,
+    cpClose:
+      base.adSpend > 0 && base.closed > 0
+        ? moneyOrNull(base.adSpend, base.closed)
+        : null,
+    roas: base.adSpend > 0 ? moneyOrNull(base.successValue, base.adSpend) : null,
+  };
+}
+
+/**
+ * Rates when counts are already **On Totals** shaped (after
+ * {@link disjointToOnTotalsCounts}). Do not run
+ * {@link deriveRatesFromDisjointCounts} on these — its appt pool would
+ * double-count.
+ */
+function deriveRatesFromRollupCounts(base: CountAccumulator): CampaignWindowTotals {
+  const leadsR = base.leads;
+  const reqPool = base.totalAppts;
+  const showedR = base.showed;
+  return {
+    ...base,
+    bookingRate: leadsR > 0 ? rateOrNull(reqPool, leadsR) : null,
+    showRate: reqPool > 0 ? rateOrNull(showedR, reqPool) : null,
+    closeRate: showedR > 0 ? rateOrNull(base.closed, showedR) : null,
+    cpl: base.adSpend > 0 && leadsR > 0 ? moneyOrNull(base.adSpend, leadsR) : null,
+    cps: base.adSpend > 0 && showedR > 0 ? moneyOrNull(base.adSpend, showedR) : null,
+    cpClose:
+      base.adSpend > 0 && base.closed > 0
+        ? moneyOrNull(base.adSpend, base.closed)
+        : null,
+    roas: base.adSpend > 0 ? moneyOrNull(base.successValue, base.adSpend) : null,
+  };
+}
+
+function finalizeFunnelTotals(
+  acc: CountAccumulator,
+  onTotals: boolean
+): CampaignWindowTotals {
+  if (!onTotals) return deriveRatesFromDisjointCounts(acc);
+  return deriveRatesFromRollupCounts(disjointToOnTotalsCounts(acc));
 }
 
 function accumulateDay(
@@ -281,21 +342,27 @@ function displayBusinessName(record: AgencyCampaignRecord | undefined): string {
   return record.locationId;
 }
 
-function emptyWindowTotals(): CampaignWindowTotals {
-  return deriveRates(emptyAccumulator());
+function emptyWindowTotals(onTotals: boolean): CampaignWindowTotals {
+  return finalizeFunnelTotals(emptyAccumulator(), onTotals);
 }
 
-function emptyMonth(monthKey: string): CampaignMonthly {
+function emptyMonth(monthKey: string, onTotals: boolean): CampaignMonthly {
   return {
     monthKey,
-    ...deriveRates(emptyAccumulator()),
+    ...finalizeFunnelTotals(emptyAccumulator(), onTotals),
   };
 }
 
 export async function buildAgencyRollupView(params?: {
   snapshotId?: number;
   range?: DateRangeDescriptor;
+  /**
+   * When true (default), funnel counts match the client dashboard "On Totals"
+   * assumption ({@link applyRollup} semantics).
+   */
+  onTotals?: boolean;
 }): Promise<AgencyRollupView | null> {
+  const onTotals = params?.onTotals !== false;
   const snapshot = params?.snapshotId
     ? await getSnapshotById(params.snapshotId)
     : await getLatestCompleteSnapshot();
@@ -398,11 +465,11 @@ export async function buildAgencyRollupView(params?: {
 
     const months: CampaignMonthly[] = orderedMonthKeys.map(({ monthKey }) => {
       const sum = monthSums.get(monthKey)!;
-      return { monthKey, ...deriveRates(sum) };
+      return { monthKey, ...finalizeFunnelTotals(sum, onTotals) };
     });
 
-    const totals = deriveRates(currentSums);
-    const priorTotals = deriveRates(priorSums);
+    const totals = finalizeFunnelTotals(currentSums, onTotals);
+    const priorTotals = finalizeFunnelTotals(priorSums, onTotals);
 
     const run = runByKey.get(campaignKey);
     const record = recordByKey.get(campaignKey);
@@ -411,30 +478,33 @@ export async function buildAgencyRollupView(params?: {
     // but with day data are treated as ok.
     const errorMessage = run && run.status !== "ok" ? run.errorMessage : null;
 
-    // Roll the campaign's monthly sums into the agency monthly accumulator.
+    // Disjoint sums only in `bucket.sums` — On Totals is applied once when
+    // building `monthTotals` so we never double-count.
     if (included) {
-      for (const month of months) {
-        const bucket = monthlyAccum.get(month.monthKey);
+      for (const { monthKey } of orderedMonthKeys) {
+        const sum = monthSums.get(monthKey)!;
+        const bucket = monthlyAccum.get(monthKey);
         if (!bucket) continue;
-        bucket.sums.leads += month.leads;
-        bucket.sums.totalAppts += month.totalAppts;
-        bucket.sums.showed += month.showed;
-        bucket.sums.noShow += month.noShow;
-        bucket.sums.closed += month.closed;
-        bucket.sums.totalValue += month.totalValue;
-        bucket.sums.successValue += month.successValue;
-        bucket.sums.adSpend += month.adSpend;
+        bucket.sums.leads += sum.leads;
+        bucket.sums.totalAppts += sum.totalAppts;
+        bucket.sums.showed += sum.showed;
+        bucket.sums.noShow += sum.noShow;
+        bucket.sums.closed += sum.closed;
+        bucket.sums.totalValue += sum.totalValue;
+        bucket.sums.successValue += sum.successValue;
+        bucket.sums.adSpend += sum.adSpend;
         const hasSignal =
-          month.leads > 0 ||
-          month.totalAppts > 0 ||
-          month.showed > 0 ||
-          month.noShow > 0 ||
-          month.closed > 0 ||
-          month.adSpend > 0;
+          sum.leads > 0 ||
+          sum.totalAppts > 0 ||
+          sum.showed > 0 ||
+          sum.noShow > 0 ||
+          sum.closed > 0 ||
+          sum.adSpend > 0;
         if (hasSignal) bucket.clientCount += 1;
-        if (month.bookingRate != null) bucket.bookingRates.push(month.bookingRate);
-        if (month.showRate != null) bucket.showRates.push(month.showRate);
-        if (month.closeRate != null) bucket.closeRates.push(month.closeRate);
+        const finalized = finalizeFunnelTotals(sum, onTotals);
+        if (finalized.bookingRate != null) bucket.bookingRates.push(finalized.bookingRate);
+        if (finalized.showRate != null) bucket.showRates.push(finalized.showRate);
+        if (finalized.closeRate != null) bucket.closeRates.push(finalized.closeRate);
       }
     }
 
@@ -475,7 +545,7 @@ export async function buildAgencyRollupView(params?: {
     if (seenCampaignKeys.has(record.campaignKey)) continue;
     const run = runByKey.get(record.campaignKey);
     const months: CampaignMonthly[] = orderedMonthKeys.map(({ monthKey }) =>
-      emptyMonth(monthKey)
+      emptyMonth(monthKey, onTotals)
     );
     const ownerName =
       [record.ownerFirstName, record.ownerLastName]
@@ -499,8 +569,8 @@ export async function buildAgencyRollupView(params?: {
         run?.status !== "ok" ? run?.errorMessage ?? record.needsSetupReason : null,
       needsSetupReason: record.needsSetupReason,
       dataQuality: extractDataQuality(record),
-      totals: emptyWindowTotals(),
-      priorTotals: emptyWindowTotals(),
+      totals: emptyWindowTotals(onTotals),
+      priorTotals: emptyWindowTotals(onTotals),
       latestMonth: months[months.length - 1] ?? null,
       months,
     });
@@ -515,10 +585,13 @@ export async function buildAgencyRollupView(params?: {
 
   const monthTotals: MonthTotals[] = orderedMonthKeys.map(({ monthKey }) => {
     const bucket = monthlyAccum.get(monthKey)!;
-    const s = bucket.sums;
-    const weightedApptsPool = s.totalAppts + s.showed + s.noShow + s.closed;
-    const weightedLeadPool = s.leads + weightedApptsPool;
-    const weightedShowPool = s.showed + s.closed;
+    const s0 = bucket.sums;
+    const s = onTotals ? disjointToOnTotalsCounts(s0) : s0;
+    const weightedApptsPool = onTotals
+      ? s.totalAppts
+      : s.totalAppts + s.showed + s.noShow + s.closed;
+    const weightedLeadPool = onTotals ? s.leads : s.leads + weightedApptsPool;
+    const weightedShowPool = onTotals ? s.showed : s.showed + s.closed;
     return {
       monthKey: bucket.monthKey,
       startDate: bucket.startDate,
@@ -540,7 +613,10 @@ export async function buildAgencyRollupView(params?: {
       showRateSimple: average(bucket.showRates),
       showRateWeighted:
         weightedApptsPool > 0
-          ? rateOrNull(s.showed + s.closed, weightedApptsPool)
+          ? rateOrNull(
+              onTotals ? s.showed : s.showed + s.closed,
+              weightedApptsPool
+            )
           : null,
       closeRateSimple: average(bucket.closeRates),
       closeRateWeighted: rateOrNull(s.closed, weightedShowPool),
@@ -557,6 +633,7 @@ export async function buildAgencyRollupView(params?: {
     snapshot,
     range: defaultRange,
     priorRange,
+    onTotals,
     months: monthTotals,
     campaigns: campaignSummaries,
   };

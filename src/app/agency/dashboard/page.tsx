@@ -14,6 +14,7 @@ export default async function AgencyDashboardPage() {
   const { startDate, endDate } = getDateRangeForPreset("last_30");
   const [view, latest] = await Promise.all([
     buildAgencyRollupView({
+      onTotals: true,
       range: {
         preset: "last_30",
         startDate,

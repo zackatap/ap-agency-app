@@ -82,9 +82,22 @@ export interface ExclusionVerdict {
   reason: string | null;
 }
 
+/** Unique opps that reached the appointment funnel (not double-counted). */
+function appointmentReach(
+  t: ClientCampaignSummary["totals"],
+  onTotals: boolean
+): number {
+  if (onTotals) {
+    // totalAppts is already r+c+s+n+cl
+    return t.totalAppts;
+  }
+  return t.totalAppts + t.showed + t.noShow + t.closed;
+}
+
 export function evaluateExclusion(
   campaign: ClientCampaignSummary,
-  level: ExclusionLevel
+  level: ExclusionLevel,
+  onTotals: boolean
 ): ExclusionVerdict {
   if (level === "off") return { excluded: false, reason: null };
   const rule = EXCLUSION_RULES[level];
@@ -93,11 +106,9 @@ export function evaluateExclusion(
   const q = campaign.dataQuality;
   if (!q) return { excluded: false, reason: null };
 
-  const totalAppts =
-    campaign.totals.totalAppts +
-    campaign.totals.showed +
-    campaign.totals.closed;
-  if (totalAppts < MIN_APPTS) return { excluded: false, reason: null };
+  if (appointmentReach(campaign.totals, onTotals) < MIN_APPTS) {
+    return { excluded: false, reason: null };
+  }
 
   const reasons: string[] = [];
 
@@ -129,12 +140,13 @@ export function evaluateExclusion(
 
 export function buildExcludedSet(
   campaigns: ClientCampaignSummary[],
-  level: ExclusionLevel
+  level: ExclusionLevel,
+  onTotals: boolean
 ): Map<string, ExclusionVerdict> {
   const map = new Map<string, ExclusionVerdict>();
   if (level === "off") return map;
   for (const c of campaigns) {
-    const v = evaluateExclusion(c, level);
+    const v = evaluateExclusion(c, level, onTotals);
     if (v.excluded) map.set(c.campaignKey, v);
   }
   return map;
