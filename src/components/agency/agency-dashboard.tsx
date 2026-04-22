@@ -865,18 +865,14 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
           </CollapsibleBlock>
 
           <section ref={leaderboardRef} className="scroll-mt-8 space-y-3">
-            <div
-              className="sticky top-0 z-30 -mx-4 border-b border-white/10 bg-slate-950/90 px-4 py-3 shadow-[0_8px_24px_-12px_rgba(0,0,0,0.65)] backdrop-blur-md sm:-mx-8 sm:px-8"
-            >
-              <div className="flex flex-wrap items-baseline justify-between gap-3">
-                <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-300">
-                  Client leaderboard
-                </h2>
-                <p className="text-xs text-slate-500">
-                  Click <span className="text-slate-300">Compare</span> on any
-                  row to see that client benchmarked against the agency inline.
-                </p>
-              </div>
+            <div className="flex flex-wrap items-baseline justify-between gap-3">
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-300">
+                Client leaderboard
+              </h2>
+              <p className="text-xs text-slate-500">
+                Click <span className="text-slate-300">Compare</span> on any
+                row to see that client benchmarked against the agency inline.
+              </p>
             </div>
             <LeaderboardTable
               campaigns={includedCampaigns}

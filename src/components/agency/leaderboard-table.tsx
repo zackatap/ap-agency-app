@@ -229,16 +229,16 @@ export function LeaderboardTable({
         ref={tableRef}
         className="overflow-x-auto rounded-xl border border-white/10 bg-slate-900/30"
       >
-        <table className="min-w-full divide-y divide-white/5 text-sm">
+        <table className="min-w-full border-separate border-spacing-0 divide-y divide-white/5 text-sm">
           <thead>
-            <tr className="bg-slate-900/60 text-left text-xs uppercase tracking-wide text-slate-400">
-              <th className="sticky left-0 z-10 bg-slate-900/60 px-4 py-3 font-semibold">
+            <tr className="text-left text-xs uppercase tracking-wide text-slate-400">
+              <th className="sticky left-0 top-0 z-30 border-b border-white/10 bg-slate-900 px-4 py-3 text-left font-semibold shadow-[4px_0_12px_-4px_rgba(0,0,0,0.45)]">
                 Client
               </th>
               {METRIC_ORDER.map((key) => (
                 <th
                   key={key}
-                  className="cursor-pointer px-3 py-3 text-right font-semibold hover:text-white"
+                  className="sticky top-0 z-20 cursor-pointer border-b border-white/10 bg-slate-900 px-3 py-3 text-right font-semibold shadow-[0_4px_12px_-4px_rgba(0,0,0,0.5)] hover:text-white"
                   onClick={() => handleSort(key)}
                 >
                   <span className="inline-flex items-center gap-1">
