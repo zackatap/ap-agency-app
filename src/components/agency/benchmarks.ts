@@ -167,6 +167,7 @@ export function aggregateCampaigns(
     let leads = 0,
       totalAppts = 0,
       showed = 0,
+      noShow = 0,
       closed = 0,
       totalValue = 0,
       successValue = 0,
@@ -177,12 +178,23 @@ export function aggregateCampaigns(
       leads += m.leads;
       totalAppts += m.totalAppts;
       showed += m.showed;
+      noShow += m.noShow;
       closed += m.closed;
       totalValue += m.totalValue;
       successValue += m.successValue;
       adSpend += m.adSpend;
     }
-    return buildMonthRow(mk, leads, totalAppts, showed, closed, totalValue, successValue, adSpend);
+    return buildMonthRow(
+      mk,
+      leads,
+      totalAppts,
+      showed,
+      noShow,
+      closed,
+      totalValue,
+      successValue,
+      adSpend
+    );
   });
   const total = sumMonthRows(months);
   return { totals: total, months };
@@ -193,17 +205,18 @@ function buildMonthRow(
   leads: number,
   totalAppts: number,
   showed: number,
+  noShow: number,
   closed: number,
   totalValue: number,
   successValue: number,
   adSpend: number
 ): ClientCampaignMonth {
-  const pool = leads + totalAppts + showed + closed;
+  // No-shows count as booked (they made it past "lead") but do NOT count
+  // toward the show-rate numerator. Mirrors applyRollup in funnel-metrics.ts.
+  const apptPool = totalAppts + showed + noShow + closed;
+  const pool = leads + apptPool;
   const bookingRate =
-    pool > 0
-      ? Math.round(((totalAppts + showed + closed) / pool) * 1000) / 10
-      : null;
-  const apptPool = totalAppts + showed + closed;
+    pool > 0 ? Math.round((apptPool / pool) * 1000) / 10 : null;
   const showRate =
     apptPool > 0
       ? Math.round(((showed + closed) / apptPool) * 1000) / 10
@@ -216,6 +229,7 @@ function buildMonthRow(
     leads,
     totalAppts,
     showed,
+    noShow,
     closed,
     totalValue,
     successValue,
@@ -242,6 +256,7 @@ function sumMonthRows(
       acc.leads += m.leads;
       acc.totalAppts += m.totalAppts;
       acc.showed += m.showed;
+      acc.noShow += m.noShow;
       acc.closed += m.closed;
       acc.totalValue += m.totalValue;
       acc.successValue += m.successValue;
@@ -252,6 +267,7 @@ function sumMonthRows(
       leads: 0,
       totalAppts: 0,
       showed: 0,
+      noShow: 0,
       closed: 0,
       totalValue: 0,
       successValue: 0,
@@ -263,6 +279,7 @@ function sumMonthRows(
     totals.leads,
     totals.totalAppts,
     totals.showed,
+    totals.noShow,
     totals.closed,
     totals.totalValue,
     totals.successValue,
@@ -279,6 +296,7 @@ function emptyTotals(): Omit<ClientCampaignMonth, "monthKey"> {
     leads: 0,
     totalAppts: 0,
     showed: 0,
+    noShow: 0,
     closed: 0,
     totalValue: 0,
     successValue: 0,

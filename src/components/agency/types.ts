@@ -13,6 +13,8 @@ export interface ClientMonthTotals {
   leads: number;
   totalAppts: number;
   showed: number;
+  /** Opps marked no-show. Counted as "booked" in booking rate, excluded from show-rate numerator. */
+  noShow: number;
   closed: number;
   totalValue: number;
   successValue: number;
@@ -35,6 +37,12 @@ export interface ClientCampaignMonth {
   leads: number;
   totalAppts: number;
   showed: number;
+  /**
+   * Count of opps marked as no-show. Included in the booking-rate pool
+   * (no-shows DID book the appointment) but excluded from the show-rate
+   * numerator. Matches the individual dashboard's "On Totals" formula.
+   */
+  noShow: number;
   closed: number;
   totalValue: number;
   successValue: number;

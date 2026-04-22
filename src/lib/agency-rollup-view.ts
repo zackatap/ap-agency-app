@@ -48,6 +48,8 @@ export interface MonthTotals {
   leads: number;
   totalAppts: number;
   showed: number;
+  /** Opps marked no-show. Counted as "booked" in booking rate, excluded from show-rate numerator. */
+  noShow: number;
   closed: number;
   totalValue: number;
   successValue: number;
@@ -70,6 +72,8 @@ export interface CampaignMonthly {
   leads: number;
   totalAppts: number;
   showed: number;
+  /** Opps marked no-show. Counted as "booked" in booking rate, excluded from show-rate numerator. */
+  noShow: number;
   closed: number;
   totalValue: number;
   successValue: number;
@@ -140,6 +144,7 @@ interface MonthlyAccum {
   leads: number;
   totalAppts: number;
   showed: number;
+  noShow: number;
   closed: number;
   totalValue: number;
   successValue: number;
@@ -174,17 +179,23 @@ function buildCampaignMonth(
   const leads = metrics?.leads ?? 0;
   const totalAppts = metrics?.totalAppts ?? 0;
   const showed = metrics?.showed ?? 0;
+  const noShow = metrics?.noShow ?? 0;
   const closed = metrics?.closed ?? 0;
   const totalValue = metrics?.totalValue ?? 0;
   const successValue = metrics?.successValue ?? 0;
 
-  const leadPool = leads + totalAppts + showed + closed;
-  const bookingRate =
-    leadPool > 0 ? rateOrNull(totalAppts + showed + closed, leadPool) : null;
+  /*
+   * Match the individual dashboard's "On Totals" formula (applyRollup in
+   * funnel-metrics.ts): everyone who reached an appointment stage — including
+   * no-shows — counts as "booked" in the booking rate. No-shows sit in the
+   * show-rate denominator (they booked) but NOT the numerator (they didn't
+   * show). Close rate is unaffected.
+   */
+  const leadPool = leads + totalAppts + showed + noShow + closed;
+  const bookedCount = totalAppts + showed + noShow + closed;
+  const bookingRate = leadPool > 0 ? rateOrNull(bookedCount, leadPool) : null;
   const showRate =
-    totalAppts + showed + closed > 0
-      ? rateOrNull(showed + closed, totalAppts + showed + closed)
-      : null;
+    bookedCount > 0 ? rateOrNull(showed + closed, bookedCount) : null;
   const closeRate = rateOrNull(closed, showed + closed);
 
   return {
@@ -192,6 +203,7 @@ function buildCampaignMonth(
     leads,
     totalAppts,
     showed,
+    noShow,
     closed,
     totalValue,
     successValue,
@@ -214,6 +226,7 @@ function sumCampaignMonthly(
       acc.leads += m.leads;
       acc.totalAppts += m.totalAppts;
       acc.showed += m.showed;
+      acc.noShow += m.noShow;
       acc.closed += m.closed;
       acc.totalValue += m.totalValue;
       acc.successValue += m.successValue;
@@ -224,26 +237,22 @@ function sumCampaignMonthly(
       leads: 0,
       totalAppts: 0,
       showed: 0,
+      noShow: 0,
       closed: 0,
       totalValue: 0,
       successValue: 0,
       adSpend: 0,
     }
   );
-  const leadPool =
-    totals.leads + totals.totalAppts + totals.showed + totals.closed;
+  const bookedCount =
+    totals.totalAppts + totals.showed + totals.noShow + totals.closed;
+  const leadPool = totals.leads + bookedCount;
   return {
     ...totals,
-    bookingRate:
-      leadPool > 0
-        ? rateOrNull(totals.totalAppts + totals.showed + totals.closed, leadPool)
-        : null,
+    bookingRate: leadPool > 0 ? rateOrNull(bookedCount, leadPool) : null,
     showRate:
-      totals.totalAppts + totals.showed + totals.closed > 0
-        ? rateOrNull(
-            totals.showed + totals.closed,
-            totals.totalAppts + totals.showed + totals.closed
-          )
+      bookedCount > 0
+        ? rateOrNull(totals.showed + totals.closed, bookedCount)
         : null,
     closeRate: rateOrNull(totals.closed, totals.showed + totals.closed),
     cpl: totals.adSpend > 0 ? moneyOrNull(totals.adSpend, totals.leads) : null,
@@ -319,6 +328,7 @@ export async function buildAgencyRollupView(
         leads: 0,
         totalAppts: 0,
         showed: 0,
+        noShow: 0,
         closed: 0,
         totalValue: 0,
         successValue: 0,
@@ -359,6 +369,7 @@ export async function buildAgencyRollupView(
         bucket.leads += m.leads;
         bucket.totalAppts += m.totalAppts;
         bucket.showed += m.showed;
+        bucket.noShow += m.noShow;
         bucket.closed += m.closed;
         bucket.totalValue += m.totalValue;
         bucket.successValue += m.successValue;
@@ -367,6 +378,7 @@ export async function buildAgencyRollupView(
           m.leads > 0 ||
           m.totalAppts > 0 ||
           m.showed > 0 ||
+          m.noShow > 0 ||
           m.closed > 0 ||
           m.adSpend > 0;
         if (hasSignal) bucket.clientCount += 1;
@@ -450,10 +462,9 @@ export async function buildAgencyRollupView(
 
   const monthTotals: MonthTotals[] = orderedMonthKeys.map(({ monthKey }) => {
     const bucket = monthlyAccum.get(monthKey)!;
-    const weightedLeadPool =
-      bucket.leads + bucket.totalAppts + bucket.showed + bucket.closed;
     const weightedApptsPool =
-      bucket.totalAppts + bucket.showed + bucket.closed;
+      bucket.totalAppts + bucket.showed + bucket.noShow + bucket.closed;
+    const weightedLeadPool = bucket.leads + weightedApptsPool;
     const weightedShowPool = bucket.showed + bucket.closed;
 
     return {
@@ -463,6 +474,7 @@ export async function buildAgencyRollupView(
       leads: bucket.leads,
       totalAppts: bucket.totalAppts,
       showed: bucket.showed,
+      noShow: bucket.noShow,
       closed: bucket.closed,
       totalValue: bucket.totalValue,
       successValue: bucket.successValue,
@@ -471,10 +483,7 @@ export async function buildAgencyRollupView(
       bookingRateSimple: average(bucket.bookingRates),
       bookingRateWeighted:
         weightedLeadPool > 0
-          ? rateOrNull(
-              bucket.totalAppts + bucket.showed + bucket.closed,
-              weightedLeadPool
-            )
+          ? rateOrNull(weightedApptsPool, weightedLeadPool)
           : null,
       showRateSimple: average(bucket.showRates),
       showRateWeighted:

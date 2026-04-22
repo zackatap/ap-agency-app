@@ -39,6 +39,7 @@ interface WindowAggregate {
   leads: number;
   totalAppts: number;
   showed: number;
+  noShow: number;
   closed: number;
   totalValue: number;
   successValue: number;
@@ -61,6 +62,7 @@ function aggregateWindow(slice: ClientMonthTotals[]): WindowAggregate {
     leads: 0,
     totalAppts: 0,
     showed: 0,
+    noShow: 0,
     closed: 0,
     totalValue: 0,
     successValue: 0,
@@ -71,6 +73,7 @@ function aggregateWindow(slice: ClientMonthTotals[]): WindowAggregate {
     base.leads += m.leads;
     base.totalAppts += m.totalAppts;
     base.showed += m.showed;
+    base.noShow += m.noShow;
     base.closed += m.closed;
     base.totalValue += m.totalValue;
     base.successValue += m.successValue;
@@ -79,15 +82,15 @@ function aggregateWindow(slice: ClientMonthTotals[]): WindowAggregate {
       base.peakCampaignCount = m.clientCount;
     }
   }
-  const leadPool = base.leads + base.totalAppts + base.showed + base.closed;
-  const apptPool = base.totalAppts + base.showed + base.closed;
+  // Include no-shows in the booked/appt pool to match applyRollup in
+  // funnel-metrics.ts (the individual dashboard's "On Totals" formula).
+  const apptPool = base.totalAppts + base.showed + base.noShow + base.closed;
+  const leadPool = base.leads + apptPool;
   const showPool = base.showed + base.closed;
   return {
     ...base,
     bookingRate:
-      leadPool > 0
-        ? Math.round(((apptPool) / leadPool) * 1000) / 10
-        : null,
+      leadPool > 0 ? Math.round((apptPool / leadPool) * 1000) / 10 : null,
     showRate:
       apptPool > 0 ? Math.round((showPool / apptPool) * 1000) / 10 : null,
     closeRate:
@@ -203,11 +206,16 @@ interface RateAggregate {
 }
 
 /**
- * Count-sum metrics (leads/appts/showed/closed/value/spend) come from the
- * full pool — "total leads across the agency" must always include every
- * campaign so the numbers don't quietly shrink when the hygiene toggle is
- * flipped. Rate/cost-efficiency metrics pull from `rates`, which is
- * recomputed from only the trusted (non-excluded) campaigns.
+ * Count/money SUMS (leads, appts, showed, closed, value, spend) are totals
+ * across every campaign so the displayed numbers don't quietly shrink when
+ * the hygiene toggle is flipped.
+ *
+ * RATES and COST RATIOS (booking/show/close rate, ROAS, CPL, cost-per-close)
+ * come from `rates`, which is a **simple average across trusted campaigns**:
+ * each campaign computes its own rate over the window, and every client gets
+ * one equal vote. A 3,000-lead client doesn't drown out a 300-lead client.
+ * This matches the per-client view on the individual dashboards and the
+ * dashed agency line on the benchmark chart.
  */
 function buildKpiCards(
   current: WindowAggregate,
@@ -215,6 +223,7 @@ function buildKpiCards(
   currentRates: RateAggregate,
   priorRates: RateAggregate
 ): KpiProps[] {
+  const avgSub = "Avg across clients";
   return [
     {
       label: "Leads",
@@ -247,6 +256,7 @@ function buildKpiCards(
     {
       label: "Booking rate",
       value: formatMetricValue(currentRates.bookingRate, "rate"),
+      sub: avgSub,
       diff: delta(currentRates.bookingRate, priorRates.bookingRate),
       better: "up",
       kind: "rate",
@@ -254,6 +264,7 @@ function buildKpiCards(
     {
       label: "Show rate",
       value: formatMetricValue(currentRates.showRate, "rate"),
+      sub: avgSub,
       diff: delta(currentRates.showRate, priorRates.showRate),
       better: "up",
       kind: "rate",
@@ -261,6 +272,7 @@ function buildKpiCards(
     {
       label: "Close rate",
       value: formatMetricValue(currentRates.closeRate, "rate"),
+      sub: avgSub,
       diff: delta(currentRates.closeRate, priorRates.closeRate),
       better: "up",
       kind: "rate",
@@ -268,6 +280,7 @@ function buildKpiCards(
     {
       label: "ROAS",
       value: formatMetricValue(currentRates.roas, "ratio"),
+      sub: avgSub,
       diff: delta(currentRates.roas, priorRates.roas),
       better: "up",
       kind: "ratio",
@@ -289,6 +302,7 @@ function buildKpiCards(
     {
       label: "Cost / Lead",
       value: formatMetricValue(currentRates.cpl, "money"),
+      sub: avgSub,
       diff: delta(currentRates.cpl, priorRates.cpl),
       better: "down",
       kind: "money",
@@ -296,6 +310,7 @@ function buildKpiCards(
     {
       label: "Cost / Close",
       value: formatMetricValue(currentRates.cpClose, "money"),
+      sub: avgSub,
       diff: delta(currentRates.cpClose, priorRates.cpClose),
       better: "down",
       kind: "money",
