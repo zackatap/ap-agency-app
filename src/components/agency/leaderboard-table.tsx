@@ -225,9 +225,12 @@ export function LeaderboardTable({
         </button>
       </div>
 
+      {/* No overflow-x-auto here: any scrollport on this ancestor breaks
+          `position: sticky; top: 0` on thead for *page* scroll. Wide tables
+          use horizontal overflow on the document instead. */}
       <div
         ref={tableRef}
-        className="overflow-x-auto rounded-xl border border-white/10 bg-slate-900/30"
+        className="rounded-xl border border-white/10 bg-slate-900/30"
       >
         <table className="min-w-full border-separate border-spacing-0 divide-y divide-white/5 text-sm">
           <thead>

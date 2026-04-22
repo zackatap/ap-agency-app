@@ -26,6 +26,8 @@ import {
   formatMonthLabel,
   ordinalSuffix,
 } from "./format";
+import { KPI_INLINE_LABEL, KPI_SECTIONS, type KpiPairConfig } from "./kpi-pairs";
+import type { DashboardKpiMetric } from "./data-quality";
 
 interface Props {
   view: ClientRollupView;
@@ -123,6 +125,123 @@ function getMonthValue(
   if (!m) return null;
   const v = (m as unknown as Record<string, number | null>)[metric];
   return v == null ? null : Number(v);
+}
+
+type RankSummaryRow = {
+  key: MetricKey;
+  meta: (typeof METRIC_META)[MetricKey];
+  rank: ReturnType<typeof computeRank>;
+  value: number | null;
+  average: number | null;
+};
+
+function BenchmarkCompareColumn({
+  metricKey,
+  header,
+  row,
+  onSelect,
+  isFocused,
+  borderLeft,
+}: {
+  metricKey: MetricKey;
+  header: string;
+  row: RankSummaryRow | undefined;
+  onSelect: () => void;
+  isFocused: boolean;
+  borderLeft?: boolean;
+}) {
+  const meta = row?.meta ?? METRIC_META[metricKey];
+  const value = row?.value ?? null;
+  const average = row?.average ?? null;
+  const rank = row?.rank;
+  const aboveAverage =
+    value != null &&
+    average != null &&
+    ((meta.higherIsBetter && value >= average) ||
+      (!meta.higherIsBetter && value <= average));
+
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={`min-w-0 text-left outline-none transition-colors ${
+        borderLeft ? "border-l border-white/[0.04] pl-3" : "pr-3"
+      } ${
+        isFocused
+          ? "rounded-lg ring-1 ring-indigo-400/60 ring-offset-2 ring-offset-slate-950"
+          : "hover:bg-white/[0.02] rounded-lg"
+      }`}
+    >
+      <div className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
+        {header}
+      </div>
+      <div className="mt-1.5 border-b border-white/[0.04]" />
+      <div className="pt-2 text-xl font-semibold leading-none tracking-tight text-white sm:text-2xl">
+        {formatMetricValue(value, meta.kind)}
+      </div>
+      <div
+        className={`mt-1 text-xs tabular-nums ${
+          value != null && average != null
+            ? aboveAverage
+              ? "text-emerald-400"
+              : "text-rose-400"
+            : "text-slate-500"
+        }`}
+      >
+        Avg {formatMetricValue(average, meta.kind)}
+      </div>
+      {rank && (
+        <div className="mt-1 text-[11px] leading-snug text-slate-400">
+          {ordinalSuffix(rank.rank)} of {rank.of} · {rank.percentile}th percentile
+        </div>
+      )}
+    </button>
+  );
+}
+
+function BenchmarkComparePairCard({
+  pair,
+  rankByKey,
+  focusMetric,
+  onSelectMetric,
+}: {
+  pair: KpiPairConfig;
+  rankByKey: Map<MetricKey, RankSummaryRow>;
+  focusMetric: MetricKey;
+  onSelectMetric: (key: MetricKey) => void;
+}) {
+  const rowA = rankByKey.get(pair.a as MetricKey);
+  const rowB = rankByKey.get(pair.b as MetricKey);
+  const focused =
+    focusMetric === (pair.a as MetricKey) || focusMetric === (pair.b as MetricKey);
+
+  return (
+    <div
+      role="group"
+      aria-label={pair.cardTitle}
+      className={`rounded-xl border bg-slate-900/40 p-4 transition-colors ${
+        focused ? "border-indigo-400/50" : "border-white/10"
+      }`}
+    >
+      <div className="grid grid-cols-2 gap-x-0">
+        <BenchmarkCompareColumn
+          metricKey={pair.a as MetricKey}
+          header={KPI_INLINE_LABEL[pair.a as DashboardKpiMetric]}
+          row={rowA}
+          onSelect={() => onSelectMetric(pair.a as MetricKey)}
+          isFocused={focusMetric === (pair.a as MetricKey)}
+        />
+        <BenchmarkCompareColumn
+          metricKey={pair.b as MetricKey}
+          header={KPI_INLINE_LABEL[pair.b as DashboardKpiMetric]}
+          row={rowB}
+          onSelect={() => onSelectMetric(pair.b as MetricKey)}
+          isFocused={focusMetric === (pair.b as MetricKey)}
+          borderLeft
+        />
+      </div>
+    </div>
+  );
 }
 
 function getAgencyAvgForMonth(
@@ -256,6 +375,14 @@ export function ClientBenchmark({
     });
   }, [campaign, includedCampaigns, selectedMonthKey, excludedKeys]);
 
+  const rankByKey = useMemo(() => {
+    const m = new Map<MetricKey, RankSummaryRow>();
+    for (const row of rankSummary) {
+      m.set(row.key, row);
+    }
+    return m;
+  }, [rankSummary]);
+
   const isClientExcluded =
     campaign != null && excludedKeys != null && excludedKeys.has(campaign.campaignKey);
 
@@ -375,43 +502,35 @@ export function ClientBenchmark({
         </div>
       )}
 
-      <section className="grid grid-cols-2 gap-3 md:grid-cols-4">
-        {rankSummary.slice(0, 8).map(({ key, meta, rank, value, average }) => {
-          const aboveAverage =
-            value != null &&
-            average != null &&
-            ((meta.higherIsBetter && value >= average) ||
-              (!meta.higherIsBetter && value <= average));
-          return (
-            <button
-              key={key}
-              onClick={() => setFocusMetric(key)}
-              className={`rounded-xl border bg-slate-900/40 p-4 text-left transition-colors ${
-                focusMetric === key
-                  ? "border-indigo-400/60"
-                  : "border-white/10 hover:border-white/20"
-              }`}
-            >
-              <div className="text-xs uppercase tracking-wide text-slate-400">
-                {meta.label}
-              </div>
-              <div className="mt-1 text-xl font-semibold text-white">
-                {formatMetricValue(value, meta.kind)}
-              </div>
-              <div
-                className={`mt-1 text-xs ${aboveAverage ? "text-emerald-400" : "text-rose-400"}`}
-              >
-                Avg {formatMetricValue(average, meta.kind)}
-              </div>
-              {rank && (
-                <div className="mt-1 text-[11px] text-slate-400">
-                  {ordinalSuffix(rank.rank)} of {rank.of} ·{" "}
-                  {rank.percentile}th percentile
-                </div>
-              )}
-            </button>
-          );
-        })}
+      <section className="space-y-8">
+        <div>
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-300">
+            Client vs agency
+          </h2>
+          <p className="mt-1 text-xs text-slate-400">
+            Same groupings as the agency key metrics. Click a metric to focus the
+            distribution strip below.
+          </p>
+        </div>
+        {KPI_SECTIONS.map((sec) => (
+          <div key={sec.id} className="space-y-3">
+            <div>
+              <h3 className="text-sm font-semibold text-white">{sec.title}</h3>
+              <p className="text-xs text-slate-500">{sec.subtitle}</p>
+            </div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {sec.pairs.map((pair) => (
+                <BenchmarkComparePairCard
+                  key={pair.id}
+                  pair={pair}
+                  rankByKey={rankByKey}
+                  focusMetric={focusMetric}
+                  onSelectMetric={setFocusMetric}
+                />
+              ))}
+            </div>
+          </div>
+        ))}
       </section>
 
       <section className="space-y-4">

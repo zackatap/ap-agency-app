@@ -273,9 +273,111 @@ export function aggregateCampaignWindow(
 /**
  * How many values fall in the top `fraction` of a sorted list (at least 1).
  */
-function topSliceSize(n: number, fraction: number): number {
+export function topSliceSize(n: number, fraction: number): number {
   if (n <= 0) return 0;
   return Math.max(1, Math.ceil(n * fraction));
+}
+
+/** Metrics shown on the agency dashboard KPI grid (cards only). */
+export type DashboardKpiMetric =
+  | "leads"
+  | "totalAppts"
+  | "showed"
+  | "closed"
+  | "bookingRate"
+  | "showRate"
+  | "closeRate"
+  | "roas"
+  | "successValue"
+  | "adSpend"
+  | "cpl"
+  | "cpClose";
+
+export interface KpiContributorInfo {
+  /** Campaigns represented in the displayed figure (slice size or full set). */
+  used: number;
+  /** Eligible pool (denominator for “top 20% of …”). */
+  pool: number;
+}
+
+function volumeMetricPool(
+  campaigns: ClientCampaignSummary[],
+  which: TotalsKey,
+  pick: (t: ClientCampaignWindowTotals) => number
+): number {
+  return campaigns.filter((c) => {
+    const v = pick(c[which]);
+    return typeof v === "number" && !Number.isNaN(v);
+  }).length;
+}
+
+function rateMetricPool(
+  campaigns: ClientCampaignSummary[],
+  which: TotalsKey,
+  pick: (t: ClientCampaignWindowTotals) => number | null
+): number {
+  return campaigns.filter((c) => {
+    const v = pick(c[which]);
+    return v != null && !Number.isNaN(v);
+  }).length;
+}
+
+/** Agency dashboard KPI summary: full rollup, or mean of top 50% / 20% per metric. */
+export type AgencyKpiSummaryMode = "average" | "top50" | "top20";
+
+export function agencyKpiTopFraction(
+  mode: AgencyKpiSummaryMode
+): number | null {
+  if (mode === "average") return null;
+  return mode === "top50" ? 0.5 : 0.2;
+}
+
+/**
+ * Per-card campaign counts for the KPI grid footer (average vs top-fraction).
+ */
+export function computeKpiContributorInfo(
+  mode: AgencyKpiSummaryMode,
+  included: ClientCampaignSummary[],
+  trusted: ClientCampaignSummary[],
+  which: TotalsKey
+): Record<DashboardKpiMetric, KpiContributorInfo> {
+  const fraction = agencyKpiTopFraction(mode);
+  const includedN = included.length;
+  const mkVol = (
+    pick: (t: ClientCampaignWindowTotals) => number
+  ): KpiContributorInfo => {
+    const pool = volumeMetricPool(included, which, pick);
+    if (fraction == null) {
+      return { used: includedN, pool: includedN };
+    }
+    const used = pool > 0 ? topSliceSize(pool, fraction) : 0;
+    return { used, pool };
+  };
+  const mkRate = (
+    pick: (t: ClientCampaignWindowTotals) => number | null
+  ): KpiContributorInfo => {
+    const pool = rateMetricPool(trusted, which, pick);
+    if (fraction == null) {
+      return { used: pool, pool };
+    }
+    const used = pool > 0 ? topSliceSize(pool, fraction) : 0;
+    return { used, pool };
+  };
+
+  return {
+    leads: mkVol((t) => t.leads),
+    totalAppts: mkVol((t) => t.totalAppts),
+    showed: mkVol((t) => t.showed),
+    closed: mkVol((t) => t.closed),
+    successValue: mkVol((t) => t.successValue),
+    adSpend: mkVol((t) => t.adSpend),
+    bookingRate: mkRate((t) => t.bookingRate),
+    showRate: mkRate((t) => t.showRate),
+    closeRate: mkRate((t) => t.closeRate),
+    roas: mkRate((t) => t.roas),
+    cpl: mkRate((t) => t.cpl),
+    cpClose: mkRate((t) => t.cpClose),
+  };
 }
 
 /**
