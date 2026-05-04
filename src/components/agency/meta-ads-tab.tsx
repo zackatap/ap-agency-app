@@ -93,9 +93,23 @@ interface MetaAdsTagAssignment {
 interface MetaAdsTagRollup extends MetaAdsMetrics {
   id: number;
   label: string;
-  tagId: number;
-  tagName: string;
+  name: string;
+  includeMode: "all" | "any";
+  includeTagIds: number[];
+  excludeTagIds: number[];
+  enabled: boolean;
   adCount: number;
+}
+
+interface MetaAdsTagRollupRule {
+  id: number;
+  name: string;
+  includeMode: "all" | "any";
+  includeTagIds: number[];
+  excludeTagIds: number[];
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
 }
 
 interface MetaAdsRow extends MetaAdsMetrics {
@@ -151,6 +165,7 @@ interface MetaAdsResponse {
   totals?: MetaAdsMetrics;
   phrases: MetaAdsPhrase[];
   tags: MetaAdsTag[];
+  tagRollupRules: MetaAdsTagRollupRule[];
   tagAssignments: MetaAdsTagAssignment[];
   rollups: MetaAdsRollup[];
   tagRollups: MetaAdsTagRollup[];
@@ -236,6 +251,12 @@ export function MetaAdsTab() {
   const [newPhrase, setNewPhrase] = useState("");
   const [newTagName, setNewTagName] = useState("");
   const [bulkTagId, setBulkTagId] = useState("");
+  const [newTagRollupName, setNewTagRollupName] = useState("");
+  const [tagRollupIncludeMode, setTagRollupIncludeMode] = useState<"all" | "any">(
+    "all"
+  );
+  const [tagRollupIncludeIds, setTagRollupIncludeIds] = useState<string[]>([]);
+  const [tagRollupExcludeIds, setTagRollupExcludeIds] = useState<string[]>([]);
   const [selectedAdIds, setSelectedAdIds] = useState<Set<string>>(new Set());
   const [showUntaggedOnly, setShowUntaggedOnly] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("spend");
@@ -298,6 +319,7 @@ export function MetaAdsTab() {
 
   const allAdTableRows = useMemo<AdTableRow[]>(() => {
     const activeRollups = data?.rollups.filter((rollup) => rollup.enabled) ?? [];
+    const activeTagRollups = data?.tagRollups.filter((rollup) => rollup.enabled) ?? [];
     const tagsById = new Map((data?.tags ?? []).map((tag) => [tag.id, tag]));
     const tagIdsByAd = new Map<string, Set<number>>();
     for (const assignment of data?.tagAssignments ?? []) {
@@ -312,16 +334,27 @@ export function MetaAdsTab() {
         matchingRollups: activeRollups.filter((rollup) =>
           row.adName.toLowerCase().includes(rollup.phrase.toLowerCase())
         ),
-        matchingTagRollups: [],
+        matchingTagRollups: activeTagRollups.filter((rollup) => {
+          const rowTagIds = tagIdsByAd.get(row.adId) ?? new Set<number>();
+          const hasIncluded =
+            rollup.includeMode === "all"
+              ? rollup.includeTagIds.every((tagId) => rowTagIds.has(tagId))
+              : rollup.includeTagIds.some((tagId) => rowTagIds.has(tagId));
+          const hasExcluded = rollup.excludeTagIds.some((tagId) =>
+            rowTagIds.has(tagId)
+          );
+          return hasIncluded && !hasExcluded;
+        }),
         tags: Array.from(tagIdsByAd.get(row.adId) ?? [])
           .map((tagId) => tagsById.get(tagId))
           .filter((tag): tag is MetaAdsTag => Boolean(tag)),
       })) ?? []
     );
-  }, [data?.rollups, data?.rows, data?.tagAssignments, data?.tags]);
+  }, [data?.rollups, data?.rows, data?.tagAssignments, data?.tagRollups, data?.tags]);
 
   const tableRows = useMemo<AdsTableRow[]>(() => {
     const activeRollups = data?.rollups.filter((rollup) => rollup.enabled) ?? [];
+    const activeTagRollups = data?.tagRollups.filter((rollup) => rollup.enabled) ?? [];
     const rollupRows: AdsTableRow[] =
       activeRollups.map((rollup) => ({
         ...rollup,
@@ -331,15 +364,27 @@ export function MetaAdsTab() {
           row.matchingRollups.some((match) => match.id === rollup.id)
         ),
       })) ?? [];
+    const tagRollupRows: AdsTableRow[] =
+      activeTagRollups.map((rollup) => ({
+        ...rollup,
+        rowType: "rollup" as const,
+        rollupKind: "tag" as const,
+        children: allAdTableRows.filter((row) =>
+          row.matchingTagRollups.some((match) => match.id === rollup.id)
+        ),
+      })) ?? [];
     const ungroupedAdRows: AdsTableRow[] =
       allAdTableRows
-        .filter((row) => row.matchingRollups.length === 0)
+        .filter(
+          (row) =>
+            row.matchingRollups.length === 0 && row.matchingTagRollups.length === 0
+        )
         .map((row) => ({
           ...row,
           rowType: "ad" as const,
         }));
-    return [...rollupRows, ...ungroupedAdRows];
-  }, [allAdTableRows, data?.rollups]);
+    return [...tagRollupRows, ...rollupRows, ...ungroupedAdRows];
+  }, [allAdTableRows, data?.rollups, data?.tagRollups]);
 
   const filteredRows = useMemo(() => {
     const query = normalizeSearch(search);
@@ -350,7 +395,7 @@ export function MetaAdsTab() {
       .filter((row) => {
         if (!query) return true;
         if (row.rowType === "rollup") {
-          const label = row.rollupKind === "tag" ? row.tagName : row.phrase;
+          const label = row.rollupKind === "tag" ? row.name : row.phrase;
           return (
             normalizeSearch(label).includes(query) ||
             row.children.some((child) => adMatchesQuery(child, query))
@@ -377,6 +422,7 @@ export function MetaAdsTab() {
 
   const hasCache = Boolean(data?.cached && data.rows.length > 0);
   const activePhrases = data?.phrases.filter((p) => p.enabled).length ?? 0;
+  const activeTagRules = data?.tagRollupRules.filter((rule) => rule.enabled).length ?? 0;
   const groupedAdCount = useMemo(() => {
     const ids = new Set<string>();
     for (const row of tableRows) {
@@ -617,6 +663,73 @@ export function MetaAdsTab() {
     }
   }
 
+  async function handleAddTagRollup() {
+    const name = newTagRollupName.trim();
+    const includeTagIds = tagRollupIncludeIds.map(Number).filter(Number.isFinite);
+    const excludeTagIds = tagRollupExcludeIds.map(Number).filter(Number.isFinite);
+    if (!name || includeTagIds.length === 0) return;
+    setSavingRollup(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/agency/meta/tag-rollups", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name,
+          includeMode: tagRollupIncludeMode,
+          includeTagIds,
+          excludeTagIds,
+        }),
+      });
+      const json = (await res.json()) as { error?: string };
+      if (!res.ok) throw new Error(json.error ?? "Failed to create tag rollup");
+      setNewTagRollupName("");
+      setTagRollupIncludeIds([]);
+      setTagRollupExcludeIds([]);
+      await reloadCacheAfterRollupChange();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create tag rollup");
+    } finally {
+      setSavingRollup(false);
+    }
+  }
+
+  async function handleToggleTagRollup(rule: MetaAdsTagRollupRule) {
+    setSavingRollup(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/agency/meta/tag-rollups", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: rule.id, enabled: !rule.enabled }),
+      });
+      const json = (await res.json()) as { error?: string };
+      if (!res.ok) throw new Error(json.error ?? "Failed to update tag rollup");
+      await reloadCacheAfterRollupChange();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update tag rollup");
+    } finally {
+      setSavingRollup(false);
+    }
+  }
+
+  async function handleDeleteTagRollup(rule: MetaAdsTagRollupRule) {
+    setSavingRollup(true);
+    setError(null);
+    try {
+      const res = await fetch(`/api/agency/meta/tag-rollups?id=${rule.id}`, {
+        method: "DELETE",
+      });
+      const json = (await res.json()) as { error?: string };
+      if (!res.ok) throw new Error(json.error ?? "Failed to delete tag rollup");
+      await reloadCacheAfterRollupChange();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to delete tag rollup");
+    } finally {
+      setSavingRollup(false);
+    }
+  }
+
   return (
     <div className="space-y-6">
       <section className="space-y-3">
@@ -740,7 +853,7 @@ export function MetaAdsTab() {
                 <p className="mt-1 text-xs text-slate-500">
                   {showUntaggedOnly
                     ? `Showing ${formatCount(filteredRows.length)} untagged ads.`
-                    : `Showing ${formatCount(filteredRows.length)} top-level rows: ${formatCount(groupedAdCount)} ads grouped into ${activePhrases} active rollups; ungrouped ads remain below.`}
+                    : `Showing ${formatCount(filteredRows.length)} top-level rows: ${formatCount(groupedAdCount)} ads grouped into ${activePhrases} phrase and ${activeTagRules} tag rollups; ungrouped ads remain below.`}
                 </p>
               </div>
               <div className="flex flex-wrap items-end gap-3">
@@ -818,6 +931,23 @@ export function MetaAdsTab() {
               disabled={savingRollup}
               onToggle={(phrase) => void handleTogglePhrase(phrase)}
               onDelete={(phrase) => void handleDeletePhrase(phrase)}
+            />
+
+            <TagRollupControls
+              tags={data.tags}
+              rules={data.tagRollupRules ?? []}
+              name={newTagRollupName}
+              includeMode={tagRollupIncludeMode}
+              includeTagIds={tagRollupIncludeIds}
+              excludeTagIds={tagRollupExcludeIds}
+              disabled={savingRollup}
+              onNameChange={setNewTagRollupName}
+              onIncludeModeChange={setTagRollupIncludeMode}
+              onIncludeTagIdsChange={setTagRollupIncludeIds}
+              onExcludeTagIdsChange={setTagRollupExcludeIds}
+              onAdd={() => void handleAddTagRollup()}
+              onToggle={(rule) => void handleToggleTagRollup(rule)}
+              onDelete={(rule) => void handleDeleteTagRollup(rule)}
             />
 
             <div className="rounded-xl border border-white/10 bg-slate-900/30">
@@ -1088,6 +1218,201 @@ function TagControls({
   );
 }
 
+function TagRollupControls({
+  tags,
+  rules,
+  name,
+  includeMode,
+  includeTagIds,
+  excludeTagIds,
+  disabled,
+  onNameChange,
+  onIncludeModeChange,
+  onIncludeTagIdsChange,
+  onExcludeTagIdsChange,
+  onAdd,
+  onToggle,
+  onDelete,
+}: {
+  tags: MetaAdsTag[];
+  rules: MetaAdsTagRollupRule[];
+  name: string;
+  includeMode: "all" | "any";
+  includeTagIds: string[];
+  excludeTagIds: string[];
+  disabled: boolean;
+  onNameChange: (value: string) => void;
+  onIncludeModeChange: (value: "all" | "any") => void;
+  onIncludeTagIdsChange: (value: string[]) => void;
+  onExcludeTagIdsChange: (value: string[]) => void;
+  onAdd: () => void;
+  onToggle: (rule: MetaAdsTagRollupRule) => void;
+  onDelete: (rule: MetaAdsTagRollupRule) => void;
+}) {
+  const tagsById = new Map(tags.map((tag) => [tag.id, tag.name]));
+  return (
+    <div className="space-y-3 rounded-xl border border-white/10 bg-slate-900/30 p-3 text-sm">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+            Tag rollups
+          </div>
+          <div className="mt-1 text-xs text-slate-500">
+            Build saved rollup rows from tag combinations, like shoulder + female or
+            shoulder/knee excluding female.
+          </div>
+        </div>
+        <div className="flex flex-wrap items-end gap-2">
+          <div>
+            <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">
+              Rollup name
+            </label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => onNameChange(e.target.value)}
+              placeholder="Shoulder - female"
+              disabled={disabled}
+              className="w-44 rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2 text-slate-100 placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            />
+          </div>
+          <div>
+            <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">
+              Match
+            </label>
+            <select
+              value={includeMode}
+              onChange={(e) => onIncludeModeChange(e.target.value === "any" ? "any" : "all")}
+              disabled={disabled}
+              className="rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2 text-slate-100 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            >
+              <option value="all" className="bg-slate-900">
+                all included tags
+              </option>
+              <option value="any" className="bg-slate-900">
+                any included tag
+              </option>
+            </select>
+          </div>
+          <TagMultiSelect
+            label="Include"
+            tags={tags}
+            value={includeTagIds}
+            disabled={disabled}
+            onChange={onIncludeTagIdsChange}
+          />
+          <TagMultiSelect
+            label="Exclude"
+            tags={tags}
+            value={excludeTagIds}
+            disabled={disabled}
+            onChange={onExcludeTagIdsChange}
+          />
+          <button
+            type="button"
+            onClick={onAdd}
+            disabled={!name.trim() || includeTagIds.length === 0 || disabled}
+            className="rounded-lg bg-indigo-600 px-3 py-2 font-medium text-white transition-colors hover:bg-indigo-500 disabled:opacity-50"
+          >
+            Add rollup
+          </button>
+        </div>
+      </div>
+
+      {rules.length > 0 ? (
+        <div className="flex flex-wrap gap-2">
+          {rules.map((rule) => (
+            <span
+              key={rule.id}
+              className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs ${
+                rule.enabled
+                  ? "border-emerald-400/30 bg-emerald-500/15 text-emerald-100"
+                  : "border-white/10 bg-slate-800/50 text-slate-400"
+              }`}
+              title={describeTagRollupRule(rule, tagsById)}
+            >
+              <span>{rule.name}</span>
+              <span className="text-[10px] text-slate-400">
+                {rule.includeMode.toUpperCase()}
+              </span>
+              <button
+                type="button"
+                onClick={() => onToggle(rule)}
+                disabled={disabled}
+                className="rounded px-1 text-[10px] uppercase tracking-wide hover:bg-white/10 disabled:opacity-50"
+              >
+                {rule.enabled ? "On" : "Off"}
+              </button>
+              <button
+                type="button"
+                onClick={() => onDelete(rule)}
+                disabled={disabled}
+                className="rounded px-1 text-[10px] uppercase tracking-wide text-red-200 hover:bg-red-500/20 disabled:opacity-50"
+              >
+                Remove
+              </button>
+            </span>
+          ))}
+        </div>
+      ) : (
+        <div className="text-xs text-slate-500">
+          No tag rollups yet. Use Include + Match for AND/OR, and Exclude for NOT.
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TagMultiSelect({
+  label,
+  tags,
+  value,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  tags: MetaAdsTag[];
+  value: string[];
+  disabled: boolean;
+  onChange: (value: string[]) => void;
+}) {
+  return (
+    <div>
+      <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">
+        {label}
+      </label>
+      <select
+        multiple
+        value={value}
+        onChange={(e) =>
+          onChange(Array.from(e.currentTarget.selectedOptions).map((option) => option.value))
+        }
+        disabled={disabled || tags.length === 0}
+        className="h-[4.75rem] min-w-[160px] rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2 text-slate-100 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+      >
+        {tags.map((tag) => (
+          <option key={tag.id} value={tag.id} className="bg-slate-900">
+            {tag.name}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+function describeTagRollupRule(
+  rule: MetaAdsTagRollupRule,
+  tagsById: Map<number, string>
+): string {
+  const include = rule.includeTagIds
+    .map((tagId) => tagsById.get(tagId) ?? `Tag ${tagId}`)
+    .join(rule.includeMode === "all" ? " AND " : " OR ");
+  const exclude = rule.excludeTagIds
+    .map((tagId) => tagsById.get(tagId) ?? `Tag ${tagId}`)
+    .join(", ");
+  return exclude ? `${include}; exclude ${exclude}` : include;
+}
+
 function MetaAdsTableColGroup() {
   return (
     <colgroup>
@@ -1310,10 +1635,14 @@ function RollupTableRow({
   onToggle: () => void;
   onToggleChildren: () => void;
 }) {
-  const label = row.rollupKind === "tag" ? row.tagName : row.phrase;
-  const badge = row.rollupKind === "tag" ? "Tag" : "Phrase";
+  const label = row.rollupKind === "tag" ? row.name : row.phrase;
+  const badge = row.rollupKind === "tag" ? "Tag rule" : "Phrase";
   const detail =
-    row.rollupKind === "tag" ? `Tag: ${row.tagName}` : `Contains "${row.phrase}"`;
+    row.rollupKind === "tag"
+      ? `${row.includeMode === "all" ? "All" : "Any"} included tags${
+          row.excludeTagIds.length ? `; ${row.excludeTagIds.length} excluded` : ""
+        }`
+      : `Contains "${row.phrase}"`;
   return (
     <tr className="bg-indigo-500/10 hover:bg-indigo-500/15">
       <td className="sticky left-0 z-10 min-w-[340px] bg-slate-950/95 px-3 py-3">
@@ -1358,7 +1687,7 @@ function RollupTableRow({
       <td className="whitespace-nowrap px-3 py-3 text-slate-200">
         <div className="font-medium">Rollup</div>
         <div className="text-[11px] text-slate-500">
-          {row.rollupKind === "tag" ? "Tagged ads" : "Phrase match"}
+          {row.rollupKind === "tag" ? "Tag combo" : "Phrase match"}
         </div>
       </td>
       <td className="min-w-[220px] px-3 py-3 text-slate-300">
@@ -1586,7 +1915,7 @@ function getSortValue(row: AdsTableRow, key: SortKey): string | number | null {
     case "adName":
       return row.rowType === "rollup"
         ? row.rollupKind === "tag"
-          ? row.tagName
+          ? row.name
           : row.phrase
         : row.adName;
     case "businessName":
@@ -1594,7 +1923,7 @@ function getSortValue(row: AdsTableRow, key: SortKey): string | number | null {
     case "campaignName":
       return row.rowType === "rollup"
         ? row.rollupKind === "tag"
-          ? row.tagName
+          ? row.name
           : row.phrase
         : row.campaignName;
     default:

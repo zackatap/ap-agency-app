@@ -22,6 +22,7 @@ import {
 import {
   getMetaAdsSnapshot,
   listMetaAdTagAssignments,
+  listMetaAdTagRollups,
   listMetaAdTags,
   listMetaAdRollupPhrases,
   upsertMetaAdsSnapshot,
@@ -182,9 +183,10 @@ function parseRange(req: Request) {
 }
 
 async function decorateSnapshot(snapshot: MetaAdsSnapshotPayload | null) {
-  const [phrases, tags] = await Promise.all([
+  const [phrases, tags, tagRollupRules] = await Promise.all([
     listMetaAdRollupPhrases(),
     listMetaAdTags(),
+    listMetaAdTagRollups(),
   ]);
   const enabledPhrases = phrases.filter((phrase) => phrase.enabled);
   if (!snapshot) {
@@ -192,6 +194,7 @@ async function decorateSnapshot(snapshot: MetaAdsSnapshotPayload | null) {
       snapshot: null,
       phrases,
       tags,
+      tagRollupRules,
       tagAssignments: [],
       rollups: [],
       tagRollups: [],
@@ -206,11 +209,12 @@ async function decorateSnapshot(snapshot: MetaAdsSnapshotPayload | null) {
     ...snapshot,
     phrases,
     tags,
+    tagRollupRules,
     tagAssignments,
     rollups: buildMetaAdRollupSummaries(snapshot.rows, enabledPhrases),
     tagRollups: buildMetaAdTagRollupSummaries(
       snapshot.rows,
-      tags,
+      tagRollupRules.filter((rule) => rule.enabled),
       tagAssignments
     ),
     cached: true,

@@ -43,11 +43,27 @@ export interface MetaAdTagAssignment {
   tagId: number;
 }
 
+export type MetaAdTagRollupMode = "all" | "any";
+
+export interface MetaAdTagRollupRule {
+  id: number;
+  name: string;
+  includeMode: MetaAdTagRollupMode;
+  includeTagIds: number[];
+  excludeTagIds: number[];
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface MetaAdTagRollupSummary extends MetaAdPerformanceMetrics {
   id: number;
   label: string;
-  tagId: number;
-  tagName: string;
+  name: string;
+  includeMode: MetaAdTagRollupMode;
+  includeTagIds: number[];
+  excludeTagIds: number[];
+  enabled: boolean;
   adCount: number;
 }
 
@@ -154,7 +170,7 @@ export function buildMetaAdTagRollupSummaries<
   },
 >(
   rows: T[],
-  tags: MetaAdTag[],
+  rules: MetaAdTagRollupRule[],
   assignments: MetaAdTagAssignment[]
 ): MetaAdTagRollupSummary[] {
   const tagIdsByAd = new Map<string, Set<number>>();
@@ -164,17 +180,33 @@ export function buildMetaAdTagRollupSummaries<
     tagIdsByAd.set(assignment.adId, set);
   }
 
-  return tags.map((tag) => {
-    const matchedRows = rows.filter((row) => tagIdsByAd.get(row.adId)?.has(tag.id));
+  return rules.map((rule) => {
+    const includeTagIds = Array.from(new Set(rule.includeTagIds));
+    const excludeTagIds = Array.from(new Set(rule.excludeTagIds));
+    const matchedRows =
+      rule.enabled && includeTagIds.length > 0
+        ? rows.filter((row) => {
+            const rowTagIds = tagIdsByAd.get(row.adId) ?? new Set<number>();
+            const hasIncluded =
+              rule.includeMode === "all"
+                ? includeTagIds.every((tagId) => rowTagIds.has(tagId))
+                : includeTagIds.some((tagId) => rowTagIds.has(tagId));
+            const hasExcluded = excludeTagIds.some((tagId) => rowTagIds.has(tagId));
+            return hasIncluded && !hasExcluded;
+          })
+        : [];
     let totals = buildEmptyMetaAdTotals();
     for (const row of matchedRows) {
       totals = addMetaAdTotals(totals, row);
     }
     return {
-      id: tag.id,
-      label: tag.name,
-      tagId: tag.id,
-      tagName: tag.name,
+      id: rule.id,
+      label: rule.name,
+      name: rule.name,
+      includeMode: rule.includeMode,
+      includeTagIds,
+      excludeTagIds,
+      enabled: rule.enabled,
       adCount: matchedRows.length,
       ...deriveMetaAdMetrics(totals, {
         frequency: average(matchedRows.map((row) => row.frequency)),

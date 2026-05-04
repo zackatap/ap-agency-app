@@ -5,6 +5,8 @@ import type {
   MetaAdRollupPhrase,
   MetaAdTag,
   MetaAdTagAssignment,
+  MetaAdTagRollupMode,
+  MetaAdTagRollupRule,
 } from "@/lib/meta-ad-rollups";
 
 export interface MetaAdsRange {
@@ -129,6 +131,18 @@ async function ensureSchema(sql: Sql): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_agency_meta_ad_tag_assignments_tag
       ON agency_meta_ad_tag_assignments (tag_id)
   `;
+  await sql`
+    CREATE TABLE IF NOT EXISTS agency_meta_ad_tag_rollups (
+      id BIGSERIAL PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      include_mode TEXT NOT NULL DEFAULT 'all',
+      include_tag_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+      exclude_tag_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+      enabled BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
   schemaReady = true;
 }
 
@@ -192,6 +206,25 @@ function mapTagAssignment(row: Record<string, unknown>): MetaAdTagAssignment {
   return {
     adId: String(row.ad_id ?? ""),
     tagId: Number(row.tag_id),
+  };
+}
+
+function asNumberArray(raw: unknown): number[] {
+  if (!Array.isArray(raw)) return [];
+  return raw.map((value) => Number(value)).filter((value) => Number.isFinite(value));
+}
+
+function mapTagRollupRule(row: Record<string, unknown>): MetaAdTagRollupRule {
+  const includeMode = row.include_mode === "any" ? "any" : "all";
+  return {
+    id: Number(row.id),
+    name: String(row.name ?? ""),
+    includeMode,
+    includeTagIds: asNumberArray(row.include_tag_ids),
+    excludeTagIds: asNumberArray(row.exclude_tag_ids),
+    enabled: Boolean(row.enabled),
+    createdAt: asIsoString(row.created_at),
+    updatedAt: asIsoString(row.updated_at),
   };
 }
 
@@ -415,5 +448,85 @@ export async function removeMetaAdTags(params: {
     DELETE FROM agency_meta_ad_tag_assignments
     WHERE ad_id = ANY(${adIds}::text[])
       AND tag_id = ANY(${tagIds}::bigint[])
+  `;
+}
+
+export async function listMetaAdTagRollups(): Promise<MetaAdTagRollupRule[]> {
+  const sql = getDb();
+  if (!sql) return [];
+  await ensureSchema(sql);
+  const rows = await sql`
+    SELECT id, name, include_mode, include_tag_ids, exclude_tag_ids, enabled, created_at, updated_at
+    FROM agency_meta_ad_tag_rollups
+    ORDER BY created_at ASC
+  `;
+  return rows.map((row) => mapTagRollupRule(row as Record<string, unknown>));
+}
+
+function cleanTagIds(tagIds: number[]): number[] {
+  return Array.from(
+    new Set(tagIds.map((id) => Number(id)).filter((id) => Number.isFinite(id)))
+  );
+}
+
+export async function createMetaAdTagRollup(params: {
+  name: string;
+  includeMode: MetaAdTagRollupMode;
+  includeTagIds: number[];
+  excludeTagIds: number[];
+}): Promise<MetaAdTagRollupRule> {
+  const name = params.name.trim();
+  if (!name) throw new Error("Rollup name is required");
+  const includeTagIds = cleanTagIds(params.includeTagIds);
+  const excludeTagIds = cleanTagIds(params.excludeTagIds);
+  if (includeTagIds.length === 0) throw new Error("Choose at least one included tag");
+  const includeMode = params.includeMode === "any" ? "any" : "all";
+  const sql = getDb();
+  if (!sql) throw new Error("DATABASE_URL not configured");
+  await ensureSchema(sql);
+  const rows = await sql`
+    INSERT INTO agency_meta_ad_tag_rollups (
+      name, include_mode, include_tag_ids, exclude_tag_ids
+    ) VALUES (
+      ${name},
+      ${includeMode},
+      ${JSON.stringify(includeTagIds)}::jsonb,
+      ${JSON.stringify(excludeTagIds)}::jsonb
+    )
+    ON CONFLICT (name) DO UPDATE SET
+      include_mode = EXCLUDED.include_mode,
+      include_tag_ids = EXCLUDED.include_tag_ids,
+      exclude_tag_ids = EXCLUDED.exclude_tag_ids,
+      enabled = TRUE,
+      updated_at = NOW()
+    RETURNING id, name, include_mode, include_tag_ids, exclude_tag_ids, enabled, created_at, updated_at
+  `;
+  return mapTagRollupRule(rows[0] as Record<string, unknown>);
+}
+
+export async function updateMetaAdTagRollup(
+  id: number,
+  patch: { enabled?: boolean }
+): Promise<MetaAdTagRollupRule | null> {
+  const sql = getDb();
+  if (!sql) throw new Error("DATABASE_URL not configured");
+  await ensureSchema(sql);
+  const rows = await sql`
+    UPDATE agency_meta_ad_tag_rollups
+    SET enabled = COALESCE(${patch.enabled ?? null}, enabled),
+        updated_at = NOW()
+    WHERE id = ${id}
+    RETURNING id, name, include_mode, include_tag_ids, exclude_tag_ids, enabled, created_at, updated_at
+  `;
+  return rows[0] ? mapTagRollupRule(rows[0] as Record<string, unknown>) : null;
+}
+
+export async function deleteMetaAdTagRollup(id: number): Promise<void> {
+  const sql = getDb();
+  if (!sql) throw new Error("DATABASE_URL not configured");
+  await ensureSchema(sql);
+  await sql`
+    DELETE FROM agency_meta_ad_tag_rollups
+    WHERE id = ${id}
   `;
 }
