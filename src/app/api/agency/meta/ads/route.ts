@@ -16,10 +16,13 @@ import {
 } from "@/lib/date-ranges";
 import {
   buildMetaAdRollupSummaries,
+  buildMetaAdTagRollupSummaries,
   deriveMetaAdMetrics,
 } from "@/lib/meta-ad-rollups";
 import {
   getMetaAdsSnapshot,
+  listMetaAdTagAssignments,
+  listMetaAdTags,
   listMetaAdRollupPhrases,
   upsertMetaAdsSnapshot,
   type MetaAdsCachedRow,
@@ -179,21 +182,37 @@ function parseRange(req: Request) {
 }
 
 async function decorateSnapshot(snapshot: MetaAdsSnapshotPayload | null) {
-  const phrases = await listMetaAdRollupPhrases();
+  const [phrases, tags] = await Promise.all([
+    listMetaAdRollupPhrases(),
+    listMetaAdTags(),
+  ]);
   const enabledPhrases = phrases.filter((phrase) => phrase.enabled);
   if (!snapshot) {
     return {
       snapshot: null,
       phrases,
+      tags,
+      tagAssignments: [],
       rollups: [],
+      tagRollups: [],
       rows: [],
       cached: false,
     };
   }
+  const tagAssignments = await listMetaAdTagAssignments(
+    snapshot.rows.map((row) => row.adId)
+  );
   return {
     ...snapshot,
     phrases,
+    tags,
+    tagAssignments,
     rollups: buildMetaAdRollupSummaries(snapshot.rows, enabledPhrases),
+    tagRollups: buildMetaAdTagRollupSummaries(
+      snapshot.rows,
+      tags,
+      tagAssignments
+    ),
     cached: true,
   };
 }

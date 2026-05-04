@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   DATE_RANGE_LABELS,
   getTodayLocal,
@@ -23,6 +23,8 @@ const DATE_RANGE_ORDER: DateRangePreset[] = [
   "maximum",
   "custom",
 ];
+
+const ADS_DATE_RANGE_STORAGE_KEY = "agency-meta-ads-date-range";
 
 type SortKey =
   | "spend"
@@ -76,6 +78,26 @@ interface MetaAdsRollup extends MetaAdsMetrics {
   adCount: number;
 }
 
+interface MetaAdsTag {
+  id: number;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+interface MetaAdsTagAssignment {
+  adId: string;
+  tagId: number;
+}
+
+interface MetaAdsTagRollup extends MetaAdsMetrics {
+  id: number;
+  label: string;
+  tagId: number;
+  tagName: string;
+  adCount: number;
+}
+
 interface MetaAdsRow extends MetaAdsMetrics {
   rowKey: string;
   adId: string;
@@ -96,8 +118,24 @@ interface MetaAdsRow extends MetaAdsMetrics {
 }
 
 type AdsTableRow =
-  | ({ rowType: "rollup"; children: Array<MetaAdsRow & { matchingRollups: MetaAdsRollup[] }> } & MetaAdsRollup)
-  | ({ rowType: "ad"; matchingRollups: MetaAdsRollup[] } & MetaAdsRow);
+  | ({
+      rowType: "rollup";
+      rollupKind: "phrase";
+      children: AdTableRow[];
+    } & MetaAdsRollup)
+  | ({
+      rowType: "rollup";
+      rollupKind: "tag";
+      children: AdTableRow[];
+    } & MetaAdsTagRollup)
+  | AdTableRow;
+
+type AdTableRow = {
+  rowType: "ad";
+  matchingRollups: MetaAdsRollup[];
+  matchingTagRollups: MetaAdsTagRollup[];
+  tags: MetaAdsTag[];
+} & MetaAdsRow;
 
 interface MetaAdsResponse {
   snapshot?: { id: number } | null;
@@ -112,7 +150,10 @@ interface MetaAdsResponse {
   refreshedAt?: string;
   totals?: MetaAdsMetrics;
   phrases: MetaAdsPhrase[];
+  tags: MetaAdsTag[];
+  tagAssignments: MetaAdsTagAssignment[];
   rollups: MetaAdsRollup[];
+  tagRollups: MetaAdsTagRollup[];
   rows: MetaAdsRow[];
   warnings?: Array<{
     adAccountId?: string;
@@ -126,6 +167,30 @@ interface AppliedRange {
   preset: DateRangePreset;
   from: string;
   to: string;
+}
+
+function readStoredAdsRange(): AppliedRange {
+  const fallback: AppliedRange = { preset: "last_30", from: "", to: "" };
+  if (typeof window === "undefined") return fallback;
+
+  try {
+    const stored = window.localStorage.getItem(ADS_DATE_RANGE_STORAGE_KEY);
+    if (!stored) return fallback;
+    const parsed = JSON.parse(stored) as Partial<AppliedRange>;
+    if (!parsed.preset || !DATE_RANGE_ORDER.includes(parsed.preset)) return fallback;
+    return {
+      preset: parsed.preset,
+      from: typeof parsed.from === "string" ? parsed.from : "",
+      to: typeof parsed.to === "string" ? parsed.to : "",
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+function writeStoredAdsRange(range: AppliedRange) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(ADS_DATE_RANGE_STORAGE_KEY, JSON.stringify(range));
 }
 
 const SORT_LABELS: Record<SortKey, string> = {
@@ -144,16 +209,24 @@ const SORT_LABELS: Record<SortKey, string> = {
   campaignName: "Campaign",
 };
 
+const TAG_COLOR_CLASSES = [
+  "border-sky-400/30 bg-sky-500/15 text-sky-100",
+  "border-emerald-400/30 bg-emerald-500/15 text-emerald-100",
+  "border-violet-400/30 bg-violet-500/15 text-violet-100",
+  "border-amber-400/30 bg-amber-500/15 text-amber-100",
+  "border-rose-400/30 bg-rose-500/15 text-rose-100",
+  "border-cyan-400/30 bg-cyan-500/15 text-cyan-100",
+  "border-lime-400/30 bg-lime-500/15 text-lime-100",
+  "border-fuchsia-400/30 bg-fuchsia-500/15 text-fuchsia-100",
+];
+
 export function MetaAdsTab() {
+  const [initialRange] = useState(readStoredAdsRange);
   const [dateRangePreset, setDateRangePreset] =
-    useState<DateRangePreset>("last_30");
-  const [customDateFrom, setCustomDateFrom] = useState("");
-  const [customDateTo, setCustomDateTo] = useState("");
-  const [appliedRange, setAppliedRange] = useState<AppliedRange>({
-    preset: "last_30",
-    from: "",
-    to: "",
-  });
+    useState<DateRangePreset>(initialRange.preset);
+  const [customDateFrom, setCustomDateFrom] = useState(initialRange.from);
+  const [customDateTo, setCustomDateTo] = useState(initialRange.to);
+  const [appliedRange, setAppliedRange] = useState<AppliedRange>(initialRange);
   const [data, setData] = useState<MetaAdsResponse | null>(null);
   const [loadingCache, setLoadingCache] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -161,9 +234,15 @@ export function MetaAdsTab() {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [newPhrase, setNewPhrase] = useState("");
+  const [newTagName, setNewTagName] = useState("");
+  const [bulkTagId, setBulkTagId] = useState("");
+  const [selectedAdIds, setSelectedAdIds] = useState<Set<string>>(new Set());
+  const [showUntaggedOnly, setShowUntaggedOnly] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("spend");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
-  const [expandedRollups, setExpandedRollups] = useState<Set<number>>(new Set());
+  const [expandedRollups, setExpandedRollups] = useState<Set<string>>(new Set());
+  const tableHeaderScrollRef = useRef<HTMLDivElement | null>(null);
+  const tableBodyScrollRef = useRef<HTMLDivElement | null>(null);
 
   const requestAds = useCallback(
     (range: AppliedRange, method: "GET" | "POST", signal?: AbortSignal) => {
@@ -217,49 +296,84 @@ export function MetaAdsTab() {
     };
   }, [appliedRange, requestAds]);
 
-  const tableRows = useMemo<AdsTableRow[]>(() => {
+  const allAdTableRows = useMemo<AdTableRow[]>(() => {
     const activeRollups = data?.rollups.filter((rollup) => rollup.enabled) ?? [];
-    const adRowsWithMembership =
+    const tagsById = new Map((data?.tags ?? []).map((tag) => [tag.id, tag]));
+    const tagIdsByAd = new Map<string, Set<number>>();
+    for (const assignment of data?.tagAssignments ?? []) {
+      const set = tagIdsByAd.get(assignment.adId) ?? new Set<number>();
+      set.add(assignment.tagId);
+      tagIdsByAd.set(assignment.adId, set);
+    }
+    return (
       data?.rows.map((row) => ({
         ...row,
         rowType: "ad" as const,
         matchingRollups: activeRollups.filter((rollup) =>
           row.adName.toLowerCase().includes(rollup.phrase.toLowerCase())
         ),
-      })) ?? [];
+        matchingTagRollups: [],
+        tags: Array.from(tagIdsByAd.get(row.adId) ?? [])
+          .map((tagId) => tagsById.get(tagId))
+          .filter((tag): tag is MetaAdsTag => Boolean(tag)),
+      })) ?? []
+    );
+  }, [data?.rollups, data?.rows, data?.tagAssignments, data?.tags]);
+
+  const tableRows = useMemo<AdsTableRow[]>(() => {
+    const activeRollups = data?.rollups.filter((rollup) => rollup.enabled) ?? [];
     const rollupRows: AdsTableRow[] =
       activeRollups.map((rollup) => ({
         ...rollup,
         rowType: "rollup" as const,
-        children: adRowsWithMembership.filter((row) =>
+        rollupKind: "phrase" as const,
+        children: allAdTableRows.filter((row) =>
           row.matchingRollups.some((match) => match.id === rollup.id)
         ),
       })) ?? [];
     const ungroupedAdRows: AdsTableRow[] =
-      adRowsWithMembership
+      allAdTableRows
         .filter((row) => row.matchingRollups.length === 0)
         .map((row) => ({
           ...row,
-        rowType: "ad" as const,
+          rowType: "ad" as const,
         }));
     return [...rollupRows, ...ungroupedAdRows];
-  }, [data?.rollups, data?.rows]);
+  }, [allAdTableRows, data?.rollups]);
 
   const filteredRows = useMemo(() => {
-    const query = search.trim().toLowerCase();
-    return tableRows
+    const query = normalizeSearch(search);
+    const baseRows: AdsTableRow[] = showUntaggedOnly
+      ? allAdTableRows.filter((row) => row.tags.length === 0)
+      : tableRows;
+    return baseRows
       .filter((row) => {
         if (!query) return true;
         if (row.rowType === "rollup") {
+          const label = row.rollupKind === "tag" ? row.tagName : row.phrase;
           return (
-            row.phrase.toLowerCase().includes(query) ||
+            normalizeSearch(label).includes(query) ||
             row.children.some((child) => adMatchesQuery(child, query))
           );
         }
         return adMatchesQuery(row, query);
       })
       .sort((a, b) => compareRows(a, b, sortKey, sortDir));
-  }, [search, sortDir, sortKey, tableRows]);
+  }, [allAdTableRows, search, showUntaggedOnly, sortDir, sortKey, tableRows]);
+
+  const visibleAdIds = useMemo(() => {
+    const ids: string[] = [];
+    for (const row of filteredRows) {
+      if (row.rowType === "ad") {
+        ids.push(row.adId);
+        continue;
+      }
+      const rollupKey = `${row.rollupKind}:${row.id}`;
+      if (!expandedRollups.has(rollupKey)) continue;
+      ids.push(...row.children.map((child) => child.adId));
+    }
+    return Array.from(new Set(ids));
+  }, [expandedRollups, filteredRows]);
 
   const hasCache = Boolean(data?.cached && data.rows.length > 0);
   const activePhrases = data?.phrases.filter((p) => p.enabled).length ?? 0;
@@ -271,6 +385,14 @@ export function MetaAdsTab() {
     }
     return ids.size;
   }, [tableRows]);
+  const selectedCount = selectedAdIds.size;
+  const visibleSelectedCount = visibleAdIds.filter((adId) =>
+    selectedAdIds.has(adId)
+  ).length;
+  const allVisibleSelected =
+    visibleAdIds.length > 0 && visibleSelectedCount === visibleAdIds.length;
+  const someVisibleSelected = visibleSelectedCount > 0 && !allVisibleSelected;
+  const untaggedCount = allAdTableRows.filter((row) => row.tags.length === 0).length;
   const loading = loadingCache || refreshing;
   const currentRangeLabel = data?.range
     ? `${data.range.startDate} -> ${data.range.endDate}`
@@ -280,21 +402,34 @@ export function MetaAdsTab() {
     const preset = e.target.value as DateRangePreset;
     setDateRangePreset(preset);
     if (preset !== "custom") {
-      setAppliedRange({ preset, from: "", to: "" });
+      const nextRange = { preset, from: "", to: "" };
+      setAppliedRange(nextRange);
+      writeStoredAdsRange(nextRange);
     }
   }
 
   function handleCustomDateApply() {
     if (!customDateFrom || !customDateTo) return;
-    setAppliedRange({
+    const nextRange = {
       preset: "custom",
       from: customDateFrom,
       to: customDateTo,
-    });
+    } satisfies AppliedRange;
+    setAppliedRange(nextRange);
+    writeStoredAdsRange(nextRange);
   }
 
   function handleRefresh() {
     requestAds(appliedRange, "POST");
+  }
+
+  function syncTableScroll(source: "header" | "body") {
+    const from =
+      source === "header" ? tableHeaderScrollRef.current : tableBodyScrollRef.current;
+    const to =
+      source === "header" ? tableBodyScrollRef.current : tableHeaderScrollRef.current;
+    if (!from || !to || to.scrollLeft === from.scrollLeft) return;
+    to.scrollLeft = from.scrollLeft;
   }
 
   async function reloadCacheAfterRollupChange() {
@@ -368,13 +503,118 @@ export function MetaAdsTab() {
     setSortDir("desc");
   }
 
-  function toggleRollup(id: number) {
+  function toggleRollup(key: string) {
     setExpandedRollups((prev) => {
       const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
       return next;
     });
+  }
+
+  function toggleAdSelection(adId: string) {
+    setSelectedAdIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(adId)) next.delete(adId);
+      else next.add(adId);
+      return next;
+    });
+  }
+
+  function toggleManyAds(adIds: string[]) {
+    setSelectedAdIds((prev) => {
+      const next = new Set(prev);
+      const allSelected = adIds.every((adId) => next.has(adId));
+      for (const adId of adIds) {
+        if (allSelected) next.delete(adId);
+        else next.add(adId);
+      }
+      return next;
+    });
+  }
+
+  function toggleVisibleAds() {
+    if (visibleAdIds.length === 0) return;
+    toggleManyAds(visibleAdIds);
+  }
+
+  async function handleAddTag() {
+    const name = newTagName.trim();
+    if (!name) return;
+    setSavingRollup(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/agency/meta/tags", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      const json = (await res.json()) as { tag?: MetaAdsTag; error?: string };
+      if (!res.ok) throw new Error(json.error ?? "Failed to create tag");
+      if (json.tag && selectedAdIds.size > 0) {
+        const assignRes = await fetch("/api/agency/meta/tag-assignments", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            adIds: Array.from(selectedAdIds),
+            tagIds: [json.tag.id],
+          }),
+        });
+        const assignJson = (await assignRes.json()) as { error?: string };
+        if (!assignRes.ok) {
+          throw new Error(assignJson.error ?? "Failed to assign new tag");
+        }
+      }
+      setNewTagName("");
+      await reloadCacheAfterRollupChange();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to create tag");
+    } finally {
+      setSavingRollup(false);
+    }
+  }
+
+  async function handleApplyTagToSelected() {
+    const tagId = Number(bulkTagId);
+    if (!Number.isFinite(tagId) || selectedAdIds.size === 0) return;
+    setSavingRollup(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/agency/meta/tag-assignments", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          adIds: Array.from(selectedAdIds),
+          tagIds: [tagId],
+        }),
+      });
+      const json = (await res.json()) as { error?: string };
+      if (!res.ok) throw new Error(json.error ?? "Failed to assign tag");
+      await reloadCacheAfterRollupChange();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to assign tag");
+    } finally {
+      setSavingRollup(false);
+    }
+  }
+
+  async function handleRemoveTagFromAd(adId: string, tagId: number) {
+    setSavingRollup(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/agency/meta/tag-assignments", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ adIds: [adId], tagIds: [tagId] }),
+      });
+      const json = (await res.json()) as { error?: string };
+      if (!res.ok) throw new Error(json.error ?? "Failed to remove tag");
+      await reloadCacheAfterRollupChange();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to remove tag");
+    } finally {
+      setSavingRollup(false);
+    }
   }
 
   return (
@@ -498,9 +738,9 @@ export function MetaAdsTab() {
                   Ads leaderboard
                 </h2>
                 <p className="mt-1 text-xs text-slate-500">
-                  Showing {formatCount(filteredRows.length)} top-level rows:{" "}
-                  {formatCount(groupedAdCount)} ads grouped into {activePhrases}{" "}
-                  active rollups; ungrouped ads remain below.
+                  {showUntaggedOnly
+                    ? `Showing ${formatCount(filteredRows.length)} untagged ads.`
+                    : `Showing ${formatCount(filteredRows.length)} top-level rows: ${formatCount(groupedAdCount)} ads grouped into ${activePhrases} active rollups; ungrouped ads remain below.`}
                 </p>
               </div>
               <div className="flex flex-wrap items-end gap-3">
@@ -545,8 +785,33 @@ export function MetaAdsTab() {
                     className="w-72 max-w-full rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2 text-slate-100 placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
                   />
                 </div>
+                <button
+                  type="button"
+                  onClick={() => setShowUntaggedOnly((v) => !v)}
+                  className={`rounded-lg border px-3 py-2 text-sm font-medium transition-colors ${
+                    showUntaggedOnly
+                      ? "border-indigo-400/40 bg-indigo-500/20 text-indigo-100"
+                      : "border-white/10 bg-slate-800/60 text-slate-200 hover:bg-slate-700"
+                  }`}
+                  title="Show ads with no saved tags"
+                >
+                  No tags ({formatCount(untaggedCount)})
+                </button>
               </div>
             </div>
+
+            <TagControls
+              tags={data.tags}
+              selectedCount={selectedCount}
+              bulkTagId={bulkTagId}
+              newTagName={newTagName}
+              disabled={savingRollup}
+              onBulkTagIdChange={setBulkTagId}
+              onNewTagNameChange={setNewTagName}
+              onAddTag={() => void handleAddTag()}
+              onApplyTag={() => void handleApplyTagToSelected()}
+              onClearSelection={() => setSelectedAdIds(new Set())}
+            />
 
             <RollupPhraseChips
               phrases={data.phrases}
@@ -555,81 +820,74 @@ export function MetaAdsTab() {
               onDelete={(phrase) => void handleDeletePhrase(phrase)}
             />
 
-            <div className="max-w-full overflow-x-auto rounded-xl border border-white/10 bg-slate-900/30">
-              <table className="w-max min-w-full border-separate border-spacing-0 divide-y divide-white/5 text-sm">
-                <thead>
-                  <tr className="text-left text-xs uppercase tracking-wide text-slate-400">
-                    <SortableTh
-                      label="Ad"
-                      active={sortKey === "adName"}
-                      dir={sortDir}
-                      onClick={() => handleSort("adName")}
-                      sticky
+            <div className="rounded-xl border border-white/10 bg-slate-900/30">
+              <div
+                ref={tableHeaderScrollRef}
+                onScroll={() => syncTableScroll("header")}
+                className="sticky top-[4.5rem] z-30 max-w-full overflow-x-hidden rounded-t-xl bg-slate-900 shadow-[0_10px_24px_-18px_rgba(0,0,0,0.9)]"
+              >
+                <table className="w-[2550px] min-w-full table-fixed border-separate border-spacing-0 text-sm">
+                  <MetaAdsTableColGroup />
+                  <thead>
+                    <TableHeaderRow
+                      sortKey={sortKey}
+                      sortDir={sortDir}
+                      onSort={handleSort}
+                      allVisibleSelected={allVisibleSelected}
+                      someVisibleSelected={someVisibleSelected}
+                      visibleAdCount={visibleAdIds.length}
+                      onToggleVisible={toggleVisibleAds}
                     />
-                    <SortableTh
-                      label="Client"
-                      active={sortKey === "businessName"}
-                      dir={sortDir}
-                      onClick={() => handleSort("businessName")}
-                    />
-                    <SortableTh
-                      label="Campaign"
-                      active={sortKey === "campaignName"}
-                      dir={sortDir}
-                      onClick={() => handleSort("campaignName")}
-                    />
-                    <th className="sticky top-0 z-20 border-b border-white/10 bg-slate-900 px-3 py-3 font-semibold">
-                      Ad set
-                    </th>
-                    {(
-                      [
-                        "spend",
-                        "impressions",
-                        "reach",
-                        "inlineLinkClicks",
-                        "ctr",
-                        "cpc",
-                        "cpm",
-                        "leads",
-                        "cpl",
-                      ] as SortKey[]
-                    ).map((key) => (
-                      <SortableTh
-                        key={key}
-                        label={SORT_LABELS[key]}
-                        active={sortKey === key}
-                        dir={sortDir}
-                        onClick={() => handleSort(key)}
-                        alignRight
-                      />
-                    ))}
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/5">
-                  {filteredRows.map((row) =>
-                    row.rowType === "rollup" ? (
-                      <RollupGroup
-                        key={`rollup-${row.id}`}
-                        row={row}
-                        isExpanded={expandedRollups.has(row.id)}
-                        onToggle={() => toggleRollup(row.id)}
-                      />
-                    ) : (
-                      <MetaAdTableRow key={row.rowKey} row={row} />
-                    )
-                  )}
-                  {filteredRows.length === 0 && (
-                    <tr>
-                      <td
-                        colSpan={13}
-                        className="px-4 py-8 text-center text-sm text-slate-400"
-                      >
-                        No ads match this search.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
+                  </thead>
+                </table>
+              </div>
+              <div
+                ref={tableBodyScrollRef}
+                onScroll={() => syncTableScroll("body")}
+                className="max-w-full overflow-x-auto"
+              >
+                <table className="w-[2550px] min-w-full table-fixed border-separate border-spacing-0 divide-y divide-white/5 text-sm">
+                  <MetaAdsTableColGroup />
+                  <tbody className="divide-y divide-white/5">
+                    {filteredRows.map((row) =>
+                      row.rowType === "rollup" ? (
+                        <RollupGroup
+                          key={`${row.rollupKind}-${row.id}`}
+                          row={row}
+                          isExpanded={expandedRollups.has(
+                            `${row.rollupKind}:${row.id}`
+                          )}
+                          onToggle={() => toggleRollup(`${row.rollupKind}:${row.id}`)}
+                          selectedAdIds={selectedAdIds}
+                          onToggleAd={toggleAdSelection}
+                          onToggleChildren={() =>
+                            toggleManyAds(row.children.map((child) => child.adId))
+                          }
+                          onRemoveTag={handleRemoveTagFromAd}
+                        />
+                      ) : (
+                        <MetaAdTableRow
+                          key={row.rowKey}
+                          row={row}
+                          selected={selectedAdIds.has(row.adId)}
+                          onToggleSelected={() => toggleAdSelection(row.adId)}
+                          onRemoveTag={handleRemoveTagFromAd}
+                        />
+                      )
+                    )}
+                    {filteredRows.length === 0 && (
+                      <tr>
+                        <td
+                          colSpan={14}
+                          className="px-4 py-8 text-center text-sm text-slate-400"
+                        >
+                          No ads match this search.
+                        </td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </section>
         </>
@@ -728,6 +986,245 @@ function RollupPhraseChips({
   );
 }
 
+function TagControls({
+  tags,
+  selectedCount,
+  bulkTagId,
+  newTagName,
+  disabled,
+  onBulkTagIdChange,
+  onNewTagNameChange,
+  onAddTag,
+  onApplyTag,
+  onClearSelection,
+}: {
+  tags: MetaAdsTag[];
+  selectedCount: number;
+  bulkTagId: string;
+  newTagName: string;
+  disabled: boolean;
+  onBulkTagIdChange: (value: string) => void;
+  onNewTagNameChange: (value: string) => void;
+  onAddTag: () => void;
+  onApplyTag: () => void;
+  onClearSelection: () => void;
+}) {
+  return (
+    <div className="sticky top-0 z-40 flex min-h-[4.5rem] flex-wrap items-end justify-between gap-3 rounded-t-xl border border-white/10 bg-slate-950/95 p-3 text-sm shadow-lg shadow-slate-950/30 backdrop-blur">
+      <div>
+        <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+          Creative tags
+        </div>
+        <div className="mt-1 text-xs text-slate-500">
+          Select ads, apply one or more labels, and keep the selection active while tagging.
+        </div>
+      </div>
+      <div className="flex flex-wrap items-end gap-2">
+        <div>
+          <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">
+            New tag
+          </label>
+          <input
+            type="text"
+            value={newTagName}
+            onChange={(e) => onNewTagNameChange(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                onAddTag();
+              }
+            }}
+            placeholder="overlay: border"
+            disabled={disabled}
+            className="w-44 rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2 text-slate-100 placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          />
+        </div>
+        <button
+          type="button"
+          onClick={onAddTag}
+          disabled={!newTagName.trim() || disabled}
+          className="rounded-lg bg-slate-800 px-3 py-2 font-medium text-slate-100 transition-colors hover:bg-slate-700 disabled:opacity-50"
+        >
+          {selectedCount > 0 ? "Create + apply" : "Create"}
+        </button>
+        <div>
+          <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">
+            Apply to {selectedCount}
+          </label>
+          <select
+            value={bulkTagId}
+            onChange={(e) => onBulkTagIdChange(e.target.value)}
+            disabled={disabled || tags.length === 0}
+            className="max-w-[180px] rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2 text-slate-100 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+          >
+            <option value="" className="bg-slate-900">
+              Choose tag
+            </option>
+            {tags.map((tag) => (
+              <option key={tag.id} value={tag.id} className="bg-slate-900">
+                {tag.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <button
+          type="button"
+          onClick={onApplyTag}
+          disabled={!bulkTagId || selectedCount === 0 || disabled}
+          className="rounded-lg bg-indigo-600 px-3 py-2 font-medium text-white transition-colors hover:bg-indigo-500 disabled:opacity-50"
+        >
+          Apply tag
+        </button>
+        <button
+          type="button"
+          onClick={onClearSelection}
+          disabled={selectedCount === 0 || disabled}
+          className="rounded-lg border border-white/10 bg-slate-800/60 px-3 py-2 text-slate-200 transition-colors hover:bg-slate-700 disabled:opacity-50"
+        >
+          Clear
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function MetaAdsTableColGroup() {
+  return (
+    <colgroup>
+      <col className="w-[420px]" />
+      <col className="w-[180px]" />
+      <col className="w-[290px]" />
+      <col className="w-[380px]" />
+      <col className="w-[290px]" />
+      <col className="w-[110px]" />
+      <col className="w-[110px]" />
+      <col className="w-[110px]" />
+      <col className="w-[110px]" />
+      <col className="w-[110px]" />
+      <col className="w-[110px]" />
+      <col className="w-[110px]" />
+      <col className="w-[110px]" />
+      <col className="w-[110px]" />
+    </colgroup>
+  );
+}
+
+function TableHeaderRow({
+  sortKey,
+  sortDir,
+  onSort,
+  allVisibleSelected,
+  someVisibleSelected,
+  visibleAdCount,
+  onToggleVisible,
+}: {
+  sortKey: SortKey;
+  sortDir: "asc" | "desc";
+  onSort: (key: SortKey) => void;
+  allVisibleSelected: boolean;
+  someVisibleSelected: boolean;
+  visibleAdCount: number;
+  onToggleVisible: () => void;
+}) {
+  return (
+    <tr className="text-left text-xs uppercase tracking-wide text-slate-400">
+      <th className="sticky left-0 z-30 border-b border-white/10 bg-slate-900 px-3 py-3 font-semibold shadow-[4px_0_12px_-4px_rgba(0,0,0,0.45)]">
+        <span className="inline-flex items-center gap-2">
+          <IndeterminateCheckbox
+            checked={allVisibleSelected}
+            indeterminate={someVisibleSelected}
+            disabled={visibleAdCount === 0}
+            onChange={onToggleVisible}
+            ariaLabel="Select all visible ads"
+          />
+          <button
+            type="button"
+            onClick={() => onSort("adName")}
+            className="inline-flex items-center gap-1 hover:text-white"
+          >
+            Ad
+            {sortKey === "adName" && (
+              <span className="text-[10px]">{sortDir === "desc" ? "v" : "^"}</span>
+            )}
+          </button>
+        </span>
+      </th>
+      <th className="border-b border-white/10 bg-slate-900 px-3 py-3 font-semibold">
+        Tags
+      </th>
+      <SortableTh
+        label="Client"
+        active={sortKey === "businessName"}
+        dir={sortDir}
+        onClick={() => onSort("businessName")}
+      />
+      <SortableTh
+        label="Campaign"
+        active={sortKey === "campaignName"}
+        dir={sortDir}
+        onClick={() => onSort("campaignName")}
+      />
+      <th className="border-b border-white/10 bg-slate-900 px-3 py-3 font-semibold">
+        Ad set
+      </th>
+      {(
+        [
+          "spend",
+          "impressions",
+          "reach",
+          "inlineLinkClicks",
+          "ctr",
+          "cpc",
+          "cpm",
+          "leads",
+          "cpl",
+        ] as SortKey[]
+      ).map((key) => (
+        <SortableTh
+          key={key}
+          label={SORT_LABELS[key]}
+          active={sortKey === key}
+          dir={sortDir}
+          onClick={() => onSort(key)}
+          alignRight
+        />
+      ))}
+    </tr>
+  );
+}
+
+function IndeterminateCheckbox({
+  checked,
+  indeterminate,
+  disabled,
+  onChange,
+  ariaLabel,
+}: {
+  checked: boolean;
+  indeterminate: boolean;
+  disabled?: boolean;
+  onChange: () => void;
+  ariaLabel: string;
+}) {
+  const ref = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = indeterminate;
+  }, [indeterminate]);
+
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      checked={checked}
+      disabled={disabled}
+      onChange={onChange}
+      className="h-4 w-4 rounded border-white/20 bg-slate-900 text-indigo-500 disabled:opacity-40"
+      aria-label={ariaLabel}
+    />
+  );
+}
+
 function SortableTh({
   label,
   active,
@@ -745,7 +1242,7 @@ function SortableTh({
 }) {
   return (
     <th
-      className={`${sticky ? "sticky left-0 z-30 shadow-[4px_0_12px_-4px_rgba(0,0,0,0.45)]" : "sticky z-20"} top-0 cursor-pointer border-b border-white/10 bg-slate-900 px-3 py-3 font-semibold hover:text-white ${
+      className={`${sticky ? "sticky left-0 z-30 shadow-[4px_0_12px_-4px_rgba(0,0,0,0.45)]" : ""} cursor-pointer border-b border-white/10 bg-slate-900 px-3 py-3 font-semibold hover:text-white ${
         alignRight ? "text-right" : "text-left"
       }`}
       onClick={onClick}
@@ -766,20 +1263,37 @@ function RollupGroup({
   row,
   isExpanded,
   onToggle,
+  selectedAdIds,
+  onToggleAd,
+  onToggleChildren,
+  onRemoveTag,
 }: {
-  row: MetaAdsRollup & {
-    rowType: "rollup";
-    children: Array<MetaAdsRow & { matchingRollups: MetaAdsRollup[] }>;
-  };
+  row: Extract<AdsTableRow, { rowType: "rollup" }>;
   isExpanded: boolean;
   onToggle: () => void;
+  selectedAdIds: Set<string>;
+  onToggleAd: (adId: string) => void;
+  onToggleChildren: () => void;
+  onRemoveTag: (adId: string, tagId: number) => void;
 }) {
   return (
     <>
-      <RollupTableRow row={row} isExpanded={isExpanded} onToggle={onToggle} />
+      <RollupTableRow
+        row={row}
+        isExpanded={isExpanded}
+        onToggle={onToggle}
+        onToggleChildren={onToggleChildren}
+      />
       {isExpanded &&
         row.children.map((child) => (
-          <MetaAdTableRow key={`${row.id}-${child.rowKey}`} row={child} nested />
+          <MetaAdTableRow
+            key={`${row.id}-${child.rowKey}`}
+            row={child}
+            nested
+            selected={selectedAdIds.has(child.adId)}
+            onToggleSelected={() => onToggleAd(child.adId)}
+            onRemoveTag={onRemoveTag}
+          />
         ))}
     </>
   );
@@ -789,14 +1303,17 @@ function RollupTableRow({
   row,
   isExpanded,
   onToggle,
+  onToggleChildren,
 }: {
-  row: MetaAdsRollup & {
-    rowType: "rollup";
-    children: Array<MetaAdsRow & { matchingRollups: MetaAdsRollup[] }>;
-  };
+  row: Extract<AdsTableRow, { rowType: "rollup" }>;
   isExpanded: boolean;
   onToggle: () => void;
+  onToggleChildren: () => void;
 }) {
+  const label = row.rollupKind === "tag" ? row.tagName : row.phrase;
+  const badge = row.rollupKind === "tag" ? "Tag" : "Phrase";
+  const detail =
+    row.rollupKind === "tag" ? `Tag: ${row.tagName}` : `Contains "${row.phrase}"`;
   return (
     <tr className="bg-indigo-500/10 hover:bg-indigo-500/15">
       <td className="sticky left-0 z-10 min-w-[340px] bg-slate-950/95 px-3 py-3">
@@ -821,10 +1338,10 @@ function RollupTableRow({
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <div className="truncate font-semibold text-indigo-100">
-                {row.phrase}
+                {label}
               </div>
               <span className="rounded bg-indigo-500/20 px-1.5 py-px text-[10px] uppercase tracking-wide text-indigo-100">
-                Combined
+                {badge}
               </span>
             </div>
             <div className="mt-1 text-[11px] text-slate-400">
@@ -833,15 +1350,28 @@ function RollupTableRow({
           </div>
         </div>
       </td>
+      <td className="px-3 py-3 text-slate-300">
+        <span className="inline-flex rounded-full border border-indigo-400/30 bg-indigo-500/15 px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-indigo-100">
+          {badge}
+        </span>
+      </td>
       <td className="whitespace-nowrap px-3 py-3 text-slate-200">
         <div className="font-medium">Rollup</div>
-        <div className="text-[11px] text-slate-500">Enabled phrase</div>
+        <div className="text-[11px] text-slate-500">
+          {row.rollupKind === "tag" ? "Tagged ads" : "Phrase match"}
+        </div>
       </td>
       <td className="min-w-[220px] px-3 py-3 text-slate-300">
-        Contains &quot;{row.phrase}&quot;
+        {detail}
       </td>
       <td className="min-w-[220px] px-3 py-3 text-slate-300">
-        Combined ad sets
+        <button
+          type="button"
+          onClick={onToggleChildren}
+          className="rounded-md border border-white/10 bg-slate-800/60 px-2 py-1 text-xs text-slate-200 transition-colors hover:bg-slate-700"
+        >
+          Select children
+        </button>
       </td>
       <MetricTd value={formatMoney(row.spend)} />
       <MetricTd value={formatCount(row.impressions)} />
@@ -859,9 +1389,15 @@ function RollupTableRow({
 function MetaAdTableRow({
   row,
   nested,
+  selected,
+  onToggleSelected,
+  onRemoveTag,
 }: {
-  row: MetaAdsRow & { matchingRollups: MetaAdsRollup[] };
+  row: AdTableRow;
   nested?: boolean;
+  selected: boolean;
+  onToggleSelected: () => void;
+  onRemoveTag: (adId: string, tagId: number) => void;
 }) {
   return (
     <tr className={nested ? "bg-slate-950/35 hover:bg-white/5" : "hover:bg-white/5"}>
@@ -871,6 +1407,13 @@ function MetaAdTableRow({
         }`}
       >
         <div className="flex items-center gap-3">
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={onToggleSelected}
+            className="h-4 w-4 rounded border-white/20 bg-slate-900 text-indigo-500"
+            aria-label={`Select ${row.adName}`}
+          />
           <CreativeThumb url={row.thumbnailUrl} adName={row.adName} />
           <div className="min-w-0">
             <div className="flex items-center gap-2">
@@ -901,6 +1444,9 @@ function MetaAdTableRow({
             </div>
           </div>
         </div>
+      </td>
+      <td className="px-3 py-3 text-slate-300">
+        <TagPills tags={row.tags} adId={row.adId} onRemoveTag={onRemoveTag} />
       </td>
       <td className="whitespace-nowrap px-3 py-3 text-slate-200">
         <div className="font-medium">{row.businessName}</div>
@@ -933,6 +1479,46 @@ function MetaAdTableRow({
   );
 }
 
+function TagPills({
+  tags,
+  adId,
+  onRemoveTag,
+}: {
+  tags: MetaAdsTag[];
+  adId: string;
+  onRemoveTag: (adId: string, tagId: number) => void;
+}) {
+  if (tags.length === 0) {
+    return <span className="text-xs text-slate-600">No tags</span>;
+  }
+
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {tags.map((tag) => (
+        <span
+          key={tag.id}
+          className={`inline-flex max-w-full items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-medium ${getTagColorClasses(tag.id)}`}
+          title={`Tagged ${tag.name}`}
+        >
+          <span className="truncate">{tag.name}</span>
+          <button
+            type="button"
+            onClick={() => onRemoveTag(adId, tag.id)}
+            className="rounded-full px-0.5 text-[10px] leading-none hover:bg-white/15"
+            aria-label={`Remove ${tag.name} tag`}
+          >
+            x
+          </button>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function getTagColorClasses(tagId: number): string {
+  return TAG_COLOR_CLASSES[Math.abs(tagId) % TAG_COLOR_CLASSES.length];
+}
+
 function CreativeThumb({ url, adName }: { url: string | null; adName: string }) {
   if (!url) {
     return (
@@ -958,6 +1544,10 @@ function MetricTd({ value }: { value: string }) {
   );
 }
 
+function normalizeSearch(value: string): string {
+  return value.toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
 function adMatchesQuery(row: MetaAdsRow, query: string): boolean {
   return [
     row.businessName,
@@ -969,7 +1559,7 @@ function adMatchesQuery(row: MetaAdsRow, query: string): boolean {
     row.campaignKeyword,
   ]
     .filter(Boolean)
-    .some((value) => String(value).toLowerCase().includes(query));
+    .some((value) => normalizeSearch(String(value)).includes(query));
 }
 
 function compareRows(
@@ -994,11 +1584,19 @@ function compareRows(
 function getSortValue(row: AdsTableRow, key: SortKey): string | number | null {
   switch (key) {
     case "adName":
-      return row.rowType === "rollup" ? row.phrase : row.adName;
+      return row.rowType === "rollup"
+        ? row.rollupKind === "tag"
+          ? row.tagName
+          : row.phrase
+        : row.adName;
     case "businessName":
       return row.rowType === "rollup" ? "Rollup" : row.businessName;
     case "campaignName":
-      return row.rowType === "rollup" ? row.phrase : row.campaignName;
+      return row.rowType === "rollup"
+        ? row.rollupKind === "tag"
+          ? row.tagName
+          : row.phrase
+        : row.campaignName;
     default:
       return row[key];
   }

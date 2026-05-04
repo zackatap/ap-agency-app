@@ -31,6 +31,26 @@ export interface MetaAdRollupSummary extends MetaAdPerformanceMetrics {
   adCount: number;
 }
 
+export interface MetaAdTag {
+  id: number;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MetaAdTagAssignment {
+  adId: string;
+  tagId: number;
+}
+
+export interface MetaAdTagRollupSummary extends MetaAdPerformanceMetrics {
+  id: number;
+  label: string;
+  tagId: number;
+  tagName: string;
+  adCount: number;
+}
+
 export function buildEmptyMetaAdTotals(): MetaAdPerformanceTotals {
   return {
     spend: 0,
@@ -111,6 +131,50 @@ export function buildMetaAdRollupSummaries<
       label: phrase.phrase,
       phrase: phrase.phrase,
       enabled: phrase.enabled,
+      adCount: matchedRows.length,
+      ...deriveMetaAdMetrics(totals, {
+        frequency: average(matchedRows.map((row) => row.frequency)),
+        ctr: average(matchedRows.map((row) => row.ctr)),
+        cpc: average(matchedRows.map((row) => row.cpc)),
+        cpm: average(matchedRows.map((row) => row.cpm)),
+        cpl: average(matchedRows.map((row) => row.cpl)),
+      }),
+    };
+  });
+}
+
+export function buildMetaAdTagRollupSummaries<
+  T extends MetaAdPerformanceTotals & {
+    adId: string;
+    frequency?: number | null;
+    ctr?: number | null;
+    cpc?: number | null;
+    cpm?: number | null;
+    cpl?: number | null;
+  },
+>(
+  rows: T[],
+  tags: MetaAdTag[],
+  assignments: MetaAdTagAssignment[]
+): MetaAdTagRollupSummary[] {
+  const tagIdsByAd = new Map<string, Set<number>>();
+  for (const assignment of assignments) {
+    const set = tagIdsByAd.get(assignment.adId) ?? new Set<number>();
+    set.add(assignment.tagId);
+    tagIdsByAd.set(assignment.adId, set);
+  }
+
+  return tags.map((tag) => {
+    const matchedRows = rows.filter((row) => tagIdsByAd.get(row.adId)?.has(tag.id));
+    let totals = buildEmptyMetaAdTotals();
+    for (const row of matchedRows) {
+      totals = addMetaAdTotals(totals, row);
+    }
+    return {
+      id: tag.id,
+      label: tag.name,
+      tagId: tag.id,
+      tagName: tag.name,
       adCount: matchedRows.length,
       ...deriveMetaAdMetrics(totals, {
         frequency: average(matchedRows.map((row) => row.frequency)),

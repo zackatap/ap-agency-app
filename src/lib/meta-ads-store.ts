@@ -3,6 +3,8 @@ import type { DateRangePreset } from "@/lib/date-ranges";
 import type {
   MetaAdPerformanceMetrics,
   MetaAdRollupPhrase,
+  MetaAdTag,
+  MetaAdTagAssignment,
 } from "@/lib/meta-ad-rollups";
 
 export interface MetaAdsRange {
@@ -107,6 +109,26 @@ async function ensureSchema(sql: Sql): Promise<void> {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `;
+  await sql`
+    CREATE TABLE IF NOT EXISTS agency_meta_ad_tags (
+      id BIGSERIAL PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+  await sql`
+    CREATE TABLE IF NOT EXISTS agency_meta_ad_tag_assignments (
+      ad_id TEXT NOT NULL,
+      tag_id BIGINT NOT NULL REFERENCES agency_meta_ad_tags(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (ad_id, tag_id)
+    )
+  `;
+  await sql`
+    CREATE INDEX IF NOT EXISTS idx_agency_meta_ad_tag_assignments_tag
+      ON agency_meta_ad_tag_assignments (tag_id)
+  `;
   schemaReady = true;
 }
 
@@ -154,6 +176,22 @@ function mapRollupPhrase(row: Record<string, unknown>): MetaAdRollupPhrase {
     enabled: Boolean(row.enabled),
     createdAt: asIsoString(row.created_at),
     updatedAt: asIsoString(row.updated_at),
+  };
+}
+
+function mapTag(row: Record<string, unknown>): MetaAdTag {
+  return {
+    id: Number(row.id),
+    name: String(row.name ?? ""),
+    createdAt: asIsoString(row.created_at),
+    updatedAt: asIsoString(row.updated_at),
+  };
+}
+
+function mapTagAssignment(row: Record<string, unknown>): MetaAdTagAssignment {
+  return {
+    adId: String(row.ad_id ?? ""),
+    tagId: Number(row.tag_id),
   };
 }
 
@@ -278,5 +316,104 @@ export async function deleteMetaAdRollupPhrase(id: number): Promise<void> {
   await sql`
     DELETE FROM agency_meta_ad_rollup_phrases
     WHERE id = ${id}
+  `;
+}
+
+export async function listMetaAdTags(): Promise<MetaAdTag[]> {
+  const sql = getDb();
+  if (!sql) return [];
+  await ensureSchema(sql);
+  const rows = await sql`
+    SELECT id, name, created_at, updated_at
+    FROM agency_meta_ad_tags
+    ORDER BY name ASC
+  `;
+  return rows.map((row) => mapTag(row as Record<string, unknown>));
+}
+
+export async function createMetaAdTag(name: string): Promise<MetaAdTag> {
+  const cleaned = name.trim();
+  if (!cleaned) throw new Error("Tag name is required");
+  const sql = getDb();
+  if (!sql) throw new Error("DATABASE_URL not configured");
+  await ensureSchema(sql);
+  const rows = await sql`
+    INSERT INTO agency_meta_ad_tags (name)
+    VALUES (${cleaned})
+    ON CONFLICT (name) DO UPDATE SET updated_at = NOW()
+    RETURNING id, name, created_at, updated_at
+  `;
+  return mapTag(rows[0] as Record<string, unknown>);
+}
+
+export async function deleteMetaAdTag(id: number): Promise<void> {
+  const sql = getDb();
+  if (!sql) throw new Error("DATABASE_URL not configured");
+  await ensureSchema(sql);
+  await sql`
+    DELETE FROM agency_meta_ad_tags
+    WHERE id = ${id}
+  `;
+}
+
+export async function listMetaAdTagAssignments(
+  adIds?: string[]
+): Promise<MetaAdTagAssignment[]> {
+  const sql = getDb();
+  if (!sql) return [];
+  await ensureSchema(sql);
+  const cleaned = Array.from(new Set((adIds ?? []).map((id) => id.trim()).filter(Boolean)));
+  const rows = cleaned.length
+    ? await sql`
+        SELECT ad_id, tag_id
+        FROM agency_meta_ad_tag_assignments
+        WHERE ad_id = ANY(${cleaned}::text[])
+      `
+    : await sql`
+        SELECT ad_id, tag_id
+        FROM agency_meta_ad_tag_assignments
+      `;
+  return rows.map((row) => mapTagAssignment(row as Record<string, unknown>));
+}
+
+export async function assignMetaAdTags(params: {
+  adIds: string[];
+  tagIds: number[];
+}): Promise<void> {
+  const sql = getDb();
+  if (!sql) throw new Error("DATABASE_URL not configured");
+  await ensureSchema(sql);
+  const adIds = Array.from(new Set(params.adIds.map((id) => id.trim()).filter(Boolean)));
+  const tagIds = Array.from(
+    new Set(params.tagIds.filter((id) => Number.isFinite(id)).map((id) => Number(id)))
+  );
+  if (adIds.length === 0 || tagIds.length === 0) return;
+  for (const adId of adIds) {
+    for (const tagId of tagIds) {
+      await sql`
+        INSERT INTO agency_meta_ad_tag_assignments (ad_id, tag_id)
+        VALUES (${adId}, ${tagId})
+        ON CONFLICT (ad_id, tag_id) DO NOTHING
+      `;
+    }
+  }
+}
+
+export async function removeMetaAdTags(params: {
+  adIds: string[];
+  tagIds: number[];
+}): Promise<void> {
+  const sql = getDb();
+  if (!sql) throw new Error("DATABASE_URL not configured");
+  await ensureSchema(sql);
+  const adIds = Array.from(new Set(params.adIds.map((id) => id.trim()).filter(Boolean)));
+  const tagIds = Array.from(
+    new Set(params.tagIds.filter((id) => Number.isFinite(id)).map((id) => Number(id)))
+  );
+  if (adIds.length === 0 || tagIds.length === 0) return;
+  await sql`
+    DELETE FROM agency_meta_ad_tag_assignments
+    WHERE ad_id = ANY(${adIds}::text[])
+      AND tag_id = ANY(${tagIds}::bigint[])
   `;
 }
