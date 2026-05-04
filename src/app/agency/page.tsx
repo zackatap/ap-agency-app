@@ -9,10 +9,17 @@ type LinkCard = {
   href: string;
   title: string;
   description: string;
-  accent: "indigo" | "emerald" | "fuchsia" | "amber";
+  accent: "indigo" | "emerald" | "fuchsia" | "amber" | "sky";
 };
 
 const LINKS: LinkCard[] = [
+  {
+    href: "/agency/presentation",
+    title: "Client Roadmap Presentation",
+    description:
+      "Bright Zoom-ready deck for walking clients through onboarding and month-by-month growth.",
+    accent: "sky",
+  },
   {
     href: "/agency/dashboard",
     title: "Agency Rollup",
@@ -62,6 +69,7 @@ const ACCENT: Record<LinkCard["accent"], string> = {
     "from-fuchsia-500/15 to-slate-900/40 border-fuchsia-400/30 hover:border-fuchsia-300/60",
   amber:
     "from-amber-500/15 to-slate-900/40 border-amber-400/30 hover:border-amber-300/60",
+  sky: "from-sky-500/15 to-slate-900/40 border-sky-400/30 hover:border-sky-300/60",
 };
 
 export default function AgencyIndexPage() {
