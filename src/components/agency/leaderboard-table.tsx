@@ -93,11 +93,7 @@ export function LeaderboardTable({
     [campaigns, mode]
   );
 
-  /**
-   * If compare-expanding a child of a multi-campaign group, auto-open its
-   * parent accordion so the inline benchmark appears directly under it.
-   */
-  useEffect(() => {
+  const compareParentRowKey = useMemo(() => {
     if (!compareCampaignKey) return;
     const parent = rows.find(
       (r) =>
@@ -105,14 +101,7 @@ export function LeaderboardTable({
         r.children.length > 1 &&
         r.children.some((c) => c.campaignKey === compareCampaignKey)
     );
-    if (parent) {
-      setExpanded((prev) => {
-        if (prev.has(parent.rowKey)) return prev;
-        const next = new Set(prev);
-        next.add(parent.rowKey);
-        return next;
-      });
-    }
+    return parent?.rowKey;
   }, [compareCampaignKey, rows]);
 
   /**
@@ -225,14 +214,11 @@ export function LeaderboardTable({
         </button>
       </div>
 
-      {/* No overflow-x-auto here: any scrollport on this ancestor breaks
-          `position: sticky; top: 0` on thead for *page* scroll. Wide tables
-          use horizontal overflow on the document instead. */}
       <div
         ref={tableRef}
-        className="rounded-xl border border-white/10 bg-slate-900/30"
+        className="max-w-full overflow-x-auto rounded-xl border border-white/10 bg-slate-900/30"
       >
-        <table className="min-w-full border-separate border-spacing-0 divide-y divide-white/5 text-sm">
+        <table className="w-max min-w-full border-separate border-spacing-0 divide-y divide-white/5 text-sm">
           <thead>
             <tr className="text-left text-xs uppercase tracking-wide text-slate-400">
               <th className="sticky left-0 top-0 z-30 border-b border-white/10 bg-slate-900 px-4 py-3 text-left font-semibold shadow-[4px_0_12px_-4px_rgba(0,0,0,0.45)]">
@@ -262,7 +248,9 @@ export function LeaderboardTable({
                 key={row.rowKey}
                 row={row}
                 monthKey={monthKey}
-                isExpanded={expanded.has(row.rowKey)}
+                isExpanded={
+                  expanded.has(row.rowKey) || compareParentRowKey === row.rowKey
+                }
                 onToggle={() => toggleRow(row.rowKey)}
                 staleness={rowStaleness.get(row.rowKey) ?? "none"}
                 excludedKeys={excludedKeys}

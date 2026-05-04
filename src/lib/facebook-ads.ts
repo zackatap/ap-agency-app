@@ -222,6 +222,219 @@ export async function fetchSpendByDay(
 
 export type MetaInsightsLevel = "campaign" | "adset" | "ad";
 
+export interface MetaAdInsight {
+  adId: string;
+  adName: string;
+  adsetId: string | null;
+  adsetName: string | null;
+  campaignId: string | null;
+  campaignName: string | null;
+  spend: number;
+  impressions: number;
+  reach: number;
+  frequency: number | null;
+  clicks: number;
+  inlineLinkClicks: number;
+  ctr: number | null;
+  cpc: number | null;
+  cpm: number | null;
+  leads: number;
+}
+
+type MetaAction = {
+  action_type?: string;
+  value?: string;
+};
+
+function parseNumber(raw: unknown): number {
+  const n = Number.parseFloat(String(raw ?? ""));
+  return Number.isFinite(n) ? n : 0;
+}
+
+function parseNullableNumber(raw: unknown): number | null {
+  const n = Number.parseFloat(String(raw ?? ""));
+  return Number.isFinite(n) ? n : null;
+}
+
+function parseLeadActions(raw: unknown): number {
+  if (!Array.isArray(raw)) return 0;
+  return raw.reduce((sum, action: MetaAction) => {
+    const type = String(action?.action_type ?? "").toLowerCase();
+    if (!type.includes("lead")) return sum;
+    return sum + parseNumber(action?.value);
+  }, 0);
+}
+
+function mergeAdInsight(
+  existing: MetaAdInsight | undefined,
+  row: MetaAdInsight
+): MetaAdInsight {
+  if (!existing) return row;
+  const spend = existing.spend + row.spend;
+  const impressions = existing.impressions + row.impressions;
+  const clicks = existing.clicks + row.clicks;
+  return {
+    ...existing,
+    spend,
+    impressions,
+    reach: existing.reach + row.reach,
+    clicks,
+    inlineLinkClicks: existing.inlineLinkClicks + row.inlineLinkClicks,
+    leads: existing.leads + row.leads,
+    ctr: impressions > 0 ? (clicks / impressions) * 100 : null,
+    cpc: clicks > 0 ? spend / clicks : null,
+    cpm: impressions > 0 ? (spend / impressions) * 1000 : null,
+  };
+}
+
+/**
+ * Fetch Meta Insights at the AD level over an inclusive date range (YYYY-MM-DD).
+ * Returns one aggregate row per ad and follows Meta pagination.
+ */
+export async function fetchAdInsights(
+  adAccountId: string,
+  since: string,
+  until: string,
+  options?: { campaignIds?: string[] }
+): Promise<{ ads: MetaAdInsight[]; error?: string }> {
+  const token = getAccessToken();
+  if (!token) {
+    return { ads: [], error: "META_ACCESS_TOKEN not configured" };
+  }
+
+  const graphId = normalizeAdAccountId(adAccountId);
+  if (!graphId) {
+    return { ads: [], error: "Invalid ad account ID" };
+  }
+
+  const params = new URLSearchParams({
+    fields:
+      "ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,spend,impressions,reach,frequency,clicks,inline_link_clicks,ctr,cpc,cpm,actions",
+    level: "ad",
+    time_range: JSON.stringify({ since, until }),
+    access_token: token,
+    limit: "500",
+  });
+
+  if (options?.campaignIds?.length) {
+    params.set(
+      "filtering",
+      JSON.stringify([
+        {
+          field: "campaign.id",
+          operator: "IN",
+          value: options.campaignIds,
+        },
+      ])
+    );
+  }
+
+  let url: string | null = `${META_GRAPH}/${META_API_VERSION}/${graphId}/insights?${params}`;
+  const byAdId = new Map<string, MetaAdInsight>();
+
+  try {
+    while (url) {
+      const res = await fetch(url);
+      const json = (await res.json()) as {
+        data?: Array<Record<string, unknown>>;
+        paging?: { next?: string };
+        error?: { message?: string };
+      };
+
+      if (json.error) {
+        return { ads: Array.from(byAdId.values()), error: json.error.message ?? "Insights error" };
+      }
+
+      const rows = Array.isArray(json.data) ? json.data : [];
+      for (const row of rows) {
+        const adId = String(row.ad_id ?? "").trim();
+        if (!adId) continue;
+        const next: MetaAdInsight = {
+          adId,
+          adName: String(row.ad_name ?? "(Unnamed ad)"),
+          adsetId: row.adset_id ? String(row.adset_id) : null,
+          adsetName: row.adset_name ? String(row.adset_name) : null,
+          campaignId: row.campaign_id ? String(row.campaign_id) : null,
+          campaignName: row.campaign_name ? String(row.campaign_name) : null,
+          spend: parseNumber(row.spend),
+          impressions: parseNumber(row.impressions),
+          reach: parseNumber(row.reach),
+          frequency: parseNullableNumber(row.frequency),
+          clicks: parseNumber(row.clicks),
+          inlineLinkClicks: parseNumber(row.inline_link_clicks),
+          ctr: parseNullableNumber(row.ctr),
+          cpc: parseNullableNumber(row.cpc),
+          cpm: parseNullableNumber(row.cpm),
+          leads: parseLeadActions(row.actions),
+        };
+        byAdId.set(adId, mergeAdInsight(byAdId.get(adId), next));
+      }
+
+      url = json.paging?.next ?? null;
+    }
+
+    return { ads: Array.from(byAdId.values()) };
+  } catch (err) {
+    return {
+      ads: Array.from(byAdId.values()),
+      error: err instanceof Error ? err.message : "Failed to fetch ad insights",
+    };
+  }
+}
+
+/**
+ * Resolve creative thumbnail URLs for Meta ad IDs. Uses Graph `ids=...` to
+ * batch lookups in chunks so the Ads tab does not make one request per row.
+ */
+export async function fetchAdCreativeThumbnails(
+  adIds: string[]
+): Promise<{ thumbnailsByAdId: Record<string, string>; error?: string }> {
+  const token = getAccessToken();
+  if (!token) {
+    return { thumbnailsByAdId: {}, error: "META_ACCESS_TOKEN not configured" };
+  }
+
+  const uniqueAdIds = Array.from(new Set(adIds.map((id) => id.trim()).filter(Boolean)));
+  const thumbnailsByAdId: Record<string, string> = {};
+  const chunkSize = 50;
+
+  try {
+    for (let i = 0; i < uniqueAdIds.length; i += chunkSize) {
+      const chunk = uniqueAdIds.slice(i, i + chunkSize);
+      const params = new URLSearchParams({
+        ids: chunk.join(","),
+        fields: "creative{thumbnail_url}",
+        access_token: token,
+      });
+      const url = `${META_GRAPH}/${META_API_VERSION}/?${params}`;
+      const res = await fetch(url);
+      const json = (await res.json()) as Record<
+        string,
+        { creative?: { thumbnail_url?: string }; error?: { message?: string } }
+      > & { error?: { message?: string } };
+
+      if (json.error) {
+        return {
+          thumbnailsByAdId,
+          error: json.error.message ?? "Creative thumbnail lookup failed",
+        };
+      }
+
+      for (const adId of chunk) {
+        const thumbnail = json[adId]?.creative?.thumbnail_url;
+        if (thumbnail) thumbnailsByAdId[adId] = thumbnail;
+      }
+    }
+
+    return { thumbnailsByAdId };
+  } catch (err) {
+    return {
+      thumbnailsByAdId,
+      error: err instanceof Error ? err.message : "Failed to fetch creative thumbnails",
+    };
+  }
+}
+
 /**
  * Spend for each object at the given insights level over an inclusive date range (YYYY-MM-DD).
  * Paginates all results. Optionally restrict to specific campaign IDs (keyword filter flow).

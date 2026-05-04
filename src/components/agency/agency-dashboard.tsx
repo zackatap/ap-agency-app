@@ -19,6 +19,7 @@ import { LeaderboardTable } from "./leaderboard-table";
 import { RefreshControls } from "./refresh-controls";
 import { ClientBenchmark } from "./client-benchmark";
 import { ClientMap } from "./client-map";
+import { MetaAdsTab } from "./meta-ads-tab";
 import {
   aggregateCampaignWindow,
   aggregateCampaignWindowTopFraction,
@@ -47,7 +48,7 @@ interface Props {
   initialLatest: ClientAgencySnapshot | null;
 }
 
-type DashboardTab = "performance" | "map";
+type DashboardTab = "performance" | "ads" | "map";
 
 const KPI_RATE_METRICS = new Set<DashboardKpiMetric>([
   "bookingRate",
@@ -423,7 +424,7 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
     void fetchRollup(dateRangePreset, customDateFrom, customDateTo, v);
   };
 
-  const campaigns = view?.campaigns ?? [];
+  const campaigns = useMemo(() => view?.campaigns ?? [], [view?.campaigns]);
   const includedCampaigns = useMemo(
     () => campaigns.filter((c) => c.included),
     [campaigns]
@@ -545,7 +546,9 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
           <p className="mt-1 text-sm text-slate-400">
             {activeTab === "performance"
               ? "Performance across every active & 2nd campaign client. Each sheet row is its own campaign; clients with ACTIVE + 2ND CMPN show both pipelines rolled up under their CID."
-              : "Every client from the Client DB sheet plotted on a map. Filter by status to focus the view; each pin is one client even when they have multiple campaigns."}
+              : activeTab === "ads"
+                ? "Ad-level Meta performance across active client ad accounts with recent spend, including creative thumbnails and name-based rollups."
+                : "Every client from the Client DB sheet plotted on a map. Filter by status to focus the view; each pin is one client even when they have multiple campaigns."}
           </p>
         </div>
         {activeTab === "performance" && (
@@ -561,6 +564,7 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
         {(
           [
             { id: "performance", label: "Performance" },
+            { id: "ads", label: "Ads" },
             { id: "map", label: "Client map" },
           ] as Array<{ id: DashboardTab; label: string }>
         ).map((tab) => (
@@ -578,6 +582,8 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
           </button>
         ))}
       </nav>
+
+      {activeTab === "ads" && <MetaAdsTab />}
 
       {activeTab === "map" && <ClientMap />}
 
