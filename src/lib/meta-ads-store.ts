@@ -62,6 +62,15 @@ export interface MetaAdsSnapshot extends MetaAdsSnapshotPayload {
   refreshedAt: string;
 }
 
+export interface MetaAdThumbnailSignature {
+  adId: string;
+  thumbnailUrl: string;
+  sha256: string | null;
+  ahash: string | null;
+  error: string | null;
+  updatedAt: string;
+}
+
 function getDb() {
   const url = process.env.DATABASE_URL;
   if (!url) return null;
@@ -140,6 +149,16 @@ async function ensureSchema(sql: Sql): Promise<void> {
       exclude_tag_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
       enabled BOOLEAN NOT NULL DEFAULT TRUE,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+  await sql`
+    CREATE TABLE IF NOT EXISTS agency_meta_ad_thumbnail_signatures (
+      ad_id TEXT PRIMARY KEY,
+      thumbnail_url TEXT NOT NULL,
+      sha256 TEXT,
+      ahash TEXT,
+      error TEXT,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `;
@@ -224,6 +243,19 @@ function mapTagRollupRule(row: Record<string, unknown>): MetaAdTagRollupRule {
     excludeTagIds: asNumberArray(row.exclude_tag_ids),
     enabled: Boolean(row.enabled),
     createdAt: asIsoString(row.created_at),
+    updatedAt: asIsoString(row.updated_at),
+  };
+}
+
+function mapThumbnailSignature(
+  row: Record<string, unknown>
+): MetaAdThumbnailSignature {
+  return {
+    adId: String(row.ad_id ?? ""),
+    thumbnailUrl: String(row.thumbnail_url ?? ""),
+    sha256: row.sha256 ? String(row.sha256) : null,
+    ahash: row.ahash ? String(row.ahash) : null,
+    error: row.error ? String(row.error) : null,
     updatedAt: asIsoString(row.updated_at),
   };
 }
@@ -528,5 +560,51 @@ export async function deleteMetaAdTagRollup(id: number): Promise<void> {
   await sql`
     DELETE FROM agency_meta_ad_tag_rollups
     WHERE id = ${id}
+  `;
+}
+
+export async function listMetaAdThumbnailSignatures(
+  adIds: string[]
+): Promise<MetaAdThumbnailSignature[]> {
+  const sql = getDb();
+  if (!sql) return [];
+  await ensureSchema(sql);
+  const cleaned = Array.from(new Set(adIds.map((id) => id.trim()).filter(Boolean)));
+  if (cleaned.length === 0) return [];
+  const rows = await sql`
+    SELECT ad_id, thumbnail_url, sha256, ahash, error, updated_at
+    FROM agency_meta_ad_thumbnail_signatures
+    WHERE ad_id = ANY(${cleaned}::text[])
+  `;
+  return rows.map((row) => mapThumbnailSignature(row as Record<string, unknown>));
+}
+
+export async function upsertMetaAdThumbnailSignature(signature: {
+  adId: string;
+  thumbnailUrl: string;
+  sha256?: string | null;
+  ahash?: string | null;
+  error?: string | null;
+}): Promise<void> {
+  const sql = getDb();
+  if (!sql) throw new Error("DATABASE_URL not configured");
+  await ensureSchema(sql);
+  await sql`
+    INSERT INTO agency_meta_ad_thumbnail_signatures (
+      ad_id, thumbnail_url, sha256, ahash, error, updated_at
+    ) VALUES (
+      ${signature.adId},
+      ${signature.thumbnailUrl},
+      ${signature.sha256 ?? null},
+      ${signature.ahash ?? null},
+      ${signature.error ?? null},
+      NOW()
+    )
+    ON CONFLICT (ad_id) DO UPDATE SET
+      thumbnail_url = EXCLUDED.thumbnail_url,
+      sha256 = EXCLUDED.sha256,
+      ahash = EXCLUDED.ahash,
+      error = EXCLUDED.error,
+      updated_at = NOW()
   `;
 }

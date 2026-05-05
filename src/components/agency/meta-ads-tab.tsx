@@ -178,6 +178,22 @@ interface MetaAdsResponse {
   error?: string;
 }
 
+interface ThumbnailMatchGroup {
+  id: string;
+  matchType: "exact" | "similar";
+  label: string;
+  representativeThumbnailUrl: string;
+  maxDistance: number;
+  ads: Array<{
+    adId: string;
+    adName: string;
+    thumbnailUrl: string;
+    adsManagerUrl?: string | null;
+    businessName?: string;
+    spend?: number;
+  }>;
+}
+
 interface AppliedRange {
   preset: DateRangePreset;
   from: string;
@@ -257,6 +273,13 @@ export function MetaAdsTab() {
   );
   const [tagRollupIncludeIds, setTagRollupIncludeIds] = useState<string[]>([]);
   const [tagRollupExcludeIds, setTagRollupExcludeIds] = useState<string[]>([]);
+  const [thumbnailThreshold, setThumbnailThreshold] = useState("8");
+  const [thumbnailGroups, setThumbnailGroups] = useState<ThumbnailMatchGroup[]>([]);
+  const [activeThumbnailGroupId, setActiveThumbnailGroupId] = useState<string | null>(
+    null
+  );
+  const [matchingThumbnails, setMatchingThumbnails] = useState(false);
+  const [thumbnailMatchError, setThumbnailMatchError] = useState<string | null>(null);
   const [selectedAdIds, setSelectedAdIds] = useState<Set<string>>(new Set());
   const [showUntaggedOnly, setShowUntaggedOnly] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("spend");
@@ -644,6 +667,47 @@ export function MetaAdsTab() {
     }
   }
 
+  async function handleFindThumbnailGroups() {
+    setMatchingThumbnails(true);
+    setThumbnailMatchError(null);
+    try {
+      const res = await fetch("/api/agency/meta/thumbnail-groups", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          threshold: Number(thumbnailThreshold),
+          rows: allAdTableRows.map((row) => ({
+            adId: row.adId,
+            adName: row.adName,
+            thumbnailUrl: row.thumbnailUrl,
+            adsManagerUrl: row.adsManagerUrl,
+            businessName: row.businessName,
+            spend: row.spend,
+          })),
+        }),
+      });
+      const json = (await res.json()) as {
+        groups?: ThumbnailMatchGroup[];
+        error?: string;
+      };
+      if (!res.ok) throw new Error(json.error ?? "Failed to match thumbnails");
+      setThumbnailGroups(json.groups ?? []);
+      setActiveThumbnailGroupId(null);
+    } catch (err) {
+      setThumbnailMatchError(
+        err instanceof Error ? err.message : "Failed to match thumbnails"
+      );
+    } finally {
+      setMatchingThumbnails(false);
+    }
+  }
+
+  function selectThumbnailGroup(group: ThumbnailMatchGroup) {
+    const allSelected = group.ads.every((ad) => selectedAdIds.has(ad.adId));
+    toggleManyAds(group.ads.map((ad) => ad.adId));
+    setActiveThumbnailGroupId(allSelected ? null : group.id);
+  }
+
   async function handleRemoveTagFromAd(adId: string, tagId: number) {
     setSavingRollup(true);
     setError(null);
@@ -924,6 +988,21 @@ export function MetaAdsTab() {
               onAddTag={() => void handleAddTag()}
               onApplyTag={() => void handleApplyTagToSelected()}
               onClearSelection={() => setSelectedAdIds(new Set())}
+            />
+
+            <ThumbnailMatchControls
+              groups={thumbnailGroups}
+              threshold={thumbnailThreshold}
+              loading={matchingThumbnails}
+              error={thumbnailMatchError}
+              selectedAdIds={selectedAdIds}
+              activeGroupId={activeThumbnailGroupId}
+              disabled={allAdTableRows.length === 0}
+              onThresholdChange={setThumbnailThreshold}
+              onFind={() => void handleFindThumbnailGroups()}
+              onSelectGroup={selectThumbnailGroup}
+              onReviewGroup={(group) => setActiveThumbnailGroupId(group.id)}
+              onToggleAd={toggleAdSelection}
             />
 
             <RollupPhraseChips
@@ -1214,6 +1293,241 @@ function TagControls({
           Clear
         </button>
       </div>
+    </div>
+  );
+}
+
+function ThumbnailMatchControls({
+  groups,
+  threshold,
+  loading,
+  error,
+  selectedAdIds,
+  activeGroupId,
+  disabled,
+  onThresholdChange,
+  onFind,
+  onSelectGroup,
+  onReviewGroup,
+  onToggleAd,
+}: {
+  groups: ThumbnailMatchGroup[];
+  threshold: string;
+  loading: boolean;
+  error: string | null;
+  selectedAdIds: Set<string>;
+  activeGroupId: string | null;
+  disabled: boolean;
+  onThresholdChange: (value: string) => void;
+  onFind: () => void;
+  onSelectGroup: (group: ThumbnailMatchGroup) => void;
+  onReviewGroup: (group: ThumbnailMatchGroup) => void;
+  onToggleAd: (adId: string) => void;
+}) {
+  const activeGroup = groups.find((group) => group.id === activeGroupId) ?? null;
+  return (
+    <div className="space-y-3 rounded-xl border border-white/10 bg-slate-900/30 p-3 text-sm">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+            Thumbnail matcher
+          </div>
+          <div className="mt-1 text-xs text-slate-500">
+            Find exact and very similar creative thumbnails, select a group, then apply
+            tags in bulk above.
+          </div>
+        </div>
+        <div className="flex flex-wrap items-end gap-2">
+          <div>
+            <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">
+              Similarity
+            </label>
+            <select
+              value={threshold}
+              onChange={(e) => onThresholdChange(e.target.value)}
+              disabled={loading}
+              className="rounded-lg border border-white/10 bg-slate-950/60 px-3 py-2 text-slate-100 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+            >
+              <option value="4" className="bg-slate-900">
+                Strict
+              </option>
+              <option value="8" className="bg-slate-900">
+                Balanced
+              </option>
+              <option value="12" className="bg-slate-900">
+                Loose
+              </option>
+            </select>
+          </div>
+          <button
+            type="button"
+            onClick={onFind}
+            disabled={disabled || loading}
+            className="rounded-lg bg-slate-800 px-3 py-2 font-medium text-slate-100 transition-colors hover:bg-slate-700 disabled:opacity-50"
+          >
+            {loading ? "Matching..." : "Find matches"}
+          </button>
+        </div>
+      </div>
+
+      {error ? (
+        <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-100">
+          {error}
+        </div>
+      ) : null}
+
+      {groups.length > 0 ? (
+        <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
+          {groups.slice(0, 12).map((group) => {
+            const selectedCount = group.ads.filter((ad) =>
+              selectedAdIds.has(ad.adId)
+            ).length;
+            return (
+              <div
+                key={group.id}
+                className="flex gap-3 rounded-xl border border-white/10 bg-slate-950/40 p-3"
+              >
+                <div
+                  className="h-16 w-16 shrink-0 rounded-lg border border-white/10 bg-cover bg-center"
+                  style={{
+                    backgroundImage: `url("${group.representativeThumbnailUrl}")`,
+                  }}
+                />
+                <div className="min-w-0 flex-1">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span
+                      className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                        group.matchType === "exact"
+                          ? "border-emerald-400/30 bg-emerald-500/15 text-emerald-100"
+                          : "border-sky-400/30 bg-sky-500/15 text-sky-100"
+                      }`}
+                    >
+                      {group.matchType}
+                    </span>
+                    <span className="text-xs text-slate-400">
+                      {formatCount(group.ads.length)} ads
+                      {group.matchType === "similar"
+                        ? `, max distance ${group.maxDistance}`
+                        : ""}
+                    </span>
+                  </div>
+                  <div className="mt-2 space-y-1">
+                    {group.ads.slice(0, 3).map((ad) => (
+                      <div key={ad.adId} className="truncate text-xs text-slate-300">
+                        {ad.adName}
+                        {typeof ad.spend === "number" ? (
+                          <span className="text-slate-500">
+                            {" "}
+                            ({formatMoney(ad.spend)})
+                          </span>
+                        ) : null}
+                      </div>
+                    ))}
+                    {group.ads.length > 3 ? (
+                      <div className="text-xs text-slate-500">
+                        +{formatCount(group.ads.length - 3)} more
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => onSelectGroup(group)}
+                  className="self-start rounded-lg border border-white/10 bg-slate-800/70 px-3 py-2 text-xs font-medium text-slate-100 transition-colors hover:bg-slate-700"
+                >
+                  {selectedCount === group.ads.length ? "Unselect" : "Select"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onReviewGroup(group)}
+                  className={`self-start rounded-lg border px-3 py-2 text-xs font-medium transition-colors ${
+                    activeGroupId === group.id
+                      ? "border-indigo-400/40 bg-indigo-500/20 text-indigo-100"
+                      : "border-white/10 bg-slate-800/70 text-slate-100 hover:bg-slate-700"
+                  }`}
+                >
+                  Review
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="text-xs text-slate-500">
+          Run matching to surface duplicate or near-duplicate thumbnail groups.
+        </div>
+      )}
+
+      {activeGroup ? (
+        <div className="rounded-xl border border-indigo-400/20 bg-indigo-500/5 p-3">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-wide text-indigo-100">
+                Reviewing {activeGroup.matchType} match group
+              </div>
+              <div className="mt-1 text-xs text-slate-400">
+                {formatCount(activeGroup.ads.length)} thumbnails. Click any item to
+                remove or re-add it before applying tags.
+              </div>
+            </div>
+            <div className="text-xs text-slate-500">
+              {formatCount(
+                activeGroup.ads.filter((ad) => selectedAdIds.has(ad.adId)).length
+              )}{" "}
+              selected
+            </div>
+          </div>
+          <div className="mt-3 grid max-h-[28rem] grid-cols-2 gap-2 overflow-y-auto pr-1 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6">
+            {activeGroup.ads.map((ad) => {
+              const selected = selectedAdIds.has(ad.adId);
+              return (
+                <div
+                  key={ad.adId}
+                  className={`group rounded-xl border p-2 text-left transition-colors ${
+                    selected
+                      ? "border-indigo-400/40 bg-indigo-500/15"
+                      : "border-white/10 bg-slate-950/50 opacity-50 hover:opacity-80"
+                  }`}
+                  title={ad.adName}
+                >
+                  <button
+                    type="button"
+                    onClick={() => onToggleAd(ad.adId)}
+                    className="block w-full text-left"
+                  >
+                    <div
+                      className="aspect-square rounded-lg border border-white/10 bg-cover bg-center"
+                      style={{ backgroundImage: `url("${ad.thumbnailUrl}")` }}
+                    />
+                    <div className="mt-2 line-clamp-2 text-xs text-slate-200">
+                      {ad.adName}
+                    </div>
+                    <div className="mt-1 truncate text-[10px] text-slate-500">
+                      {ad.businessName ?? ad.adId}
+                    </div>
+                  </button>
+                  <div className="mt-2 flex items-center justify-between gap-2">
+                    <span className="text-[10px] uppercase tracking-wide text-slate-500">
+                      {selected ? "Selected" : "Excluded"}
+                    </span>
+                    {ad.adsManagerUrl ? (
+                      <a
+                        href={ad.adsManagerUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="rounded border border-white/10 bg-slate-800/70 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-slate-300 transition-colors hover:border-indigo-400/50 hover:text-indigo-200"
+                        title="Open ad in Meta Ads Manager"
+                      >
+                        Open
+                      </a>
+                    ) : null}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
