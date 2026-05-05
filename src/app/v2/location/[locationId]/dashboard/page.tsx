@@ -159,6 +159,24 @@ export default function ConversionsDashboard() {
     | "cpClose"
     | "closePercent"
     | "closedValue";
+  interface AttributionContactDetail {
+    contactId: string | null;
+    name: string;
+    bucket: string;
+    stageName: string;
+    value: number;
+    attribution: {
+      utmSource: string;
+      utmMedium: string;
+      utmContent: string;
+      utmCampaign: string;
+    };
+    metaIds: {
+      campaignId: string;
+      adSetId: string;
+      adId: string;
+    };
+  }
   interface AttributionBreakdownRow {
     key: string;
     leads: number;
@@ -175,6 +193,7 @@ export default function ConversionsDashboard() {
     showRate: number | null;
     closedPerShowed: number | null;
     spend: number | null;
+    contacts?: AttributionContactDetail[];
   }
   interface AttributionApiResponse {
     pipeline: { id: string; name: string } | null;
@@ -208,6 +227,8 @@ export default function ConversionsDashboard() {
   const [attributionSortDir, setAttributionSortDir] = useState<"asc" | "desc">(
     "desc"
   );
+  const [attributionDrillDown, setAttributionDrillDown] =
+    useState<AttributionBreakdownRow | null>(null);
 
   const attributionRolledRows = useMemo(() => {
     const rows = attributionData?.rows ?? [];
@@ -297,6 +318,14 @@ export default function ConversionsDashboard() {
       return dir === "desc" ? bn - an : an - bn;
     });
   }, [attributionRolledRows, attributionSortKey, attributionSortDir]);
+
+  const attributionContactsByKey = useMemo(() => {
+    const map = new Map<string, AttributionContactDetail[]>();
+    for (const row of attributionData?.rows ?? []) {
+      map.set(row.key, row.contacts ?? []);
+    }
+    return map;
+  }, [attributionData?.rows]);
 
   const handleAttributionSort = (sk: AttributionSortKey) => {
     if (sk === attributionSortKey) {
@@ -1327,9 +1356,21 @@ export default function ConversionsDashboard() {
                                 ? "min-w-[220px] max-w-md whitespace-pre-wrap break-words lg:max-w-lg"
                                 : "max-w-[min(380px,32vw)] truncate"
                             }`}
-                            title={row.key}
+                            title={`${row.key} - click to view contacts`}
                           >
-                            {row.key}
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setAttributionDrillDown({
+                                  ...row,
+                                  spend: row.spend ?? null,
+                                  contacts: attributionContactsByKey.get(row.key) ?? [],
+                                })
+                              }
+                              className="rounded px-1 py-0.5 text-left text-indigo-300 underline decoration-dotted underline-offset-2 transition hover:bg-indigo-500/20 hover:text-white"
+                            >
+                              {row.key}
+                            </button>
                           </td>
                           <td className="px-2 py-2.5 text-right tabular-nums text-slate-300">
                             {row.spend != null ? fmtUsd(row.spend) : "—"}
@@ -1910,6 +1951,117 @@ export default function ConversionsDashboard() {
               </div>
             </div>
           </details>
+        )}
+
+        {attributionDrillDown && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+            onClick={() => setAttributionDrillDown(null)}
+          >
+            <div
+              className="max-h-[80vh] w-full max-w-2xl rounded-xl border border-white/10 bg-slate-900 shadow-xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="flex items-start justify-between gap-4 border-b border-white/10 px-4 py-3">
+                <div className="min-w-0">
+                  <h3 className="font-semibold text-white">
+                    Contacts - {attributionDrillDown.key}
+                  </h3>
+                  <p className="mt-1 text-xs text-slate-500">
+                    {(attributionDrillDown.contacts ?? []).length} contacts in this row
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAttributionDrillDown(null)}
+                  className="text-slate-400 hover:text-white"
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="max-h-[60vh] overflow-y-auto p-4">
+                {(attributionDrillDown.contacts ?? []).length > 0 ? (
+                  <div className="space-y-4">
+                    {Object.entries(
+                      (attributionDrillDown.contacts ?? []).reduce<
+                        Record<string, AttributionContactDetail[]>
+                      >((groups, contact) => {
+                        const label = mappingLabel(contact.bucket);
+                        groups[label] = groups[label] ?? [];
+                        groups[label].push(contact);
+                        return groups;
+                      }, {})
+                    ).map(([stageLabel, contacts]) => (
+                      <div key={stageLabel}>
+                        <p className="mb-1.5 font-medium text-slate-200">
+                          {stageLabel}
+                        </p>
+                        <ul className="space-y-2 text-sm text-slate-300">
+                          {contacts.map((contact, i) => (
+                            <li
+                              key={`${contact.contactId ?? "no-contact"}-${i}`}
+                              className="rounded-lg border border-white/10 bg-white/5 px-3 py-2"
+                            >
+                              <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+                                <span className="font-medium text-slate-100">
+                                  {contact.name}
+                                </span>
+                                <span className="text-xs text-slate-500">
+                                  Stage: {contact.stageName}
+                                </span>
+                              </div>
+                              <div className="mt-1 grid gap-x-4 gap-y-1 text-xs text-slate-400 sm:grid-cols-2">
+                                <span>
+                                  Contact ID:{" "}
+                                  <code className="text-slate-300">
+                                    {contact.contactId ?? "missing"}
+                                  </code>
+                                </span>
+                                <span>
+                                  Value:{" "}
+                                  <span className="text-slate-300">
+                                    {contact.value > 0
+                                      ? `$${contact.value.toLocaleString()}`
+                                      : "-"}
+                                  </span>
+                                </span>
+                                <span>
+                                  Campaign ID:{" "}
+                                  <code className="text-slate-300">
+                                    {contact.metaIds.campaignId || "missing"}
+                                  </code>
+                                </span>
+                                <span>
+                                  Ad set ID:{" "}
+                                  <code className="text-slate-300">
+                                    {contact.metaIds.adSetId || "missing"}
+                                  </code>
+                                </span>
+                                <span>
+                                  Ad ID:{" "}
+                                  <code className="text-slate-300">
+                                    {contact.metaIds.adId || "missing"}
+                                  </code>
+                                </span>
+                                <span>
+                                  UTM content:{" "}
+                                  <code className="text-slate-300">
+                                    {contact.attribution.utmContent || "missing"}
+                                  </code>
+                                </span>
+                              </div>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-slate-500">No contacts found for this row.</p>
+                )}
+              </div>
+            </div>
+          </div>
         )}
       </div>
     </div>

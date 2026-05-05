@@ -43,6 +43,16 @@ export interface ContactMetaIds {
   adId: string;
 }
 
+export interface AttributionContactDetail {
+  contactId: string | null;
+  name: string;
+  bucket: string;
+  stageName: string;
+  value: number;
+  attribution: ContactAttributionFields;
+  metaIds: ContactMetaIds;
+}
+
 export interface AttributionBreakdownRow {
   key: string;
   leads: number;
@@ -63,6 +73,8 @@ export interface AttributionBreakdownRow {
   closedPerShowed: number | null;
   /** Facebook spend for this row’s Meta IDs in the report date range (server-filled). */
   spend: number | null;
+  /** Contacts/opportunities that make up this row, used by dashboard drill-downs. */
+  contacts: AttributionContactDetail[];
 }
 
 /** Internal until spend is merged; stripped before API response. */
@@ -373,6 +385,7 @@ type RowAgg = {
   adIds: Set<string>;
   adSetIds: Set<string>;
   campaignIds: Set<string>;
+  contacts: AttributionContactDetail[];
 };
 
 function emptyRowAgg(): RowAgg {
@@ -390,6 +403,7 @@ function emptyRowAgg(): RowAgg {
     adIds: new Set(),
     adSetIds: new Set(),
     campaignIds: new Set(),
+    contacts: [],
   };
 }
 
@@ -471,6 +485,7 @@ function finalizeRow(
     showRate,
     closedPerShowed,
     spend: null,
+    contacts: row.contacts,
     spendJoinIds,
   };
 }
@@ -581,8 +596,10 @@ export async function getAttributionBreakdown(params: {
   const seenOpp = new Set<string>();
   const inRange: Array<{
     contactId: string | null;
+    name: string;
     value: number;
     bucket: string;
+    stageName: string;
   }> = [];
   const aggregateCounts: Record<string, number> = {};
   const aggregateValues: Record<string, number> = {};
@@ -664,8 +681,13 @@ export async function getAttributionBreakdown(params: {
 
       inRange.push({
         contactId: cid,
+        name:
+          ((opp.name as string) ??
+            ((opp as Record<string, unknown>).opportunityName as string) ??
+            `Opportunity ${opp.id}`) || `Opportunity ${opp.id}`,
         value: val,
         bucket,
+        stageName,
       });
     }
 
@@ -708,6 +730,15 @@ export async function getAttributionBreakdown(params: {
     }
     addToRow(acc, row.bucket, row.value);
     addMetaIdsToRow(acc, metaIds);
+    acc.contacts.push({
+      contactId: row.contactId,
+      name: row.name,
+      bucket: row.bucket,
+      stageName: row.stageName,
+      value: Math.round(row.value * 100) / 100,
+      attribution: fields,
+      metaIds,
+    });
   }
 
   const rows = [...agg.entries()]
