@@ -429,6 +429,8 @@ export interface AttributionBreakdownRowRollup {
   closedPerShowed: number | null;
   /** Facebook spend for the row (unchanged by rollup; cost-per uses rolled counts). */
   spend?: number | null;
+  /** How spend joined to Meta insights. */
+  spendMatch?: "id" | "name" | null;
 }
 
 /**

@@ -14,9 +14,11 @@ import {
   type AttributionDimension,
 } from "@/lib/ghl-attribution";
 import {
+  fetchAdInsights,
   fetchCampaigns,
   fetchSpendByInsightsLevel,
   normalizeAdAccountId,
+  type MetaAdInsight,
   type MetaInsightsLevel,
 } from "@/lib/facebook-ads";
 
@@ -51,6 +53,74 @@ function mergeSpendIntoRows(
     return {
       ...rest,
       spend: any ? Math.round(total * 100) / 100 : null,
+      spendMatch: any ? "id" : null,
+    };
+  });
+}
+
+function normalizeJoinLabel(value: string): string {
+  return value
+    .replace(/\u00a0/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .toLowerCase();
+}
+
+function mergeAdSpendIntoRows(
+  rows: AttributionBreakdownRowInternal[],
+  ads: MetaAdInsight[]
+): AttributionBreakdownRow[] {
+  return rows.map((r) => {
+    const { spendJoinIds, ...rest } = r;
+
+    let total = 0;
+    let any = false;
+    for (const id of spendJoinIds) {
+      const ad = ads.find((a) => a.adId === id);
+      if (ad) {
+        total += ad.spend;
+        any = true;
+      }
+    }
+
+    if (any) {
+      return {
+        ...rest,
+        spend: Math.round(total * 100) / 100,
+        spendMatch: "id",
+      };
+    }
+
+    const rowName = normalizeJoinLabel(r.key);
+    if (!rowName || rowName === "(unknown)") {
+      return { ...rest, spend: null, spendMatch: null };
+    }
+
+    const adSetIds = new Set(
+      r.contacts.map((c) => c.metaIds.adSetId).filter(Boolean)
+    );
+    const campaignIds = new Set(
+      r.contacts.map((c) => c.metaIds.campaignId).filter(Boolean)
+    );
+
+    const matchingAds = ads.filter((ad) => {
+      if (normalizeJoinLabel(ad.adName) !== rowName) return false;
+      if (adSetIds.size > 0) return !!ad.adsetId && adSetIds.has(ad.adsetId);
+      if (campaignIds.size > 0) {
+        return !!ad.campaignId && campaignIds.has(ad.campaignId);
+      }
+      return true;
+    });
+
+    if (matchingAds.length === 0) {
+      return { ...rest, spend: null, spendMatch: null };
+    }
+
+    const fallbackSpend = matchingAds.reduce((sum, ad) => sum + ad.spend, 0);
+    return {
+      ...rest,
+      spend: Math.round(fallbackSpend * 100) / 100,
+      spendMatch: "name",
     };
   });
 }
@@ -172,7 +242,21 @@ export async function GET(
         metaSpendError = `No campaigns match keyword "${campaignKeyword}"`;
       }
 
-      if (!metaSpendError) {
+      if (!metaSpendError && dimension === "content") {
+        const { ads, error: adsErr } = await fetchAdInsights(
+          normalizedAccount,
+          dateRange.startDate,
+          dateRange.endDate,
+          campaignIdsForFilter?.length
+            ? { campaignIds: campaignIdsForFilter }
+            : undefined
+        );
+        if (adsErr) {
+          metaSpendError = adsErr;
+        } else {
+          rows = mergeAdSpendIntoRows(rowsInternal, ads);
+        }
+      } else if (!metaSpendError) {
         const { spendByObjectId, error: spendErr } =
           await fetchSpendByInsightsLevel(
             normalizedAccount,

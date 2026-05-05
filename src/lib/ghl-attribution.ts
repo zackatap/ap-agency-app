@@ -73,6 +73,8 @@ export interface AttributionBreakdownRow {
   closedPerShowed: number | null;
   /** Facebook spend for this row’s Meta IDs in the report date range (server-filled). */
   spend: number | null;
+  /** How spend was joined to Meta insights, useful when debugging missing ad IDs. */
+  spendMatch: "id" | "name" | null;
   /** Contacts/opportunities that make up this row, used by dashboard drill-downs. */
   contacts: AttributionContactDetail[];
 }
@@ -485,6 +487,7 @@ function finalizeRow(
     showRate,
     closedPerShowed,
     spend: null,
+    spendMatch: null,
     contacts: row.contacts,
     spendJoinIds,
   };

@@ -193,6 +193,7 @@ export default function ConversionsDashboard() {
     showRate: number | null;
     closedPerShowed: number | null;
     spend: number | null;
+    spendMatch?: "id" | "name" | null;
     contacts?: AttributionContactDetail[];
   }
   interface AttributionApiResponse {
@@ -1364,6 +1365,7 @@ export default function ConversionsDashboard() {
                                 setAttributionDrillDown({
                                   ...row,
                                   spend: row.spend ?? null,
+                                  spendMatch: row.spendMatch ?? null,
                                   contacts: attributionContactsByKey.get(row.key) ?? [],
                                 })
                               }
@@ -1969,6 +1971,9 @@ export default function ConversionsDashboard() {
                   </h3>
                   <p className="mt-1 text-xs text-slate-500">
                     {(attributionDrillDown.contacts ?? []).length} contacts in this row
+                    {attributionDrillDown.spendMatch
+                      ? ` - Spend matched by ${attributionDrillDown.spendMatch === "id" ? "ad ID" : "ad name"}`
+                      : ""}
                   </p>
                 </div>
                 <button
