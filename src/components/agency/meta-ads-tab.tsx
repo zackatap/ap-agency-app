@@ -194,6 +194,11 @@ interface ThumbnailMatchGroup {
   }>;
 }
 
+interface SelectedTagSummary {
+  tag: MetaAdsTag;
+  count: number;
+}
+
 interface AppliedRange {
   preset: DateRangePreset;
   from: string;
@@ -455,6 +460,21 @@ export function MetaAdsTab() {
     return ids.size;
   }, [tableRows]);
   const selectedCount = selectedAdIds.size;
+  const selectedTagSummary = useMemo<SelectedTagSummary[]>(() => {
+    if (selectedAdIds.size === 0) return [];
+    const counts = new Map<number, { tag: MetaAdsTag; count: number }>();
+    for (const row of allAdTableRows) {
+      if (!selectedAdIds.has(row.adId)) continue;
+      for (const tag of row.tags) {
+        const current = counts.get(tag.id) ?? { tag, count: 0 };
+        current.count += 1;
+        counts.set(tag.id, current);
+      }
+    }
+    return Array.from(counts.values()).sort(
+      (a, b) => b.count - a.count || a.tag.name.localeCompare(b.tag.name)
+    );
+  }, [allAdTableRows, selectedAdIds]);
   const visibleSelectedCount = visibleAdIds.filter((adId) =>
     selectedAdIds.has(adId)
   ).length;
@@ -980,6 +1000,7 @@ export function MetaAdsTab() {
             <TagControls
               tags={data.tags}
               selectedCount={selectedCount}
+              selectedTagSummary={selectedTagSummary}
               bulkTagId={bulkTagId}
               newTagName={newTagName}
               disabled={savingRollup}
@@ -1198,6 +1219,7 @@ function RollupPhraseChips({
 function TagControls({
   tags,
   selectedCount,
+  selectedTagSummary,
   bulkTagId,
   newTagName,
   disabled,
@@ -1209,6 +1231,7 @@ function TagControls({
 }: {
   tags: MetaAdsTag[];
   selectedCount: number;
+  selectedTagSummary: SelectedTagSummary[];
   bulkTagId: string;
   newTagName: string;
   disabled: boolean;
@@ -1227,6 +1250,28 @@ function TagControls({
         <div className="mt-1 text-xs text-slate-500">
           Select ads, apply one or more labels, and keep the selection active while tagging.
         </div>
+        {selectedCount > 0 ? (
+          <div className="mt-2 flex max-w-xl flex-wrap items-center gap-1.5">
+            {selectedTagSummary.length > 0 ? (
+              selectedTagSummary.map(({ tag, count }) => (
+                <span
+                  key={tag.id}
+                  className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-medium ${getTagColorClasses(tag.id)}`}
+                  title={`${tag.name} is applied to ${count} of ${selectedCount} selected ads`}
+                >
+                  <span>{tag.name}</span>
+                  <span className="opacity-70">
+                    {count}/{selectedCount}
+                  </span>
+                </span>
+              ))
+            ) : (
+              <span className="rounded-full border border-white/10 bg-slate-800/60 px-2 py-1 text-[10px] text-slate-400">
+                No tags on selected ads yet
+              </span>
+            )}
+          </div>
+        ) : null}
       </div>
       <div className="flex flex-wrap items-end gap-2">
         <div>
