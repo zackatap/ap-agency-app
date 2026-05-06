@@ -475,13 +475,17 @@ export function MetaAdsTab() {
       (a, b) => b.count - a.count || a.tag.name.localeCompare(b.tag.name)
     );
   }, [allAdTableRows, selectedAdIds]);
+  const untaggedAdRows = useMemo(
+    () => allAdTableRows.filter((row) => row.tags.length === 0),
+    [allAdTableRows]
+  );
   const visibleSelectedCount = visibleAdIds.filter((adId) =>
     selectedAdIds.has(adId)
   ).length;
   const allVisibleSelected =
     visibleAdIds.length > 0 && visibleSelectedCount === visibleAdIds.length;
   const someVisibleSelected = visibleSelectedCount > 0 && !allVisibleSelected;
-  const untaggedCount = allAdTableRows.filter((row) => row.tags.length === 0).length;
+  const untaggedCount = untaggedAdRows.length;
   const loading = loadingCache || refreshing;
   const currentRangeLabel = data?.range
     ? `${data.range.startDate} -> ${data.range.endDate}`
@@ -696,7 +700,7 @@ export function MetaAdsTab() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           threshold: Number(thumbnailThreshold),
-          rows: allAdTableRows.map((row) => ({
+          rows: untaggedAdRows.map((row) => ({
             adId: row.adId,
             adName: row.adName,
             thumbnailUrl: row.thumbnailUrl,
@@ -1016,10 +1020,10 @@ export function MetaAdsTab() {
               threshold={thumbnailThreshold}
               loading={matchingThumbnails}
               error={thumbnailMatchError}
-              allAdRows={allAdTableRows}
+              allAdRows={untaggedAdRows}
               selectedAdIds={selectedAdIds}
               activeGroupId={activeThumbnailGroupId}
-              disabled={allAdTableRows.length === 0}
+              disabled={untaggedAdRows.length === 0}
               onThresholdChange={setThumbnailThreshold}
               onFind={() => void handleFindThumbnailGroups()}
               onSelectGroup={selectThumbnailGroup}
@@ -1375,11 +1379,22 @@ function ThumbnailMatchControls({
   onToggleAd: (adId: string) => void;
   onRemoveTag: (adId: string, tagId: number) => void;
 }) {
-  const activeGroup = groups.find((group) => group.id === activeGroupId) ?? null;
   const rowsByAdId = useMemo(
     () => new Map(allAdRows.map((row) => [row.adId, row])),
     [allAdRows]
   );
+  const untaggedGroups = useMemo(
+    () =>
+      groups
+        .map((group) => ({
+          ...group,
+          ads: group.ads.filter((ad) => rowsByAdId.has(ad.adId)),
+        }))
+        .filter((group) => group.ads.length > 1),
+    [groups, rowsByAdId]
+  );
+  const activeGroup =
+    untaggedGroups.find((group) => group.id === activeGroupId) ?? null;
   const activeGroupRows =
     activeGroup?.ads
       .map((ad) => rowsByAdId.get(ad.adId))
@@ -1392,8 +1407,8 @@ function ThumbnailMatchControls({
             Thumbnail matcher
           </div>
           <div className="mt-1 text-xs text-slate-500">
-            Find exact and very similar creative thumbnails, select a group, then apply
-            tags in bulk above.
+            Find exact and very similar untagged creative thumbnails, select a group,
+            then apply tags in bulk above.
           </div>
         </div>
         <div className="flex flex-wrap items-end gap-2">
@@ -1435,9 +1450,9 @@ function ThumbnailMatchControls({
         </div>
       ) : null}
 
-      {groups.length > 0 ? (
+      {untaggedGroups.length > 0 ? (
         <div className="grid grid-cols-1 gap-2 lg:grid-cols-2">
-          {groups.slice(0, 12).map((group) => {
+          {untaggedGroups.slice(0, 12).map((group) => {
             const selectedCount = group.ads.filter((ad) =>
               selectedAdIds.has(ad.adId)
             ).length;
@@ -1513,7 +1528,7 @@ function ThumbnailMatchControls({
         </div>
       ) : (
         <div className="text-xs text-slate-500">
-          Run matching to surface duplicate or near-duplicate thumbnail groups.
+          Run matching to surface duplicate or near-duplicate untagged thumbnail groups.
         </div>
       )}
 
