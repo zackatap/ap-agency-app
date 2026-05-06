@@ -1016,6 +1016,7 @@ export function MetaAdsTab() {
               threshold={thumbnailThreshold}
               loading={matchingThumbnails}
               error={thumbnailMatchError}
+              allAdRows={allAdTableRows}
               selectedAdIds={selectedAdIds}
               activeGroupId={activeThumbnailGroupId}
               disabled={allAdTableRows.length === 0}
@@ -1024,6 +1025,7 @@ export function MetaAdsTab() {
               onSelectGroup={selectThumbnailGroup}
               onReviewGroup={(group) => setActiveThumbnailGroupId(group.id)}
               onToggleAd={toggleAdSelection}
+              onRemoveTag={handleRemoveTagFromAd}
             />
 
             <RollupPhraseChips
@@ -1347,6 +1349,7 @@ function ThumbnailMatchControls({
   threshold,
   loading,
   error,
+  allAdRows,
   selectedAdIds,
   activeGroupId,
   disabled,
@@ -1355,11 +1358,13 @@ function ThumbnailMatchControls({
   onSelectGroup,
   onReviewGroup,
   onToggleAd,
+  onRemoveTag,
 }: {
   groups: ThumbnailMatchGroup[];
   threshold: string;
   loading: boolean;
   error: string | null;
+  allAdRows: AdTableRow[];
   selectedAdIds: Set<string>;
   activeGroupId: string | null;
   disabled: boolean;
@@ -1368,8 +1373,17 @@ function ThumbnailMatchControls({
   onSelectGroup: (group: ThumbnailMatchGroup) => void;
   onReviewGroup: (group: ThumbnailMatchGroup) => void;
   onToggleAd: (adId: string) => void;
+  onRemoveTag: (adId: string, tagId: number) => void;
 }) {
   const activeGroup = groups.find((group) => group.id === activeGroupId) ?? null;
+  const rowsByAdId = useMemo(
+    () => new Map(allAdRows.map((row) => [row.adId, row])),
+    [allAdRows]
+  );
+  const activeGroupRows =
+    activeGroup?.ads
+      .map((ad) => rowsByAdId.get(ad.adId))
+      .filter((row): row is AdTableRow => Boolean(row)) ?? [];
   return (
     <div className="space-y-3 rounded-xl border border-white/10 bg-slate-900/30 p-3 text-sm">
       <div className="flex flex-wrap items-end justify-between gap-3">
@@ -1511,65 +1525,35 @@ function ThumbnailMatchControls({
                 Reviewing {activeGroup.matchType} match group
               </div>
               <div className="mt-1 text-xs text-slate-400">
-                {formatCount(activeGroup.ads.length)} thumbnails. Click any item to
-                remove or re-add it before applying tags.
+                {formatCount(activeGroupRows.length)} ads. Use the row checkboxes to
+                remove or re-add ads before applying tags; tag pills can be removed live.
               </div>
             </div>
             <div className="text-xs text-slate-500">
               {formatCount(
-                activeGroup.ads.filter((ad) => selectedAdIds.has(ad.adId)).length
+                activeGroupRows.filter((row) => selectedAdIds.has(row.adId)).length
               )}{" "}
               selected
             </div>
           </div>
-          <div className="mt-3 grid max-h-[28rem] grid-cols-2 gap-2 overflow-y-auto pr-1 sm:grid-cols-3 md:grid-cols-4 xl:grid-cols-6">
-            {activeGroup.ads.map((ad) => {
-              const selected = selectedAdIds.has(ad.adId);
-              return (
-                <div
-                  key={ad.adId}
-                  className={`group rounded-xl border p-2 text-left transition-colors ${
-                    selected
-                      ? "border-indigo-400/40 bg-indigo-500/15"
-                      : "border-white/10 bg-slate-950/50 opacity-50 hover:opacity-80"
-                  }`}
-                  title={ad.adName}
-                >
-                  <button
-                    type="button"
-                    onClick={() => onToggleAd(ad.adId)}
-                    className="block w-full text-left"
-                  >
-                    <div
-                      className="aspect-square rounded-lg border border-white/10 bg-cover bg-center"
-                      style={{ backgroundImage: `url("${ad.thumbnailUrl}")` }}
-                    />
-                    <div className="mt-2 line-clamp-2 text-xs text-slate-200">
-                      {ad.adName}
-                    </div>
-                    <div className="mt-1 truncate text-[10px] text-slate-500">
-                      {ad.businessName ?? ad.adId}
-                    </div>
-                  </button>
-                  <div className="mt-2 flex items-center justify-between gap-2">
-                    <span className="text-[10px] uppercase tracking-wide text-slate-500">
-                      {selected ? "Selected" : "Excluded"}
-                    </span>
-                    {ad.adsManagerUrl ? (
-                      <a
-                        href={ad.adsManagerUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="rounded border border-white/10 bg-slate-800/70 px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-slate-300 transition-colors hover:border-indigo-400/50 hover:text-indigo-200"
-                        title="Open ad in Meta Ads Manager"
-                      >
-                        Open
-                      </a>
-                    ) : null}
-                  </div>
-                </div>
-              );
-            })}
+          <div className="mt-3 max-h-[34rem] overflow-auto rounded-xl border border-white/10 bg-slate-950/40">
+            <table className="w-[2550px] min-w-full table-fixed border-separate border-spacing-0 divide-y divide-white/5 text-sm">
+              <MetaAdsTableColGroup />
+              <thead>
+                <ThumbnailReviewHeader />
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {activeGroupRows.map((row) => (
+                  <MetaAdTableRow
+                    key={`thumbnail-review-${row.rowKey}`}
+                    row={row}
+                    selected={selectedAdIds.has(row.adId)}
+                    onToggleSelected={() => onToggleAd(row.adId)}
+                    onRemoveTag={onRemoveTag}
+                  />
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       ) : null}
@@ -1790,6 +1774,46 @@ function MetaAdsTableColGroup() {
       <col className="w-[110px]" />
       <col className="w-[110px]" />
     </colgroup>
+  );
+}
+
+function ThumbnailReviewHeader() {
+  return (
+    <tr className="text-left text-xs uppercase tracking-wide text-slate-400">
+      <th className="sticky left-0 z-30 border-b border-white/10 bg-slate-900 px-3 py-3 font-semibold shadow-[4px_0_12px_-4px_rgba(0,0,0,0.45)]">
+        Ad
+      </th>
+      <th className="border-b border-white/10 bg-slate-900 px-3 py-3 font-semibold">
+        Tags
+      </th>
+      <th className="border-b border-white/10 bg-slate-900 px-3 py-3 font-semibold">
+        Client
+      </th>
+      <th className="border-b border-white/10 bg-slate-900 px-3 py-3 font-semibold">
+        Campaign
+      </th>
+      <th className="border-b border-white/10 bg-slate-900 px-3 py-3 font-semibold">
+        Ad set
+      </th>
+      {[
+        "Spend",
+        "Impr.",
+        "Reach",
+        "Link clicks",
+        "CTR",
+        "CPC",
+        "CPM",
+        "Leads",
+        "CPL",
+      ].map((label) => (
+        <th
+          key={label}
+          className="border-b border-white/10 bg-slate-900 px-3 py-3 text-right font-semibold"
+        >
+          {label}
+        </th>
+      ))}
+    </tr>
   );
 }
 
