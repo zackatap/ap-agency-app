@@ -149,11 +149,20 @@ type AdTableRow = {
   matchingRollups: MetaAdsRollup[];
   matchingTagRollups: MetaAdsTagRollup[];
   tags: MetaAdsTag[];
+  pendingTags: MetaAdsTag[];
 } & MetaAdsRow;
 
 interface MetaAdsResponse {
   snapshot?: { id: number } | null;
   cached: boolean;
+  cacheCoverage?: {
+    startDate: string | null;
+    endDate: string | null;
+    requestedStartDate: string;
+    requestedEndDate: string;
+    missingDates: string[];
+    source: "daily" | "snapshot" | "mixed" | "none";
+  };
   range?: MetaAdsRange;
   recentSpendMonths?: number;
   accountCount?: number;
@@ -198,6 +207,8 @@ interface SelectedTagSummary {
   tag: MetaAdsTag;
   count: number;
 }
+
+type PendingTagIdsByAd = Record<string, number[]>;
 
 interface AppliedRange {
   preset: DateRangePreset;
@@ -286,6 +297,7 @@ export function MetaAdsTab() {
   const [matchingThumbnails, setMatchingThumbnails] = useState(false);
   const [thumbnailMatchError, setThumbnailMatchError] = useState<string | null>(null);
   const [selectedAdIds, setSelectedAdIds] = useState<Set<string>>(new Set());
+  const [pendingTagIdsByAd, setPendingTagIdsByAd] = useState<PendingTagIdsByAd>({});
   const [showUntaggedOnly, setShowUntaggedOnly] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("spend");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
@@ -376,9 +388,19 @@ export function MetaAdsTab() {
         tags: Array.from(tagIdsByAd.get(row.adId) ?? [])
           .map((tagId) => tagsById.get(tagId))
           .filter((tag): tag is MetaAdsTag => Boolean(tag)),
+        pendingTags: (pendingTagIdsByAd[row.adId] ?? [])
+          .map((tagId) => tagsById.get(tagId))
+          .filter((tag): tag is MetaAdsTag => Boolean(tag)),
       })) ?? []
     );
-  }, [data?.rollups, data?.rows, data?.tagAssignments, data?.tagRollups, data?.tags]);
+  }, [
+    data?.rollups,
+    data?.rows,
+    data?.tagAssignments,
+    data?.tagRollups,
+    data?.tags,
+    pendingTagIdsByAd,
+  ]);
 
   const tableRows = useMemo<AdsTableRow[]>(() => {
     const activeRollups = data?.rollups.filter((rollup) => rollup.enabled) ?? [];
@@ -449,6 +471,24 @@ export function MetaAdsTab() {
   }, [expandedRollups, filteredRows]);
 
   const hasCache = Boolean(data?.cached && data.rows.length > 0);
+  const currentRangeLabel = data?.range
+    ? `${data.range.startDate} -> ${data.range.endDate}`
+    : DATE_RANGE_LABELS[appliedRange.preset];
+  const missingCacheDates = data?.cacheCoverage?.missingDates ?? [];
+  const missingCacheCount = missingCacheDates.length;
+  const cacheCoverageLabel =
+    data?.cacheCoverage?.startDate && data.cacheCoverage.endDate
+      ? `${data.cacheCoverage.startDate} -> ${data.cacheCoverage.endDate}`
+      : null;
+  const requestedCoverageLabel = data?.cacheCoverage
+    ? `${data.cacheCoverage.requestedStartDate} -> ${data.cacheCoverage.requestedEndDate}`
+    : currentRangeLabel;
+  const refreshButtonLabel =
+    hasCache && missingCacheCount > 0
+      ? `Add ${missingCacheCount} missing day${missingCacheCount === 1 ? "" : "s"}`
+      : hasCache
+        ? "Cache up to date"
+        : "Load Meta ads";
   const activePhrases = data?.phrases.filter((p) => p.enabled).length ?? 0;
   const activeTagRules = data?.tagRollupRules.filter((rule) => rule.enabled).length ?? 0;
   const groupedAdCount = useMemo(() => {
@@ -475,6 +515,25 @@ export function MetaAdsTab() {
       (a, b) => b.count - a.count || a.tag.name.localeCompare(b.tag.name)
     );
   }, [allAdTableRows, selectedAdIds]);
+  const pendingTagSummary = useMemo<SelectedTagSummary[]>(() => {
+    if (selectedAdIds.size === 0) return [];
+    const counts = new Map<number, { tag: MetaAdsTag; count: number }>();
+    for (const row of allAdTableRows) {
+      if (!selectedAdIds.has(row.adId)) continue;
+      for (const tag of row.pendingTags) {
+        const current = counts.get(tag.id) ?? { tag, count: 0 };
+        current.count += 1;
+        counts.set(tag.id, current);
+      }
+    }
+    return Array.from(counts.values()).sort(
+      (a, b) => b.count - a.count || a.tag.name.localeCompare(b.tag.name)
+    );
+  }, [allAdTableRows, selectedAdIds]);
+  const pendingAssignmentCount = Object.values(pendingTagIdsByAd).reduce(
+    (sum, tagIds) => sum + tagIds.length,
+    0
+  );
   const untaggedAdRows = useMemo(
     () => allAdTableRows.filter((row) => row.tags.length === 0),
     [allAdTableRows]
@@ -487,10 +546,6 @@ export function MetaAdsTab() {
   const someVisibleSelected = visibleSelectedCount > 0 && !allVisibleSelected;
   const untaggedCount = untaggedAdRows.length;
   const loading = loadingCache || refreshing;
-  const currentRangeLabel = data?.range
-    ? `${data.range.startDate} -> ${data.range.endDate}`
-    : DATE_RANGE_LABELS[appliedRange.preset];
-
   function handleDateRangeChange(e: React.ChangeEvent<HTMLSelectElement>) {
     const preset = e.target.value as DateRangePreset;
     setDateRangePreset(preset);
@@ -631,6 +686,32 @@ export function MetaAdsTab() {
     toggleManyAds(visibleAdIds);
   }
 
+  function stageTagForSelected(tagId: number) {
+    if (!Number.isFinite(tagId) || selectedAdIds.size === 0) return;
+    const rowsByAdId = new Map(allAdTableRows.map((row) => [row.adId, row]));
+    setPendingTagIdsByAd((prev) => {
+      const next: PendingTagIdsByAd = { ...prev };
+      for (const adId of selectedAdIds) {
+        const row = rowsByAdId.get(adId);
+        if (row?.tags.some((tag) => tag.id === tagId)) continue;
+        const existing = new Set(next[adId] ?? []);
+        existing.add(tagId);
+        next[adId] = Array.from(existing);
+      }
+      return next;
+    });
+  }
+
+  function removePendingTagFromAd(adId: string, tagId: number) {
+    setPendingTagIdsByAd((prev) => {
+      const remaining = (prev[adId] ?? []).filter((id) => id !== tagId);
+      const next = { ...prev };
+      if (remaining.length) next[adId] = remaining;
+      else delete next[adId];
+      return next;
+    });
+  }
+
   async function handleAddTag() {
     const name = newTagName.trim();
     if (!name) return;
@@ -642,24 +723,17 @@ export function MetaAdsTab() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name }),
       });
-      const json = (await res.json()) as { tag?: MetaAdsTag; error?: string };
+      const json = (await res.json()) as {
+        tag?: MetaAdsTag;
+        tags?: MetaAdsTag[];
+        error?: string;
+      };
       if (!res.ok) throw new Error(json.error ?? "Failed to create tag");
-      if (json.tag && selectedAdIds.size > 0) {
-        const assignRes = await fetch("/api/agency/meta/tag-assignments", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            adIds: Array.from(selectedAdIds),
-            tagIds: [json.tag.id],
-          }),
-        });
-        const assignJson = (await assignRes.json()) as { error?: string };
-        if (!assignRes.ok) {
-          throw new Error(assignJson.error ?? "Failed to assign new tag");
-        }
+      if (json.tags) {
+        setData((prev) => (prev ? { ...prev, tags: json.tags ?? prev.tags } : prev));
       }
+      if (json.tag && selectedAdIds.size > 0) stageTagForSelected(json.tag.id);
       setNewTagName("");
-      await reloadCacheAfterRollupChange();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to create tag");
     } finally {
@@ -670,22 +744,38 @@ export function MetaAdsTab() {
   async function handleApplyTagToSelected() {
     const tagId = Number(bulkTagId);
     if (!Number.isFinite(tagId) || selectedAdIds.size === 0) return;
+    stageTagForSelected(tagId);
+  }
+
+  async function handleSavePendingTags() {
+    const entriesByTag = new Map<number, string[]>();
+    for (const [adId, tagIds] of Object.entries(pendingTagIdsByAd)) {
+      for (const tagId of tagIds) {
+        const adIds = entriesByTag.get(tagId) ?? [];
+        adIds.push(adId);
+        entriesByTag.set(tagId, adIds);
+      }
+    }
+    if (entriesByTag.size === 0) return;
     setSavingRollup(true);
     setError(null);
     try {
-      const res = await fetch("/api/agency/meta/tag-assignments", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          adIds: Array.from(selectedAdIds),
-          tagIds: [tagId],
-        }),
-      });
-      const json = (await res.json()) as { error?: string };
-      if (!res.ok) throw new Error(json.error ?? "Failed to assign tag");
+      for (const [tagId, adIds] of entriesByTag) {
+        const res = await fetch("/api/agency/meta/tag-assignments", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            adIds,
+            tagIds: [tagId],
+          }),
+        });
+        const json = (await res.json()) as { error?: string };
+        if (!res.ok) throw new Error(json.error ?? "Failed to assign tag");
+      }
+      setPendingTagIdsByAd({});
       await reloadCacheAfterRollupChange();
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to assign tag");
+      setError(err instanceof Error ? err.message : "Failed to save tags");
     } finally {
       setSavingRollup(false);
     }
@@ -841,9 +931,16 @@ export function MetaAdsTab() {
             </div>
             <div className="mt-0.5 text-xs text-slate-400">
               {hasCache
-                ? `${formatCount(data?.rowCount)} cached ads from ${data?.eligibleAccountCount}/${data?.accountCount} recent-spend accounts. Last refreshed ${formatDateTime(data?.refreshedAt)}.`
+                ? `${formatCount(data?.rowCount)} cached ads from ${data?.eligibleAccountCount}/${data?.accountCount} recent-spend accounts. Showing ${cacheCoverageLabel ?? currentRangeLabel}${cacheCoverageLabel && cacheCoverageLabel !== requestedCoverageLabel ? ` for requested ${requestedCoverageLabel}` : ""}.${data?.refreshedAt ? ` Last refreshed ${formatDateTime(data.refreshedAt)}.` : ""}`
                 : "No cached Meta ads for this date range yet. Click Refresh Meta ads to pull and cache it."}
             </div>
+            {hasCache && missingCacheCount > 0 && (
+              <div className="mt-1 text-xs text-amber-200">
+                Cache is missing the latest {missingCacheCount} day
+                {missingCacheCount === 1 ? "" : "s"}. Use the button to fetch only the
+                missing daily data from Meta.
+              </div>
+            )}
           </div>
           <div className="flex flex-wrap items-end gap-3 text-sm">
             <div>
@@ -888,10 +985,10 @@ export function MetaAdsTab() {
             <button
               type="button"
               onClick={handleRefresh}
-              disabled={loading}
+              disabled={loading || (hasCache && missingCacheCount === 0)}
               className="rounded-lg bg-indigo-600 px-4 py-2 font-medium text-white transition-colors hover:bg-indigo-500 disabled:opacity-50"
             >
-              {hasCache ? "Refresh Meta ads" : "Load Meta ads"}
+              {refreshButtonLabel}
             </button>
           </div>
         </div>
@@ -1005,6 +1102,8 @@ export function MetaAdsTab() {
               tags={data.tags}
               selectedCount={selectedCount}
               selectedTagSummary={selectedTagSummary}
+              pendingTagSummary={pendingTagSummary}
+              pendingAssignmentCount={pendingAssignmentCount}
               bulkTagId={bulkTagId}
               newTagName={newTagName}
               disabled={savingRollup}
@@ -1012,6 +1111,7 @@ export function MetaAdsTab() {
               onNewTagNameChange={setNewTagName}
               onAddTag={() => void handleAddTag()}
               onApplyTag={() => void handleApplyTagToSelected()}
+              onSavePendingTags={() => void handleSavePendingTags()}
               onClearSelection={() => setSelectedAdIds(new Set())}
             />
 
@@ -1030,6 +1130,7 @@ export function MetaAdsTab() {
               onReviewGroup={(group) => setActiveThumbnailGroupId(group.id)}
               onToggleAd={toggleAdSelection}
               onRemoveTag={handleRemoveTagFromAd}
+              onRemovePendingTag={removePendingTagFromAd}
             />
 
             <RollupPhraseChips
@@ -1100,6 +1201,7 @@ export function MetaAdsTab() {
                             toggleManyAds(row.children.map((child) => child.adId))
                           }
                           onRemoveTag={handleRemoveTagFromAd}
+                          onRemovePendingTag={removePendingTagFromAd}
                         />
                       ) : (
                         <MetaAdTableRow
@@ -1108,6 +1210,7 @@ export function MetaAdsTab() {
                           selected={selectedAdIds.has(row.adId)}
                           onToggleSelected={() => toggleAdSelection(row.adId)}
                           onRemoveTag={handleRemoveTagFromAd}
+                          onRemovePendingTag={removePendingTagFromAd}
                         />
                       )
                     )}
@@ -1226,6 +1329,8 @@ function TagControls({
   tags,
   selectedCount,
   selectedTagSummary,
+  pendingTagSummary,
+  pendingAssignmentCount,
   bulkTagId,
   newTagName,
   disabled,
@@ -1233,11 +1338,14 @@ function TagControls({
   onNewTagNameChange,
   onAddTag,
   onApplyTag,
+  onSavePendingTags,
   onClearSelection,
 }: {
   tags: MetaAdsTag[];
   selectedCount: number;
   selectedTagSummary: SelectedTagSummary[];
+  pendingTagSummary: SelectedTagSummary[];
+  pendingAssignmentCount: number;
   bulkTagId: string;
   newTagName: string;
   disabled: boolean;
@@ -1245,6 +1353,7 @@ function TagControls({
   onNewTagNameChange: (value: string) => void;
   onAddTag: () => void;
   onApplyTag: () => void;
+  onSavePendingTags: () => void;
   onClearSelection: () => void;
 }) {
   return (
@@ -1257,25 +1366,20 @@ function TagControls({
           Select ads, apply one or more labels, and keep the selection active while tagging.
         </div>
         {selectedCount > 0 ? (
-          <div className="mt-2 flex max-w-xl flex-wrap items-center gap-1.5">
-            {selectedTagSummary.length > 0 ? (
-              selectedTagSummary.map(({ tag, count }) => (
-                <span
-                  key={tag.id}
-                  className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-medium ${getTagColorClasses(tag.id)}`}
-                  title={`${tag.name} is applied to ${count} of ${selectedCount} selected ads`}
-                >
-                  <span>{tag.name}</span>
-                  <span className="opacity-70">
-                    {count}/{selectedCount}
-                  </span>
-                </span>
-              ))
-            ) : (
-              <span className="rounded-full border border-white/10 bg-slate-800/60 px-2 py-1 text-[10px] text-slate-400">
-                No tags on selected ads yet
-              </span>
-            )}
+          <div className="mt-2 max-w-xl space-y-1.5">
+            <TagSummaryPills
+              label="Pending"
+              emptyLabel="No pending tags yet"
+              summaries={pendingTagSummary}
+              selectedCount={selectedCount}
+              pending
+            />
+            <TagSummaryPills
+              label="Saved"
+              emptyLabel="No saved tags on selected ads yet"
+              summaries={selectedTagSummary}
+              selectedCount={selectedCount}
+            />
           </div>
         ) : null}
       </div>
@@ -1305,11 +1409,11 @@ function TagControls({
           disabled={!newTagName.trim() || disabled}
           className="rounded-lg bg-slate-800 px-3 py-2 font-medium text-slate-100 transition-colors hover:bg-slate-700 disabled:opacity-50"
         >
-          {selectedCount > 0 ? "Create + apply" : "Create"}
+          {selectedCount > 0 ? "Create + stage" : "Create"}
         </button>
         <div>
           <label className="mb-1 block text-xs uppercase tracking-wide text-slate-400">
-            Apply to {selectedCount}
+            Stage for {selectedCount}
           </label>
           <select
             value={bulkTagId}
@@ -1333,7 +1437,15 @@ function TagControls({
           disabled={!bulkTagId || selectedCount === 0 || disabled}
           className="rounded-lg bg-indigo-600 px-3 py-2 font-medium text-white transition-colors hover:bg-indigo-500 disabled:opacity-50"
         >
-          Apply tag
+          Add tag
+        </button>
+        <button
+          type="button"
+          onClick={onSavePendingTags}
+          disabled={pendingAssignmentCount === 0 || disabled}
+          className="rounded-lg bg-emerald-600 px-3 py-2 font-medium text-white transition-colors hover:bg-emerald-500 disabled:opacity-50"
+        >
+          Save {pendingAssignmentCount ? formatCount(pendingAssignmentCount) : ""} tags
         </button>
         <button
           type="button"
@@ -1344,6 +1456,46 @@ function TagControls({
           Clear
         </button>
       </div>
+    </div>
+  );
+}
+
+function TagSummaryPills({
+  label,
+  emptyLabel,
+  summaries,
+  selectedCount,
+  pending,
+}: {
+  label: string;
+  emptyLabel: string;
+  summaries: SelectedTagSummary[];
+  selectedCount: number;
+  pending?: boolean;
+}) {
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="text-[10px] uppercase tracking-wide text-slate-500">
+        {label}
+      </span>
+      {summaries.length > 0 ? (
+        summaries.map(({ tag, count }) => (
+          <span
+            key={tag.id}
+            className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-[10px] font-medium ${pending ? "border-dashed " : ""}${getTagColorClasses(tag.id)}`}
+            title={`${tag.name} is ${pending ? "pending for" : "applied to"} ${count} of ${selectedCount} selected ads`}
+          >
+            <span>{tag.name}</span>
+            <span className="opacity-70">
+              {count}/{selectedCount}
+            </span>
+          </span>
+        ))
+      ) : (
+        <span className="rounded-full border border-white/10 bg-slate-800/60 px-2 py-1 text-[10px] text-slate-400">
+          {emptyLabel}
+        </span>
+      )}
     </div>
   );
 }
@@ -1363,6 +1515,7 @@ function ThumbnailMatchControls({
   onReviewGroup,
   onToggleAd,
   onRemoveTag,
+  onRemovePendingTag,
 }: {
   groups: ThumbnailMatchGroup[];
   threshold: string;
@@ -1378,6 +1531,7 @@ function ThumbnailMatchControls({
   onReviewGroup: (group: ThumbnailMatchGroup) => void;
   onToggleAd: (adId: string) => void;
   onRemoveTag: (adId: string, tagId: number) => void;
+  onRemovePendingTag: (adId: string, tagId: number) => void;
 }) {
   const rowsByAdId = useMemo(
     () => new Map(allAdRows.map((row) => [row.adId, row])),
@@ -1565,6 +1719,7 @@ function ThumbnailMatchControls({
                     selected={selectedAdIds.has(row.adId)}
                     onToggleSelected={() => onToggleAd(row.adId)}
                     onRemoveTag={onRemoveTag}
+                    onRemovePendingTag={onRemovePendingTag}
                   />
                 ))}
               </tbody>
@@ -1990,6 +2145,7 @@ function RollupGroup({
   onToggleAd,
   onToggleChildren,
   onRemoveTag,
+  onRemovePendingTag,
 }: {
   row: Extract<AdsTableRow, { rowType: "rollup" }>;
   isExpanded: boolean;
@@ -1998,6 +2154,7 @@ function RollupGroup({
   onToggleAd: (adId: string) => void;
   onToggleChildren: () => void;
   onRemoveTag: (adId: string, tagId: number) => void;
+  onRemovePendingTag: (adId: string, tagId: number) => void;
 }) {
   return (
     <>
@@ -2016,6 +2173,7 @@ function RollupGroup({
             selected={selectedAdIds.has(child.adId)}
             onToggleSelected={() => onToggleAd(child.adId)}
             onRemoveTag={onRemoveTag}
+            onRemovePendingTag={onRemovePendingTag}
           />
         ))}
     </>
@@ -2119,12 +2277,14 @@ function MetaAdTableRow({
   selected,
   onToggleSelected,
   onRemoveTag,
+  onRemovePendingTag,
 }: {
   row: AdTableRow;
   nested?: boolean;
   selected: boolean;
   onToggleSelected: () => void;
   onRemoveTag: (adId: string, tagId: number) => void;
+  onRemovePendingTag: (adId: string, tagId: number) => void;
 }) {
   return (
     <tr className={nested ? "bg-slate-950/35 hover:bg-white/5" : "hover:bg-white/5"}>
@@ -2173,7 +2333,13 @@ function MetaAdTableRow({
         </div>
       </td>
       <td className="px-3 py-3 text-slate-300">
-        <TagPills tags={row.tags} adId={row.adId} onRemoveTag={onRemoveTag} />
+        <TagPills
+          tags={row.tags}
+          pendingTags={row.pendingTags}
+          adId={row.adId}
+          onRemoveTag={onRemoveTag}
+          onRemovePendingTag={onRemovePendingTag}
+        />
       </td>
       <td className="whitespace-nowrap px-3 py-3 text-slate-200">
         <div className="font-medium">{row.businessName}</div>
@@ -2208,14 +2374,18 @@ function MetaAdTableRow({
 
 function TagPills({
   tags,
+  pendingTags,
   adId,
   onRemoveTag,
+  onRemovePendingTag,
 }: {
   tags: MetaAdsTag[];
+  pendingTags: MetaAdsTag[];
   adId: string;
   onRemoveTag: (adId: string, tagId: number) => void;
+  onRemovePendingTag: (adId: string, tagId: number) => void;
 }) {
-  if (tags.length === 0) {
+  if (tags.length === 0 && pendingTags.length === 0) {
     return <span className="text-xs text-slate-600">No tags</span>;
   }
 
@@ -2233,6 +2403,26 @@ function TagPills({
             onClick={() => onRemoveTag(adId, tag.id)}
             className="rounded-full px-0.5 text-[10px] leading-none hover:bg-white/15"
             aria-label={`Remove ${tag.name} tag`}
+          >
+            x
+          </button>
+        </span>
+      ))}
+      {pendingTags.map((tag) => (
+        <span
+          key={`pending-${tag.id}`}
+          className={`inline-flex max-w-full items-center gap-1 rounded-full border border-dashed px-2 py-1 text-[10px] font-medium ${getTagColorClasses(tag.id)}`}
+          title={`${tag.name} will be saved when you save pending tags`}
+        >
+          <span className="truncate">{tag.name}</span>
+          <span className="rounded-full bg-white/10 px-1 text-[9px] uppercase tracking-wide">
+            pending
+          </span>
+          <button
+            type="button"
+            onClick={() => onRemovePendingTag(adId, tag.id)}
+            className="rounded-full px-0.5 text-[10px] leading-none hover:bg-white/15"
+            aria-label={`Remove pending ${tag.name} tag`}
           >
             x
           </button>

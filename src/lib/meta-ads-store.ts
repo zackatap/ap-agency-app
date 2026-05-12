@@ -62,6 +62,20 @@ export interface MetaAdsSnapshot extends MetaAdsSnapshotPayload {
   refreshedAt: string;
 }
 
+export interface MetaAdsDailySnapshot {
+  id: number;
+  dateKey: string;
+  recentSpendMonths: number;
+  accountCount: number;
+  eligibleAccountCount: number;
+  sheetCampaignCount: number;
+  eligibleCampaignCount: number;
+  rowCount: number;
+  rows: MetaAdsCachedRow[];
+  warnings: MetaAdsWarning[];
+  refreshedAt: string;
+}
+
 export interface MetaAdThumbnailSignature {
   adId: string;
   thumbnailUrl: string;
@@ -110,6 +124,25 @@ async function ensureSchema(sql: Sql): Promise<void> {
   await sql`
     CREATE INDEX IF NOT EXISTS idx_agency_meta_ads_snapshots_refreshed
       ON agency_meta_ads_snapshots (refreshed_at DESC)
+  `;
+  await sql`
+    CREATE TABLE IF NOT EXISTS agency_meta_ads_daily_snapshots (
+      id BIGSERIAL PRIMARY KEY,
+      date_key DATE UNIQUE NOT NULL,
+      recent_spend_months INT NOT NULL,
+      account_count INT NOT NULL DEFAULT 0,
+      eligible_account_count INT NOT NULL DEFAULT 0,
+      sheet_campaign_count INT NOT NULL DEFAULT 0,
+      eligible_campaign_count INT NOT NULL DEFAULT 0,
+      row_count INT NOT NULL DEFAULT 0,
+      rows JSONB NOT NULL,
+      warnings JSONB NOT NULL DEFAULT '[]'::jsonb,
+      refreshed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `;
+  await sql`
+    CREATE INDEX IF NOT EXISTS idx_agency_meta_ads_daily_snapshots_date
+      ON agency_meta_ads_daily_snapshots (date_key)
   `;
   await sql`
     CREATE TABLE IF NOT EXISTS agency_meta_ad_rollup_phrases (
@@ -202,6 +235,24 @@ function mapSnapshotRow(row: Record<string, unknown>): MetaAdsSnapshot {
   };
 }
 
+function mapDailySnapshotRow(row: Record<string, unknown>): MetaAdsDailySnapshot {
+  return {
+    id: Number(row.id),
+    dateKey: asDateString(row.date_key),
+    recentSpendMonths: Number(row.recent_spend_months ?? 0),
+    accountCount: Number(row.account_count ?? 0),
+    eligibleAccountCount: Number(row.eligible_account_count ?? 0),
+    sheetCampaignCount: Number(row.sheet_campaign_count ?? 0),
+    eligibleCampaignCount: Number(row.eligible_campaign_count ?? 0),
+    rowCount: Number(row.row_count ?? 0),
+    rows: Array.isArray(row.rows) ? (row.rows as MetaAdsCachedRow[]) : [],
+    warnings: Array.isArray(row.warnings)
+      ? (row.warnings as MetaAdsWarning[])
+      : [],
+    refreshedAt: asIsoString(row.refreshed_at),
+  };
+}
+
 function mapRollupPhrase(row: Record<string, unknown>): MetaAdRollupPhrase {
   return {
     id: Number(row.id),
@@ -274,6 +325,82 @@ export async function getMetaAdsSnapshot(range: {
     LIMIT 1
   `;
   return rows[0] ? mapSnapshotRow(rows[0] as Record<string, unknown>) : null;
+}
+
+export async function getLatestMetaAdsSnapshotForPreset(
+  preset: DateRangePreset
+): Promise<MetaAdsSnapshot | null> {
+  const sql = getDb();
+  if (!sql) return null;
+  await ensureSchema(sql);
+  const rows = await sql`
+    SELECT *
+    FROM agency_meta_ads_snapshots
+    WHERE preset = ${preset}
+    ORDER BY end_date DESC, refreshed_at DESC
+    LIMIT 1
+  `;
+  return rows[0] ? mapSnapshotRow(rows[0] as Record<string, unknown>) : null;
+}
+
+export async function listMetaAdsDailySnapshots(range: {
+  startDate: string;
+  endDate: string;
+}): Promise<MetaAdsDailySnapshot[]> {
+  const sql = getDb();
+  if (!sql) return [];
+  await ensureSchema(sql);
+  const rows = await sql`
+    SELECT *
+    FROM agency_meta_ads_daily_snapshots
+    WHERE date_key BETWEEN ${range.startDate}::date AND ${range.endDate}::date
+    ORDER BY date_key ASC
+  `;
+  return rows.map((row) => mapDailySnapshotRow(row as Record<string, unknown>));
+}
+
+export async function upsertMetaAdsDailySnapshot(snapshot: {
+  dateKey: string;
+  recentSpendMonths: number;
+  accountCount: number;
+  eligibleAccountCount: number;
+  sheetCampaignCount: number;
+  eligibleCampaignCount: number;
+  rows: MetaAdsCachedRow[];
+  warnings: MetaAdsWarning[];
+}): Promise<MetaAdsDailySnapshot | null> {
+  const sql = getDb();
+  if (!sql) return null;
+  await ensureSchema(sql);
+  const rows = await sql`
+    INSERT INTO agency_meta_ads_daily_snapshots (
+      date_key, recent_spend_months, account_count, eligible_account_count,
+      sheet_campaign_count, eligible_campaign_count, row_count, rows, warnings, refreshed_at
+    ) VALUES (
+      ${snapshot.dateKey},
+      ${snapshot.recentSpendMonths},
+      ${snapshot.accountCount},
+      ${snapshot.eligibleAccountCount},
+      ${snapshot.sheetCampaignCount},
+      ${snapshot.eligibleCampaignCount},
+      ${snapshot.rows.length},
+      ${JSON.stringify(snapshot.rows)}::jsonb,
+      ${JSON.stringify(snapshot.warnings)}::jsonb,
+      NOW()
+    )
+    ON CONFLICT (date_key) DO UPDATE SET
+      recent_spend_months = EXCLUDED.recent_spend_months,
+      account_count = EXCLUDED.account_count,
+      eligible_account_count = EXCLUDED.eligible_account_count,
+      sheet_campaign_count = EXCLUDED.sheet_campaign_count,
+      eligible_campaign_count = EXCLUDED.eligible_campaign_count,
+      row_count = EXCLUDED.row_count,
+      rows = EXCLUDED.rows,
+      warnings = EXCLUDED.warnings,
+      refreshed_at = NOW()
+    RETURNING *
+  `;
+  return rows[0] ? mapDailySnapshotRow(rows[0] as Record<string, unknown>) : null;
 }
 
 export async function upsertMetaAdsSnapshot(

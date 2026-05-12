@@ -15,17 +15,22 @@ import {
   type DateRangePreset,
 } from "@/lib/date-ranges";
 import {
+  addMetaAdTotals,
   buildMetaAdRollupSummaries,
   buildMetaAdTagRollupSummaries,
   deriveMetaAdMetrics,
 } from "@/lib/meta-ad-rollups";
 import {
+  getLatestMetaAdsSnapshotForPreset,
   getMetaAdsSnapshot,
+  listMetaAdsDailySnapshots,
   listMetaAdTagAssignments,
   listMetaAdTagRollups,
   listMetaAdTags,
   listMetaAdRollupPhrases,
+  upsertMetaAdsDailySnapshot,
   upsertMetaAdsSnapshot,
+  type MetaAdsDailySnapshot,
   type MetaAdsCachedRow,
   type MetaAdsSnapshotPayload,
   type MetaAdsWarning,
@@ -48,6 +53,15 @@ const META_BUSINESS_ID =
   process.env.FACEBOOK_BUSINESS_ID?.trim() ||
   "1676628412629857";
 
+interface CacheCoverage {
+  startDate: string | null;
+  endDate: string | null;
+  requestedStartDate: string;
+  requestedEndDate: string;
+  missingDates: string[];
+  source: "daily" | "snapshot" | "mixed" | "none";
+}
+
 function isPreset(v: string | null): v is DateRangePreset {
   return !!v && (PRESETS as string[]).includes(v);
 }
@@ -67,6 +81,28 @@ function adsManagerUrl(adAccountId: string, adId: string): string | null {
     selected_ad_ids: adId,
   });
   return `https://adsmanager.facebook.com/adsmanager/manage/ads/edit/standalone?${params.toString()}`;
+}
+
+function enumerateDates(startDate: string, endDate: string): string[] {
+  const [sy, sm, sd] = startDate.split("-").map(Number);
+  const [ey, em, ed] = endDate.split("-").map(Number);
+  const current = new Date(sy, sm - 1, sd);
+  const end = new Date(ey, em - 1, ed);
+  const dates: string[] = [];
+  while (current <= end) {
+    dates.push(
+      `${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, "0")}-${String(current.getDate()).padStart(2, "0")}`
+    );
+    current.setDate(current.getDate() + 1);
+  }
+  return dates;
+}
+
+function nextDate(date: string): string {
+  const [y, m, d] = date.split("-").map(Number);
+  const next = new Date(y, m - 1, d);
+  next.setDate(next.getDate() + 1);
+  return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}-${String(next.getDate()).padStart(2, "0")}`;
 }
 
 async function runWithConcurrency<T>(
@@ -182,7 +218,10 @@ function parseRange(req: Request) {
   };
 }
 
-async function decorateSnapshot(snapshot: MetaAdsSnapshotPayload | null) {
+async function decorateSnapshot(
+  snapshot: MetaAdsSnapshotPayload | null,
+  coverage?: CacheCoverage
+) {
   const [phrases, tags, tagRollupRules] = await Promise.all([
     listMetaAdRollupPhrases(),
     listMetaAdTags(),
@@ -200,6 +239,7 @@ async function decorateSnapshot(snapshot: MetaAdsSnapshotPayload | null) {
       tagRollups: [],
       rows: [],
       cached: false,
+      cacheCoverage: coverage,
     };
   }
   const tagAssignments = await listMetaAdTagAssignments(
@@ -218,6 +258,135 @@ async function decorateSnapshot(snapshot: MetaAdsSnapshotPayload | null) {
       tagAssignments
     ),
     cached: true,
+    cacheCoverage: coverage,
+  };
+}
+
+function aggregateRows(rows: MetaAdsCachedRow[]): MetaAdsCachedRow[] {
+  const byKey = new Map<string, MetaAdsCachedRow>();
+  for (const row of rows) {
+    const key = row.rowKey || `${row.campaignKey}:${row.adId}`;
+    const existing = byKey.get(key);
+    if (!existing) {
+      byKey.set(key, { ...row });
+      continue;
+    }
+    const totals = addMetaAdTotals(existing, row);
+    byKey.set(key, {
+      ...existing,
+      ...row,
+      ...deriveMetaAdMetrics(totals),
+      cpl: totals.leads > 0 ? totals.spend / totals.leads : null,
+    });
+  }
+  return Array.from(byKey.values()).sort((a, b) => b.spend - a.spend);
+}
+
+function aggregateDailySnapshots(args: {
+  range: ReturnType<typeof parseRange>;
+  dailySnapshots: MetaAdsDailySnapshot[];
+  fallbackSnapshot?: MetaAdsSnapshotPayload | null;
+}): { snapshot: MetaAdsSnapshotPayload | null; coverage: CacheCoverage } {
+  const requestedDates = enumerateDates(args.range.startDate, args.range.endDate);
+  const dailyByDate = new Map(args.dailySnapshots.map((snapshot) => [snapshot.dateKey, snapshot]));
+  const fallbackCoversDate = (date: string) =>
+    Boolean(
+      args.fallbackSnapshot &&
+        date >= args.fallbackSnapshot.range.startDate &&
+        date <= args.fallbackSnapshot.range.endDate
+    );
+  const missingDates = requestedDates.filter(
+    (date) => !dailyByDate.has(date) && !fallbackCoversDate(date)
+  );
+  const usableDailySnapshots = args.fallbackSnapshot
+    ? args.dailySnapshots.filter(
+        (snapshot) => snapshot.dateKey > args.fallbackSnapshot!.range.endDate
+      )
+    : args.dailySnapshots;
+  const dailyDates = usableDailySnapshots.map((snapshot) => snapshot.dateKey).sort();
+  const dailyRows = aggregateRows(usableDailySnapshots.flatMap((snapshot) => snapshot.rows));
+  const dailyWarnings = usableDailySnapshots.flatMap((snapshot) => snapshot.warnings);
+
+  if (dailyRows.length > 0) {
+    const rows = aggregateRows([
+      ...(args.fallbackSnapshot?.rows ?? []),
+      ...dailyRows,
+    ]);
+    const startDate = args.fallbackSnapshot?.range.startDate ?? dailyDates[0];
+    const endDate = dailyDates[dailyDates.length - 1];
+    const snapshot: MetaAdsSnapshotPayload = {
+      range: {
+        preset: args.range.preset,
+        startDate,
+        endDate,
+        label: args.range.label,
+      },
+      recentSpendMonths: RECENT_SPEND_MONTHS,
+      accountCount: Math.max(
+        args.fallbackSnapshot?.accountCount ?? 0,
+        ...args.dailySnapshots.map((s) => s.accountCount),
+        0
+      ),
+      eligibleAccountCount: Math.max(
+        args.fallbackSnapshot?.eligibleAccountCount ?? 0,
+        ...args.dailySnapshots.map((s) => s.eligibleAccountCount),
+        0
+      ),
+      sheetCampaignCount: Math.max(
+        args.fallbackSnapshot?.sheetCampaignCount ?? 0,
+        ...args.dailySnapshots.map((s) => s.sheetCampaignCount),
+        0
+      ),
+      eligibleCampaignCount: Math.max(
+        args.fallbackSnapshot?.eligibleCampaignCount ?? 0,
+        ...args.dailySnapshots.map((s) => s.eligibleCampaignCount),
+        0
+      ),
+      rowCount: rows.length,
+      totals: deriveMetaAdMetrics(sumRows(rows)),
+      rows,
+      warnings: [...(args.fallbackSnapshot?.warnings ?? []), ...dailyWarnings],
+    };
+    return {
+      snapshot,
+      coverage: {
+        startDate: snapshot.range.startDate,
+        endDate: snapshot.range.endDate,
+        requestedStartDate: args.range.startDate,
+        requestedEndDate: args.range.endDate,
+        missingDates,
+        source: args.fallbackSnapshot ? "mixed" : "daily",
+      },
+    };
+  }
+
+  if (args.fallbackSnapshot) {
+    return {
+      snapshot: args.fallbackSnapshot,
+      coverage: {
+        startDate: args.fallbackSnapshot.range.startDate,
+        endDate: args.fallbackSnapshot.range.endDate,
+        requestedStartDate: args.range.startDate,
+        requestedEndDate: args.range.endDate,
+        missingDates: enumerateDates(
+          nextDate(args.fallbackSnapshot.range.endDate),
+          args.range.endDate
+        ),
+        source: "snapshot",
+      },
+    };
+  }
+
+  return {
+    snapshot: null,
+    coverage: {
+      startDate: null,
+      endDate: null,
+      requestedStartDate: args.range.startDate,
+      requestedEndDate: args.range.endDate,
+      missingDates: requestedDates,
+      source: "none",
+    },
   };
 }
 
@@ -242,27 +411,18 @@ function sumRows(rows: MetaAdsCachedRow[]) {
   );
 }
 
-export async function GET(req: Request) {
-  const range = parseRange(req);
-  const snapshot = await getMetaAdsSnapshot({
-    startDate: range.startDate,
-    endDate: range.endDate,
-  });
-
-  return NextResponse.json(await decorateSnapshot(snapshot), {
-    headers: { "Cache-Control": "no-store" },
-  });
-}
-
-export async function POST(req: Request) {
-  const range = parseRange(req);
-
+async function buildMetaAdsRowsForRange(args: {
+  startDate: string;
+  endDate: string;
+  clientDate?: string;
+  seedAdAccountIds?: Set<string>;
+}): Promise<{
+  snapshotBase: Omit<MetaAdsSnapshotPayload, "range" | "totals">;
+  rows: MetaAdsCachedRow[];
+}> {
   const active = await listActiveCampaigns();
   if (active.error) {
-    return NextResponse.json(
-      { error: active.error, rows: [], rollups: [] },
-      { status: 500, headers: { "Cache-Control": "no-store" } }
-    );
+    throw new Error(active.error);
   }
 
   const campaignsWithAccounts = active.campaigns.filter(
@@ -271,13 +431,26 @@ export async function POST(req: Request) {
   const uniqueAdAccountIds = Array.from(
     new Set(campaignsWithAccounts.map((c) => c.adAccountId))
   );
-  const { accountsWithSpend, warnings } = await getRecentSpendAccounts(
-    uniqueAdAccountIds,
-    range.clientDate
-  );
-  const eligibleCampaigns = campaignsWithAccounts.filter((c) =>
-    accountsWithSpend.has(c.adAccountId)
-  );
+  let warnings: MetaAdsWarning[] = [];
+  let eligibleCampaigns: Array<ActiveCampaign & { adAccountId: string }>;
+  let eligibleAccountCount = 0;
+
+  if (args.seedAdAccountIds?.size) {
+    eligibleCampaigns = campaignsWithAccounts.filter((c) =>
+      args.seedAdAccountIds?.has(c.adAccountId)
+    );
+    eligibleAccountCount = args.seedAdAccountIds.size;
+  } else {
+    const recentSpend = await getRecentSpendAccounts(
+      uniqueAdAccountIds,
+      args.clientDate
+    );
+    warnings = recentSpend.warnings;
+    eligibleAccountCount = recentSpend.accountsWithSpend.size;
+    eligibleCampaigns = campaignsWithAccounts.filter((c) =>
+      recentSpend.accountsWithSpend.has(c.adAccountId)
+    );
+  }
 
   const campaignCache = new Map<
     string,
@@ -323,8 +496,8 @@ export async function POST(req: Request) {
 
     const { ads, error } = await fetchAdInsights(
       campaign.adAccountId,
-      range.startDate,
-      range.endDate,
+      args.startDate,
+      args.endDate,
       campaignIds ? { campaignIds } : undefined
     );
     if (error) {
@@ -356,25 +529,177 @@ export async function POST(req: Request) {
     )
     .sort((a, b) => b.spend - a.spend);
 
-  const snapshot = await upsertMetaAdsSnapshot({
-    range: {
-      preset: range.preset,
+  return {
+    snapshotBase: {
+      recentSpendMonths: RECENT_SPEND_MONTHS,
+      accountCount: uniqueAdAccountIds.length,
+      eligibleAccountCount,
+      sheetCampaignCount: active.campaigns.length,
+      eligibleCampaignCount: eligibleCampaigns.length,
+      rowCount: rows.length,
+      rows,
+      warnings,
+    },
+    rows,
+  };
+}
+
+export async function GET(req: Request) {
+  const range = parseRange(req);
+  const exactSnapshot = await getMetaAdsSnapshot({
+    startDate: range.startDate,
+    endDate: range.endDate,
+  });
+  if (exactSnapshot) {
+    return NextResponse.json(
+      await decorateSnapshot(exactSnapshot, {
+        startDate: exactSnapshot.range.startDate,
+        endDate: exactSnapshot.range.endDate,
+        requestedStartDate: range.startDate,
+        requestedEndDate: range.endDate,
+        missingDates: [],
+        source: "snapshot",
+      }),
+      {
+        headers: { "Cache-Control": "no-store" },
+      }
+    );
+  }
+
+  const [dailySnapshots, latestPresetSnapshot] = await Promise.all([
+    listMetaAdsDailySnapshots({
       startDate: range.startDate,
       endDate: range.endDate,
-      label: range.label,
-    },
-    recentSpendMonths: RECENT_SPEND_MONTHS,
-    accountCount: uniqueAdAccountIds.length,
-    eligibleAccountCount: accountsWithSpend.size,
-    sheetCampaignCount: active.campaigns.length,
-    eligibleCampaignCount: eligibleCampaigns.length,
-    rowCount: rows.length,
-    totals: deriveMetaAdMetrics(sumRows(rows)),
-    rows,
-    warnings,
+    }),
+    getLatestMetaAdsSnapshotForPreset(range.preset),
+  ]);
+  const { snapshot, coverage } = aggregateDailySnapshots({
+    range,
+    dailySnapshots,
+    fallbackSnapshot: latestPresetSnapshot,
   });
 
-  return NextResponse.json(await decorateSnapshot(snapshot), {
+  return NextResponse.json(await decorateSnapshot(snapshot, coverage), {
+    headers: { "Cache-Control": "no-store" },
+  });
+}
+
+export async function POST(req: Request) {
+  const range = parseRange(req);
+  const existingDaily = await listMetaAdsDailySnapshots({
+    startDate: range.startDate,
+    endDate: range.endDate,
+  });
+  const cachedDates = new Set(existingDaily.map((snapshot) => snapshot.dateKey));
+  const requestedDates = enumerateDates(range.startDate, range.endDate);
+  let missingDates = requestedDates.filter((date) => !cachedDates.has(date));
+  const latestPresetSnapshot = await getLatestMetaAdsSnapshotForPreset(range.preset);
+
+  if (existingDaily.length === 0 && !latestPresetSnapshot) {
+    try {
+      const { snapshotBase, rows } = await buildMetaAdsRowsForRange({
+        startDate: range.startDate,
+        endDate: range.endDate,
+        clientDate: range.clientDate,
+      });
+      const snapshot = await upsertMetaAdsSnapshot({
+        range: {
+          preset: range.preset,
+          startDate: range.startDate,
+          endDate: range.endDate,
+          label: range.label,
+        },
+        recentSpendMonths: snapshotBase.recentSpendMonths,
+        accountCount: snapshotBase.accountCount,
+        eligibleAccountCount: snapshotBase.eligibleAccountCount,
+        sheetCampaignCount: snapshotBase.sheetCampaignCount,
+        eligibleCampaignCount: snapshotBase.eligibleCampaignCount,
+        rowCount: rows.length,
+        totals: deriveMetaAdMetrics(sumRows(rows)),
+        rows,
+        warnings: snapshotBase.warnings,
+      });
+
+      return NextResponse.json(
+        await decorateSnapshot(snapshot, {
+          startDate: range.startDate,
+          endDate: range.endDate,
+          requestedStartDate: range.startDate,
+          requestedEndDate: range.endDate,
+          missingDates: [],
+          source: "snapshot",
+        }),
+        {
+          headers: { "Cache-Control": "no-store" },
+        }
+      );
+    } catch (err) {
+      return NextResponse.json(
+        { error: err instanceof Error ? err.message : "Failed to refresh Meta ads" },
+        { status: 500, headers: { "Cache-Control": "no-store" } }
+      );
+    }
+  }
+
+  if (existingDaily.length === 0 && latestPresetSnapshot) {
+    missingDates = enumerateDates(
+      nextDate(latestPresetSnapshot.range.endDate),
+      range.endDate
+    );
+  }
+
+  try {
+    const seedAdAccountIds = latestPresetSnapshot
+      ? new Set(latestPresetSnapshot.rows.map((row) => row.adAccountId).filter(Boolean))
+      : undefined;
+    await runWithConcurrency(missingDates, 1, async (dateKey) => {
+      const { snapshotBase } = await buildMetaAdsRowsForRange({
+        startDate: dateKey,
+        endDate: dateKey,
+        clientDate: range.clientDate,
+        seedAdAccountIds,
+      });
+      await upsertMetaAdsDailySnapshot({
+        dateKey,
+        recentSpendMonths: snapshotBase.recentSpendMonths,
+        accountCount: snapshotBase.accountCount,
+        eligibleAccountCount: snapshotBase.eligibleAccountCount,
+        sheetCampaignCount: snapshotBase.sheetCampaignCount,
+        eligibleCampaignCount: snapshotBase.eligibleCampaignCount,
+        rows: snapshotBase.rows,
+        warnings: snapshotBase.warnings,
+      });
+    });
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Failed to refresh Meta ads" },
+      { status: 500, headers: { "Cache-Control": "no-store" } }
+    );
+  }
+
+  const dailySnapshots = await listMetaAdsDailySnapshots({
+    startDate: range.startDate,
+    endDate: range.endDate,
+  });
+  const { snapshot, coverage } = aggregateDailySnapshots({
+    range,
+    dailySnapshots,
+    fallbackSnapshot: latestPresetSnapshot,
+  });
+
+  if (snapshot) {
+    await upsertMetaAdsSnapshot({
+      ...snapshot,
+      range: {
+        preset: range.preset,
+        startDate: snapshot.range.startDate,
+        endDate: snapshot.range.endDate,
+        label: range.label,
+      },
+    });
+  }
+
+  return NextResponse.json(await decorateSnapshot(snapshot, coverage), {
     headers: { "Cache-Control": "no-store" },
   });
 }
