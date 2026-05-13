@@ -12,14 +12,15 @@ import { formatMetricValue } from "./format";
 import {
   buildLeaderboardRows,
   getCampaignMetric,
+  getCampaignLabel,
   getRowMetric,
 } from "./benchmarks";
 
 /**
- * Total columns rendered by the table: 1 "Client" column + one per metric.
+ * Total columns rendered by the table: "Client" + "Campaign" + metrics.
  * Used for the inline "Compare" expansion's colSpan.
  */
-const TOTAL_COLUMNS = METRIC_ORDER.length + 1;
+const TOTAL_COLUMNS = METRIC_ORDER.length + 2;
 
 interface Props {
   campaigns: ClientCampaignSummary[];
@@ -62,6 +63,7 @@ export function LeaderboardTable({
   const [sortKey, setSortKey] = useState<MetricKey>(defaultSort);
   const [sortDir, setSortDir] = useState<"desc" | "asc">("desc");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
+  const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
   const tableRef = useRef<HTMLDivElement | null>(null);
   /**
    * Width of the *visible* scroll viewport (not the inner table width).
@@ -120,12 +122,25 @@ export function LeaderboardTable({
   }, [compareCampaignKey]);
 
   const canCompare = typeof renderCompare === "function";
+  const selectedItems = useMemo(
+    () => buildSelectedItems(rows, selectedKeys),
+    [rows, selectedKeys]
+  );
 
   function toggleCompare(campaignKey: string) {
     if (!onCompareCampaignKeyChange) return;
     onCompareCampaignKeyChange(
       compareCampaignKey === campaignKey ? null : campaignKey
     );
+  }
+
+  function toggleSelection(key: string) {
+    setSelectedKeys((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
   }
 
   /**
@@ -189,29 +204,40 @@ export function LeaderboardTable({
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-2 rounded-lg bg-slate-800/50 p-1 text-xs self-start">
-        <button
-          type="button"
-          onClick={() => setMode("cid")}
-          className={`rounded-md px-3 py-1 ${
-            mode === "cid"
-              ? "bg-indigo-600 text-white"
-              : "text-slate-300 hover:text-white"
-          }`}
-        >
-          By client (CID)
-        </button>
-        <button
-          type="button"
-          onClick={() => setMode("campaign")}
-          className={`rounded-md px-3 py-1 ${
-            mode === "campaign"
-              ? "bg-indigo-600 text-white"
-              : "text-slate-300 hover:text-white"
-          }`}
-        >
-          By campaign
-        </button>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2 rounded-lg bg-slate-800/50 p-1 text-xs self-start">
+          <button
+            type="button"
+            onClick={() => setMode("cid")}
+            className={`rounded-md px-3 py-1 ${
+              mode === "cid"
+                ? "bg-indigo-600 text-white"
+                : "text-slate-300 hover:text-white"
+            }`}
+          >
+            By client (CID)
+          </button>
+          <button
+            type="button"
+            onClick={() => setMode("campaign")}
+            className={`rounded-md px-3 py-1 ${
+              mode === "campaign"
+                ? "bg-indigo-600 text-white"
+                : "text-slate-300 hover:text-white"
+            }`}
+          >
+            By campaign
+          </button>
+        </div>
+        {selectedItems.length > 0 && (
+          <button
+            type="button"
+            onClick={() => setSelectedKeys(new Set())}
+            className="rounded-md border border-white/10 bg-slate-800/60 px-3 py-1 text-xs text-slate-300 hover:border-indigo-400/40 hover:text-white"
+          >
+            Clear {selectedItems.length} selected
+          </button>
+        )}
       </div>
 
       <div
@@ -223,6 +249,9 @@ export function LeaderboardTable({
             <tr className="text-left text-xs uppercase tracking-wide text-slate-400">
               <th className="sticky left-0 top-0 z-30 border-b border-white/10 bg-slate-900 px-4 py-3 text-left font-semibold shadow-[4px_0_12px_-4px_rgba(0,0,0,0.45)]">
                 Client
+              </th>
+              <th className="sticky top-0 z-20 border-b border-white/10 bg-slate-900 px-3 py-3 text-left font-semibold shadow-[0_4px_12px_-4px_rgba(0,0,0,0.5)]">
+                Campaign
               </th>
               {METRIC_ORDER.map((key) => (
                 <th
@@ -243,6 +272,12 @@ export function LeaderboardTable({
             </tr>
           </thead>
           <tbody className="divide-y divide-white/5">
+            {selectedItems.length > 0 && (
+              <SelectedSummaryRow
+                items={selectedItems}
+                monthKey={monthKey}
+              />
+            )}
             {sorted.map((row) => (
               <RowGroup
                 key={row.rowKey}
@@ -260,6 +295,8 @@ export function LeaderboardTable({
                 renderCompare={renderCompare}
                 campaigns={campaigns}
                 viewportWidth={viewportWidth}
+                selectedKeys={selectedKeys}
+                onSelectionToggle={toggleSelection}
               />
             ))}
           </tbody>
@@ -282,6 +319,8 @@ interface RowGroupProps {
   renderCompare?: (campaign: ClientCampaignSummary) => React.ReactNode;
   campaigns: ClientCampaignSummary[];
   viewportWidth: number | null;
+  selectedKeys: ReadonlySet<string>;
+  onSelectionToggle: (key: string) => void;
 }
 
 function RowGroup({
@@ -297,6 +336,8 @@ function RowGroup({
   renderCompare,
   campaigns,
   viewportWidth,
+  selectedKeys,
+  onSelectionToggle,
 }: RowGroupProps) {
   const showChildren = row.isGroup && isExpanded && row.children.length > 1;
   const rowOpacity =
@@ -319,17 +360,23 @@ function RowGroup({
   const rowCompareKey = singleCampaign?.campaignKey ?? null;
   const isRowCompared =
     rowCompareKey != null && compareCampaignKey === rowCompareKey;
+  const isSelected = selectedKeys.has(row.rowKey);
 
   return (
     <>
       <tr
         className={`hover:bg-white/5 ${rowOpacity} ${
           isRowCompared ? "bg-indigo-500/10" : ""
-        }`}
+        } ${isSelected ? "bg-indigo-500/5" : ""}`}
         data-compare-anchor={rowCompareKey ?? undefined}
       >
         <td className="sticky left-0 z-10 whitespace-nowrap bg-slate-950/70 px-4 py-2">
           <div className="flex items-center gap-2">
+            <SelectionCheckbox
+              checked={isSelected}
+              label={`Select ${row.displayName}`}
+              onChange={() => onSelectionToggle(row.rowKey)}
+            />
             {row.isGroup && row.children.length > 1 ? (
               <button
                 type="button"
@@ -357,6 +404,9 @@ function RowGroup({
             )}
           </div>
         </td>
+        <td className="whitespace-nowrap px-3 py-2 text-left text-slate-300">
+          {row.campaignLabel ?? <span className="text-slate-600">—</span>}
+        </td>
         {METRIC_ORDER.map((key) => {
           const meta = METRIC_META[key];
           const val = getRowMetric(row, key, monthKey);
@@ -383,25 +433,32 @@ function RowGroup({
           const childStale = excludedKeys?.has(child.campaignKey) ?? false;
           const childCampaign = findCampaign(campaigns, child.campaignKey);
           const isChildCompared = compareCampaignKey === child.campaignKey;
+          const childSelectionKey = campaignSelectionKey(child);
+          const isChildSelected = selectedKeys.has(childSelectionKey);
           return (
             <React.Fragment key={child.campaignKey}>
               <tr
                 className={`bg-slate-950/40 hover:bg-white/5 ${
                   childStale ? "opacity-50" : ""
-                } ${isChildCompared ? "bg-indigo-500/10" : ""}`}
+                } ${isChildCompared ? "bg-indigo-500/10" : ""} ${
+                  isChildSelected ? "bg-indigo-500/5" : ""
+                }`}
                 data-compare-anchor={child.campaignKey}
               >
                 <td className="sticky left-0 z-10 whitespace-nowrap bg-slate-950/70 px-4 py-2 pl-12">
                   <div className="flex items-center gap-2">
+                    <SelectionCheckbox
+                      checked={isChildSelected}
+                      label={`Select ${child.businessName}`}
+                      onChange={() => onSelectionToggle(childSelectionKey)}
+                    />
                     <Link
                       href={`/agency/dashboard/${child.locationId}?campaign=${encodeURIComponent(child.campaignKey)}`}
                       className="flex flex-col text-slate-300 hover:text-indigo-300"
                     >
                       <span className="text-[13px]">
                         <StatusBadge status={child.status} />{" "}
-                        {child.pipelineName ??
-                          child.pipelineKeyword ??
-                          "Pipeline"}
+                        {getCampaignLabel(child) ?? "Campaign"}
                         {childStale && <StaleBadge />}
                       </span>
                       {!child.included && (
@@ -419,6 +476,11 @@ function RowGroup({
                       />
                     )}
                   </div>
+                </td>
+                <td className="whitespace-nowrap px-3 py-2 text-left text-slate-300">
+                  {getCampaignLabel(child) ?? (
+                    <span className="text-slate-600">—</span>
+                  )}
                 </td>
                 {METRIC_ORDER.map((key) => {
                   const meta = METRIC_META[key];
@@ -453,6 +515,114 @@ function findCampaign(
   campaignKey: string
 ): ClientCampaignSummary | null {
   return campaigns.find((c) => c.campaignKey === campaignKey) ?? null;
+}
+
+type SelectedItem =
+  | { key: string; type: "row"; row: ClientLeaderboardRow }
+  | { key: string; type: "campaign"; campaign: ClientCampaignSummary };
+
+const TOTAL_METRICS = new Set<MetricKey>([
+  "leads",
+  "totalAppts",
+  "showed",
+  "closed",
+  "totalValue",
+  "successValue",
+  "adSpend",
+]);
+
+function campaignSelectionKey(campaign: Pick<ClientCampaignSummary, "campaignKey">): string {
+  return `cmp:${campaign.campaignKey}`;
+}
+
+function buildSelectedItems(
+  rows: ClientLeaderboardRow[],
+  selectedKeys: ReadonlySet<string>
+): SelectedItem[] {
+  const items: SelectedItem[] = [];
+  for (const row of rows) {
+    if (selectedKeys.has(row.rowKey)) {
+      items.push({ key: row.rowKey, type: "row", row });
+    }
+    if (!row.isGroup) continue;
+    for (const campaign of row.children) {
+      const key = campaignSelectionKey(campaign);
+      if (selectedKeys.has(key)) {
+        items.push({ key, type: "campaign", campaign });
+      }
+    }
+  }
+  return items;
+}
+
+function getSelectedMetric(
+  items: SelectedItem[],
+  metric: MetricKey,
+  monthKey: string | "total"
+): number | null {
+  const values = items
+    .map((item) =>
+      item.type === "row"
+        ? getRowMetric(item.row, metric, monthKey)
+        : getCampaignMetric(item.campaign, metric, monthKey)
+    )
+    .filter((value): value is number => value != null);
+  if (values.length === 0) return null;
+  const total = values.reduce((sum, value) => sum + value, 0);
+  return TOTAL_METRICS.has(metric)
+    ? total
+    : Math.round((total / values.length) * 100) / 100;
+}
+
+function SelectedSummaryRow({
+  items,
+  monthKey,
+}: {
+  items: SelectedItem[];
+  monthKey: string | "total";
+}) {
+  return (
+    <tr className="bg-indigo-500/10 text-indigo-100">
+      <td className="sticky left-0 z-10 whitespace-nowrap border-b border-indigo-400/20 bg-slate-900 px-4 py-2 font-medium">
+        Selected ({items.length})
+      </td>
+      <td className="whitespace-nowrap border-b border-indigo-400/20 px-3 py-2 text-left text-xs text-indigo-200">
+        Totals / avg
+      </td>
+      {METRIC_ORDER.map((key) => {
+        const meta = METRIC_META[key];
+        const val = getSelectedMetric(items, key, monthKey);
+        return (
+          <td
+            key={key}
+            className="whitespace-nowrap border-b border-indigo-400/20 px-3 py-2 text-right font-medium tabular-nums"
+          >
+            {formatMetricValue(val, meta.kind)}
+          </td>
+        );
+      })}
+    </tr>
+  );
+}
+
+function SelectionCheckbox({
+  checked,
+  label,
+  onChange,
+}: {
+  checked: boolean;
+  label: string;
+  onChange: () => void;
+}) {
+  return (
+    <input
+      type="checkbox"
+      checked={checked}
+      onChange={onChange}
+      aria-label={label}
+      className="h-3.5 w-3.5 rounded border-white/20 bg-slate-900 text-indigo-500"
+    />
+  );
 }
 
 function CompareButton({

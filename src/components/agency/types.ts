@@ -100,6 +100,7 @@ export interface ClientCampaignSummary {
   pipelineName: string | null;
   pipelineKeyword: string | null;
   campaignKeyword: string | null;
+  packageEnrolled: string | null;
   adAccountId: string | null;
   included: boolean;
   errorMessage: string | null;
@@ -164,6 +165,7 @@ export interface ClientLeaderboardRow {
   locationId: string | null;
   campaignKey: string | null;
   pipelineName: string | null;
+  campaignLabel: string | null;
   statuses: CampaignStatusLabel[];
   included: boolean;
   errorMessage: string | null;

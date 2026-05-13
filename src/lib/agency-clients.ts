@@ -10,6 +10,7 @@
  *   G  AD ACCOUNT ID
  *   I  PIPELINE KEYWORD   (pipeline name in GHL contains this value)
  *   J  CAMPAIGN KEYWORD   (Meta/Facebook campaign name contains this value)
+ *   Z  PACKAGE ENROLLED   (fallback label when pipeline keyword is blank)
  *   AO GHL LOCATION ID
  *
  * One sheet row = one campaign. A single GHL location can appear on multiple
@@ -29,6 +30,7 @@ const COL_STATUS = 4; // E
 const COL_AD_ACCOUNT = 6; // G
 const COL_PIPELINE_KEYWORD = 8; // I
 const COL_CAMPAIGN_KEYWORD = 9; // J
+const COL_PACKAGE_ENROLLED = 25; // Z
 const COL_LOCATION_ID = 40; // AO
 
 /** Status column values that count as an active campaign for the rollup. */
@@ -57,6 +59,8 @@ export interface ActiveCampaign {
   pipelineKeyword: string | null;
   /** Column J — Meta campaign name should contain this value (substring match). */
   campaignKeyword: string | null;
+  /** Column Z — display fallback when Column I is blank. */
+  packageEnrolled: string | null;
   adAccountId: string | null;
 }
 
@@ -130,6 +134,7 @@ export async function listActiveCampaigns(): Promise<ActiveCampaignsResult> {
     const status = rawStatus as CampaignStatus;
     const pipelineKeyword = safeString(row[COL_PIPELINE_KEYWORD]);
     const campaignKeyword = safeString(row[COL_CAMPAIGN_KEYWORD]);
+    const packageEnrolled = safeString(row[COL_PACKAGE_ENROLLED]);
     // Disambiguator: prefer the pipeline keyword (defines which GHL pipeline
     // this row is about), fall back to the Meta keyword, then status.
     const disambiguator = pipelineKeyword ?? campaignKeyword ?? status;
@@ -148,6 +153,7 @@ export async function listActiveCampaigns(): Promise<ActiveCampaignsResult> {
       ownerLastName: safeString(row[COL_OWNER_LAST]),
       pipelineKeyword,
       campaignKeyword,
+      packageEnrolled,
       adAccountId: normalizeAdAccount(String(row[COL_AD_ACCOUNT] ?? "")),
     });
   }

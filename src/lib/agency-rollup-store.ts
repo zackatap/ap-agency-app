@@ -62,6 +62,7 @@ export interface AgencyCampaignRecord {
   ownerLastName: string | null;
   pipelineKeyword: string | null;
   campaignKeyword: string | null;
+  packageEnrolled: string | null;
   pipelineId: string | null;
   pipelineName: string | null;
   adAccountId: string | null;
@@ -232,6 +233,7 @@ async function ensureSchema(sql: Sql): Promise<void> {
         owner_last_name TEXT,
         pipeline_keyword TEXT,
         campaign_keyword TEXT,
+        package_enrolled TEXT,
         pipeline_id TEXT,
         pipeline_name TEXT,
         ad_account_id TEXT,
@@ -255,7 +257,8 @@ async function ensureSchema(sql: Sql): Promise<void> {
         ADD COLUMN IF NOT EXISTS open_count INTEGER,
         ADD COLUMN IF NOT EXISTS stale_open_count INTEGER,
         ADD COLUMN IF NOT EXISTS stale_open_pct NUMERIC,
-        ADD COLUMN IF NOT EXISTS last_manual_stage_change TIMESTAMPTZ
+        ADD COLUMN IF NOT EXISTS last_manual_stage_change TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS package_enrolled TEXT
     `;
   } catch (err) {
     console.warn("[agency-rollup-store] ADD COLUMN quality failed:", err);
@@ -531,7 +534,7 @@ export async function upsertCampaigns(
       INSERT INTO agency_rollup_campaigns (
         campaign_key, location_id, status, cid, business_name,
         owner_first_name, owner_last_name, pipeline_keyword, campaign_keyword,
-        pipeline_id, pipeline_name, ad_account_id, needs_setup_reason,
+        package_enrolled, pipeline_id, pipeline_name, ad_account_id, needs_setup_reason,
         movement_ratio, open_count, stale_open_count, stale_open_pct,
         last_manual_stage_change, updated_at
       ) VALUES (
@@ -544,6 +547,7 @@ export async function upsertCampaigns(
         ${c.ownerLastName},
         ${c.pipelineKeyword},
         ${c.campaignKeyword},
+        ${c.packageEnrolled},
         ${c.pipelineId},
         ${c.pipelineName},
         ${c.adAccountId},
@@ -564,6 +568,7 @@ export async function upsertCampaigns(
         owner_last_name = EXCLUDED.owner_last_name,
         pipeline_keyword = EXCLUDED.pipeline_keyword,
         campaign_keyword = EXCLUDED.campaign_keyword,
+        package_enrolled = EXCLUDED.package_enrolled,
         pipeline_id = EXCLUDED.pipeline_id,
         pipeline_name = EXCLUDED.pipeline_name,
         ad_account_id = EXCLUDED.ad_account_id,
@@ -589,6 +594,7 @@ function mapCampaignRow(row: Record<string, unknown>): AgencyCampaignRecord {
     ownerLastName: (row.owner_last_name as string) ?? null,
     pipelineKeyword: (row.pipeline_keyword as string) ?? null,
     campaignKeyword: (row.campaign_keyword as string) ?? null,
+    packageEnrolled: (row.package_enrolled as string) ?? null,
     pipelineId: (row.pipeline_id as string) ?? null,
     pipelineName: (row.pipeline_name as string) ?? null,
     adAccountId: (row.ad_account_id as string) ?? null,

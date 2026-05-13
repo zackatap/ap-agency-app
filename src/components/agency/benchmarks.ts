@@ -359,6 +359,7 @@ export function buildLeaderboardRows(
       locationId: null,
       campaignKey: null,
       pipelineName: null,
+      campaignLabel: describeCampaignLabels(group),
       statuses,
       included: !anyExcluded,
       errorMessage: anyExcluded
@@ -386,6 +387,7 @@ function campaignToRow(c: ClientCampaignSummary): ClientLeaderboardRow {
     locationId: c.locationId,
     campaignKey: c.campaignKey,
     pipelineName: c.pipelineName,
+    campaignLabel: getCampaignLabel(c),
     statuses: [c.status],
     included: c.included,
     errorMessage: c.errorMessage ?? c.needsSetupReason,
@@ -393,5 +395,19 @@ function campaignToRow(c: ClientCampaignSummary): ClientLeaderboardRow {
     months: c.months,
     children: [c],
   };
+}
+
+export function getCampaignLabel(c: Pick<ClientCampaignSummary, "pipelineKeyword" | "packageEnrolled">): string | null {
+  return c.pipelineKeyword ?? c.packageEnrolled ?? null;
+}
+
+function describeCampaignLabels(campaigns: ClientCampaignSummary[]): string | null {
+  const labels = campaigns
+    .map(getCampaignLabel)
+    .filter((label): label is string => Boolean(label));
+  const unique = Array.from(new Set(labels));
+  if (unique.length === 0) return null;
+  if (unique.length === 1) return unique[0];
+  return `${unique.length} campaigns`;
 }
 

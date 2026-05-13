@@ -146,6 +146,7 @@ export interface CampaignSummary {
   pipelineName: string | null;
   pipelineKeyword: string | null;
   campaignKeyword: string | null;
+  packageEnrolled: string | null;
   adAccountId: string | null;
   included: boolean;
   errorMessage: string | null;
@@ -526,6 +527,7 @@ export async function buildAgencyRollupView(params?: {
       pipelineName: record?.pipelineName ?? null,
       pipelineKeyword: record?.pipelineKeyword ?? null,
       campaignKeyword: record?.campaignKeyword ?? null,
+      packageEnrolled: record?.packageEnrolled ?? null,
       adAccountId: record?.adAccountId ?? null,
       included,
       errorMessage,
@@ -563,6 +565,7 @@ export async function buildAgencyRollupView(params?: {
       pipelineName: record.pipelineName,
       pipelineKeyword: record.pipelineKeyword,
       campaignKeyword: record.campaignKeyword,
+      packageEnrolled: record.packageEnrolled,
       adAccountId: record.adAccountId,
       included: false,
       errorMessage:
