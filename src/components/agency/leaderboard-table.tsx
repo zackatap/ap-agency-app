@@ -169,9 +169,6 @@ export function LeaderboardTable({
   }, [rows, excludedKeys]);
 
   const sorted = useMemo(() => {
-    const meta = METRIC_META[sortKey];
-    const effectiveDir =
-      sortDir === "desc" ? (meta.higherIsBetter ? "desc" : "asc") : sortDir;
     const arr = rows.slice();
     arr.sort((a, b) => {
       const av = getRowMetric(a, sortKey, monthKey);
@@ -179,7 +176,7 @@ export function LeaderboardTable({
       if (av == null && bv == null) return 0;
       if (av == null) return 1;
       if (bv == null) return -1;
-      return effectiveDir === "desc" ? bv - av : av - bv;
+      return sortDir === "desc" ? bv - av : av - bv;
     });
     return arr;
   }, [rows, sortKey, sortDir, monthKey]);
