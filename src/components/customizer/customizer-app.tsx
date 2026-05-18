@@ -3,8 +3,8 @@
 import { useEffect, useState } from "react";
 import Script from "next/script";
 
-/** Hide duplicate GHL heading inside the cross-origin embed (see Step 1 title). */
-const GHL_EMBED_TITLE_CROP_PX = 56;
+/** Trim the GHL embed chrome without clipping the top of the form content. */
+const GHL_EMBED_TITLE_CROP_PX = 20;
 const GHL_EMBED_SCROLL_RESERVE_PX = 360;
 
 type CampaignKey =
