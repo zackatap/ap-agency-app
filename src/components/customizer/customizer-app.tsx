@@ -5,7 +5,7 @@ import Script from "next/script";
 
 /** Hide duplicate GHL heading inside the cross-origin embed (see Step 1 title). */
 const GHL_EMBED_TITLE_CROP_PX = 56;
-const GHL_EMBED_BOTTOM_BUFFER_PX = 720;
+const GHL_EMBED_SCROLL_RESERVE_PX = 360;
 
 type CampaignKey =
   | "base"
@@ -270,7 +270,7 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
   const adManagerUrl = locationId
     ? `${ghlAppBase}/v2/location/${encodeURIComponent(locationId)}/marketing/ad-manager/settings?type=meta&tab=conversions`
     : null;
-  const activeEmbedHeight = activeCampaign.height + GHL_EMBED_BOTTOM_BUFFER_PX;
+  const activeEmbedHeight = activeCampaign.height + GHL_EMBED_SCROLL_RESERVE_PX;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-slate-100">
@@ -354,8 +354,11 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
                 */}
                 <div className="rounded-xl border border-white/10 bg-white p-2">
                   <div
-                    className="overflow-hidden rounded-lg"
-                    style={{ height: `${activeEmbedHeight}px` }}
+                    className="overflow-y-auto overscroll-contain rounded-lg"
+                    style={{
+                      height: `${activeEmbedHeight}px`,
+                      maxHeight: "82dvh",
+                    }}
                   >
                     <iframe
                       src={`https://link.automatedpractice.com/widget/form/${activeCampaign.formId}`}
