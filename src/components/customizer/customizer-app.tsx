@@ -5,6 +5,7 @@ import Script from "next/script";
 
 /** Hide duplicate GHL heading inside the cross-origin embed (see Step 1 title). */
 const GHL_EMBED_TITLE_CROP_PX = 56;
+const GHL_EMBED_BOTTOM_BUFFER_PX = 720;
 
 type CampaignKey =
   | "base"
@@ -269,6 +270,7 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
   const adManagerUrl = locationId
     ? `${ghlAppBase}/v2/location/${encodeURIComponent(locationId)}/marketing/ad-manager/settings?type=meta&tab=conversions`
     : null;
+  const activeEmbedHeight = activeCampaign.height + GHL_EMBED_BOTTOM_BUFFER_PX;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 text-slate-100">
@@ -350,24 +352,22 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
                 {/*
                   {activeCampaign.formName} — hidden: duplicate of Step 1 title; GHL title inside iframe is cropped below.
                 */}
-                <div className="rounded-xl border border-white/10 bg-slate-900 p-2">
+                <div className="rounded-xl border border-white/10 bg-white p-2">
                   <div
                     className="overflow-hidden rounded-lg"
-                    style={{ height: `${activeCampaign.height}px` }}
+                    style={{ height: `${activeEmbedHeight}px` }}
                   >
                     <iframe
                       src={`https://link.automatedpractice.com/widget/form/${activeCampaign.formId}`}
                       style={{
                         width: "100%",
-                        height: `${activeCampaign.height + GHL_EMBED_TITLE_CROP_PX}px`,
+                        height: `${activeEmbedHeight + GHL_EMBED_TITLE_CROP_PX}px`,
                         marginTop: `-${GHL_EMBED_TITLE_CROP_PX}px`,
                         border: "none",
                         borderRadius: "10px",
                         display: "block",
-                        backgroundColor: "transparent",
-                        filter:
-                          "invert(1) hue-rotate(180deg) brightness(1.1) contrast(0.96)",
-                        mixBlendMode: "screen",
+                        backgroundColor: "#fff",
+                        colorScheme: "light",
                       }}
                       id={`inline-${activeCampaign.formId}`}
                       data-layout="{'id':'INLINE'}"
@@ -378,7 +378,7 @@ export function CustomizerApp({ locationId = "" }: CustomizerAppProps) {
                       data-deactivation-type="neverDeactivate"
                       data-deactivation-value=""
                       data-form-name={activeCampaign.formName}
-                      data-height={String(activeCampaign.height)}
+                      data-height={String(activeEmbedHeight)}
                       data-layout-iframe-id={`inline-${activeCampaign.formId}`}
                       data-form-id={activeCampaign.formId}
                       title={activeCampaign.formName}
