@@ -44,6 +44,29 @@ interface Props {
 }
 
 type ViewMode = "cid" | "campaign";
+type FilterField = "client" | "campaign" | MetricKey;
+type FilterOperator = "contains" | "gt" | "lt";
+
+interface LeaderboardFilter {
+  id: string;
+  field: FilterField;
+  operator: FilterOperator;
+  value: string;
+}
+
+const FILTER_FIELDS: Array<{
+  key: FilterField;
+  label: string;
+  type: "text" | "number";
+}> = [
+  { key: "client", label: "Client", type: "text" },
+  { key: "campaign", label: "Campaign", type: "text" },
+  ...METRIC_ORDER.map((key) => ({
+    key,
+    label: METRIC_META[key].label,
+    type: "number" as const,
+  })),
+];
 
 /**
  * Sortable leaderboard. In "cid" mode, campaigns sharing a CID are rolled up
@@ -64,6 +87,10 @@ export function LeaderboardTable({
   const [sortDir, setSortDir] = useState<"desc" | "asc">("desc");
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [selectedKeys, setSelectedKeys] = useState<Set<string>>(new Set());
+  const [filters, setFilters] = useState<LeaderboardFilter[]>([]);
+  const [draftField, setDraftField] = useState<FilterField>("leads");
+  const [draftOperator, setDraftOperator] = useState<FilterOperator>("gt");
+  const [draftValue, setDraftValue] = useState("");
   const tableRef = useRef<HTMLDivElement | null>(null);
   /**
    * Width of the *visible* scroll viewport (not the inner table width).
@@ -121,10 +148,20 @@ export function LeaderboardTable({
     }
   }, [compareCampaignKey]);
 
+  const filteredRows = useMemo(
+    () =>
+      filters.length === 0
+        ? rows
+        : rows.filter((row) =>
+            filters.every((filter) => rowMatchesFilter(row, filter, monthKey))
+          ),
+    [rows, filters, monthKey]
+  );
+
   const canCompare = typeof renderCompare === "function";
   const selectedItems = useMemo(
-    () => buildSelectedItems(rows, selectedKeys),
-    [rows, selectedKeys]
+    () => buildSelectedItems(filteredRows, selectedKeys),
+    [filteredRows, selectedKeys]
   );
 
   function toggleCompare(campaignKey: string) {
@@ -169,7 +206,7 @@ export function LeaderboardTable({
   }, [rows, excludedKeys]);
 
   const sorted = useMemo(() => {
-    const arr = rows.slice();
+    const arr = filteredRows.slice();
     arr.sort((a, b) => {
       const av = getRowMetric(a, sortKey, monthKey);
       const bv = getRowMetric(b, sortKey, monthKey);
@@ -179,7 +216,7 @@ export function LeaderboardTable({
       return sortDir === "desc" ? bv - av : av - bv;
     });
     return arr;
-  }, [rows, sortKey, sortDir, monthKey]);
+  }, [filteredRows, sortKey, sortDir, monthKey]);
 
   function handleSort(key: MetricKey) {
     if (key === sortKey) {
@@ -197,6 +234,38 @@ export function LeaderboardTable({
       else next.add(rowKey);
       return next;
     });
+  }
+
+  function handleDraftFieldChange(value: FilterField) {
+    setDraftField(value);
+    setDraftOperator(getFilterFieldType(value) === "text" ? "contains" : "gt");
+    setDraftValue("");
+  }
+
+  function addFilter(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const value = draftValue.trim();
+    if (!value) return;
+
+    const fieldType = getFilterFieldType(draftField);
+    const normalizedValue =
+      fieldType === "number" ? normalizeNumericFilterValue(value) : value;
+    if (fieldType === "number" && normalizedValue == null) return;
+
+    setFilters((prev) => [
+      ...prev,
+      {
+        id: `${Date.now()}-${draftField}-${prev.length}`,
+        field: draftField,
+        operator: fieldType === "text" ? "contains" : draftOperator,
+        value: normalizedValue ?? value,
+      },
+    ]);
+    setDraftValue("");
+  }
+
+  function removeFilter(id: string) {
+    setFilters((prev) => prev.filter((filter) => filter.id !== id));
   }
 
   return (
@@ -226,16 +295,49 @@ export function LeaderboardTable({
             By campaign
           </button>
         </div>
-        {selectedItems.length > 0 && (
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <FilterBuilder
+            field={draftField}
+            operator={draftOperator}
+            value={draftValue}
+            onFieldChange={handleDraftFieldChange}
+            onOperatorChange={setDraftOperator}
+            onValueChange={setDraftValue}
+            onSubmit={addFilter}
+          />
+          {selectedItems.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setSelectedKeys(new Set())}
+              className="rounded-md border border-white/10 bg-slate-800/60 px-3 py-1 text-xs text-slate-300 hover:border-indigo-400/40 hover:text-white"
+            >
+              Clear {selectedItems.length} selected
+            </button>
+          )}
+        </div>
+      </div>
+
+      {filters.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
+          <span>
+            Showing {filteredRows.length} of {rows.length}
+          </span>
+          {filters.map((filter) => (
+            <FilterChip
+              key={filter.id}
+              filter={filter}
+              onRemove={() => removeFilter(filter.id)}
+            />
+          ))}
           <button
             type="button"
-            onClick={() => setSelectedKeys(new Set())}
-            className="rounded-md border border-white/10 bg-slate-800/60 px-3 py-1 text-xs text-slate-300 hover:border-indigo-400/40 hover:text-white"
+            onClick={() => setFilters([])}
+            className="rounded-full border border-white/10 px-2 py-1 text-slate-400 hover:border-indigo-400/40 hover:text-white"
           >
-            Clear {selectedItems.length} selected
+            Clear filters
           </button>
-        )}
-      </div>
+        </div>
+      )}
 
       <div
         ref={tableRef}
@@ -296,6 +398,16 @@ export function LeaderboardTable({
                 onSelectionToggle={toggleSelection}
               />
             ))}
+            {sorted.length === 0 && (
+              <tr>
+                <td
+                  colSpan={TOTAL_COLUMNS}
+                  className="px-4 py-8 text-center text-sm text-slate-400"
+                >
+                  No clients match the current filters.
+                </td>
+              </tr>
+            )}
           </tbody>
         </table>
       </div>
@@ -512,6 +624,177 @@ function findCampaign(
   campaignKey: string
 ): ClientCampaignSummary | null {
   return campaigns.find((c) => c.campaignKey === campaignKey) ?? null;
+}
+
+function FilterBuilder({
+  field,
+  operator,
+  value,
+  onFieldChange,
+  onOperatorChange,
+  onValueChange,
+  onSubmit,
+}: {
+  field: FilterField;
+  operator: FilterOperator;
+  value: string;
+  onFieldChange: (field: FilterField) => void;
+  onOperatorChange: (operator: FilterOperator) => void;
+  onValueChange: (value: string) => void;
+  onSubmit: (event: React.FormEvent<HTMLFormElement>) => void;
+}) {
+  const fieldType = getFilterFieldType(field);
+
+  return (
+    <form
+      onSubmit={onSubmit}
+      className="flex flex-wrap items-center gap-1.5 rounded-lg border border-white/10 bg-slate-900/50 p-1 text-xs"
+    >
+      <select
+        value={field}
+        onChange={(event) => onFieldChange(event.target.value as FilterField)}
+        className="rounded-md border border-white/10 bg-slate-950 px-2 py-1 text-slate-200 outline-none hover:border-indigo-400/40"
+        aria-label="Filter column"
+      >
+        {FILTER_FIELDS.map((option) => (
+          <option key={option.key} value={option.key}>
+            {option.label}
+          </option>
+        ))}
+      </select>
+
+      {fieldType === "number" ? (
+        <select
+          value={operator}
+          onChange={(event) =>
+            onOperatorChange(event.target.value as FilterOperator)
+          }
+          className="rounded-md border border-white/10 bg-slate-950 px-2 py-1 text-slate-200 outline-none hover:border-indigo-400/40"
+          aria-label="Filter operator"
+        >
+          <option value="gt">&gt;</option>
+          <option value="lt">&lt;</option>
+        </select>
+      ) : (
+        <span className="rounded-md border border-white/10 bg-slate-950 px-2 py-1 text-slate-300">
+          contains
+        </span>
+      )}
+
+      <input
+        value={value}
+        onChange={(event) => onValueChange(event.target.value)}
+        inputMode={fieldType === "number" ? "decimal" : "text"}
+        placeholder={fieldType === "number" ? "30" : "Pain"}
+        className="w-24 rounded-md border border-white/10 bg-slate-950 px-2 py-1 text-slate-100 outline-none placeholder:text-slate-600 hover:border-indigo-400/40 focus:border-indigo-400/60"
+        aria-label="Filter value"
+      />
+
+      <button
+        type="submit"
+        disabled={!value.trim()}
+        className="rounded-md bg-indigo-600 px-2 py-1 font-medium text-white disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400"
+      >
+        Add
+      </button>
+    </form>
+  );
+}
+
+function FilterChip({
+  filter,
+  onRemove,
+}: {
+  filter: LeaderboardFilter;
+  onRemove: () => void;
+}) {
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full border border-indigo-400/20 bg-indigo-500/10 px-2 py-1 text-indigo-100">
+      <span>
+        {getFilterFieldLabel(filter.field)} {formatFilterOperator(filter)}{" "}
+        {filter.operator === "contains" ? `"${filter.value}"` : filter.value}
+      </span>
+      <button
+        type="button"
+        onClick={onRemove}
+        className="rounded-full px-1 text-indigo-200 hover:bg-white/10 hover:text-white"
+        aria-label={`Remove ${getFilterFieldLabel(filter.field)} filter`}
+      >
+        x
+      </button>
+    </span>
+  );
+}
+
+function getFilterFieldType(field: FilterField): "text" | "number" {
+  return field === "client" || field === "campaign" ? "text" : "number";
+}
+
+function getFilterFieldLabel(field: FilterField): string {
+  if (field === "client") return "Client";
+  if (field === "campaign") return "Campaign";
+  return METRIC_META[field].label;
+}
+
+function formatFilterOperator(filter: LeaderboardFilter): string {
+  if (filter.operator === "contains") return "contains";
+  return filter.operator === "gt" ? ">" : "<";
+}
+
+function normalizeNumericFilterValue(value: string): string | null {
+  const parsed = Number(value.replace(/[$,%\sx]/gi, ""));
+  return Number.isFinite(parsed) ? String(parsed) : null;
+}
+
+function rowMatchesFilter(
+  row: ClientLeaderboardRow,
+  filter: LeaderboardFilter,
+  monthKey: string | "total"
+): boolean {
+  if (filter.field === "client" || filter.field === "campaign") {
+    const haystack = getTextFilterValue(row, filter.field).toLowerCase();
+    return haystack.includes(filter.value.toLowerCase());
+  }
+
+  const target = getRowMetric(row, filter.field, monthKey);
+  const threshold = Number(filter.value);
+  if (target == null || !Number.isFinite(threshold)) return false;
+
+  return filter.operator === "lt" ? target < threshold : target > threshold;
+}
+
+function getTextFilterValue(
+  row: ClientLeaderboardRow,
+  field: "client" | "campaign"
+): string {
+  if (field === "client") {
+    return [
+      row.displayName,
+      row.subLabel,
+      row.cid,
+      ...row.children.flatMap((child) => [
+        child.businessName,
+        child.ownerName,
+        child.cid,
+      ]),
+    ]
+      .filter(Boolean)
+      .join(" ");
+  }
+
+  return [
+    row.campaignLabel,
+    row.pipelineName,
+    ...row.children.flatMap((child) => [
+      getCampaignLabel(child),
+      child.pipelineName,
+      child.pipelineKeyword,
+      child.campaignKeyword,
+      child.packageEnrolled,
+    ]),
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 type SelectedItem =
