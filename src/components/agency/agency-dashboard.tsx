@@ -76,8 +76,6 @@ function KpiPair({
   rightHeader,
   primaryValue,
   secondaryValue,
-  sub,
-  contributorLineA,
   contributorLineB,
 }: KpiPairProps) {
   const colClass =
@@ -97,9 +95,6 @@ function KpiPair({
           <div className={colClass}>{leftHeader}</div>
           <div className={ruleClass} />
           <div className={valueClass}>{primaryValue}</div>
-          <div className="mt-2 text-xs leading-snug text-slate-500">
-            {contributorLineA}
-          </div>
         </div>
         <div className="min-w-0 border-l border-white/[0.04] pl-3">
           <div className={colClass}>{rightHeader}</div>
@@ -110,11 +105,6 @@ function KpiPair({
           </div>
         </div>
       </div>
-      {sub ? (
-        <div className="mt-3 border-t border-white/[0.04] pt-2 text-[11px] text-slate-500">
-          {sub}
-        </div>
-      ) : null}
     </div>
   );
 }
