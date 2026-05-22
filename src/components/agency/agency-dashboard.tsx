@@ -288,9 +288,8 @@ function formatRangeLabel(
 
 export function AgencyDashboard({ initial, initialLatest }: Props) {
   const [view, setView] = useState<ClientRollupView | null>(initial);
-  const [selectedMonthKey, setSelectedMonthKey] = useState<string | "total">(
-    () => initial?.months[initial.months.length - 1]?.monthKey ?? "total"
-  );
+  const [distributionMonthKey, setDistributionMonthKey] =
+    useState<string | "total">("total");
   const [distributionMetric, setDistributionMetric] = useState<MetricKey>("closed");
   const [ratesMode, setRatesMode] = useState<"simple" | "weighted">("simple");
   const [compareCampaignKey, setCompareCampaignKey] = useState<string | "">("");
@@ -365,9 +364,7 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
         };
         if (body.snapshot) {
           setView(body);
-          setSelectedMonthKey(
-            body.months[body.months.length - 1]?.monthKey ?? "total"
-          );
+          setDistributionMonthKey("total");
         } else {
           setView(null);
         }
@@ -899,9 +896,9 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
                     ))}
                   </select>
                   <select
-                    value={selectedMonthKey}
+                    value={distributionMonthKey}
                     onChange={(e) =>
-                      setSelectedMonthKey(
+                      setDistributionMonthKey(
                         e.target.value as string | "total"
                       )
                     }
@@ -925,7 +922,7 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
                 <DistributionStrip
                   campaigns={includedCampaigns}
                   metric={distributionMetric}
-                  monthKey={selectedMonthKey}
+                  monthKey={distributionMonthKey}
                   excludedKeys={excludedKeys}
                   highlightedCampaignKey={compareCampaignKey || undefined}
                   onSelect={(campaign) =>
@@ -948,7 +945,7 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
             </div>
             <LeaderboardTable
               campaigns={includedCampaigns}
-              monthKey={selectedMonthKey}
+              monthKey="total"
               excludedKeys={excludedKeys}
               compareCampaignKey={compareCampaignKey || null}
               onCompareCampaignKeyChange={(key) =>
