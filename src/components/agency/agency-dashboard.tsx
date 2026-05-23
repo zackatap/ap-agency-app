@@ -76,6 +76,7 @@ function KpiPair({
   rightHeader,
   primaryValue,
   secondaryValue,
+  contributorLineA,
   contributorLineB,
 }: KpiPairProps) {
   const colClass =
@@ -95,6 +96,9 @@ function KpiPair({
           <div className={colClass}>{leftHeader}</div>
           <div className={ruleClass} />
           <div className={valueClass}>{primaryValue}</div>
+          <div className="mt-2 text-xs leading-snug text-slate-500">
+            {contributorLineA}
+          </div>
         </div>
         <div className="min-w-0 border-l border-white/[0.04] pl-3">
           <div className={colClass}>{rightHeader}</div>
@@ -109,17 +113,8 @@ function KpiPair({
   );
 }
 
-function formatKpiContributorFootnote(
-  mode: AgencyKpiSummaryMode,
-  info: KpiContributorInfo
-): string {
+function formatKpiContributorFootnote(info: KpiContributorInfo): string {
   if (info.pool <= 0) return "No campaign data";
-  if (mode === "top50") {
-    return `${info.used} campaign${info.used !== 1 ? "s" : ""} · top 50% of ${info.pool}`;
-  }
-  if (mode === "top20") {
-    return `${info.used} campaign${info.used !== 1 ? "s" : ""} · top 20% of ${info.pool}`;
-  }
   return `${info.used} campaign${info.used !== 1 ? "s" : ""}`;
 }
 
@@ -205,7 +200,7 @@ function buildKpiSections(
   const pairCard = (pair: KpiPairConfig): KpiPairProps => {
     const sub = summaryMode === "average" ? undefined : topSub;
     const foot = (m: DashboardKpiMetric) =>
-      formatKpiContributorFootnote(summaryMode, contributors[m]);
+      formatKpiContributorFootnote(contributors[m]);
     return {
       ariaTitle: pair.cardTitle,
       leftHeader: KPI_INLINE_LABEL[pair.a],
