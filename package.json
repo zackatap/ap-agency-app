@@ -7,11 +7,16 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "meta:exchange-token": "node scripts/exchange-meta-token.mjs"
+    "meta:exchange-token": "node scripts/exchange-meta-token.mjs",
+    "granola:append": "node scripts/append-granola-row.mjs",
+    "vercel:sync-content-env": "node scripts/sync-vercel-content-env.mjs"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.104.1",
+    "@google/generative-ai": "^0.24.1",
     "@neondatabase/serverless": "^1.0.2",
     "googleapis": "^171.4.0",
+    "granola-api": "^1.0.0",
     "leaflet": "^1.9.4",
     "next": "16.1.6",
     "react": "19.2.3",

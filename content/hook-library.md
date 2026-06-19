@@ -1,0 +1,344 @@
+# Hook library for Automated Practice content
+
+Audience: health practice owners (especially chiropractors). Topics: patient growth, Meta ads, lead quality, systems, automations, GHL, ROI.
+
+When writing hooks, pick 3 templates below and fill `[X]` / `(insert …)` slots with the specific idea. Keep hooks punchy and spoken-word friendly.
+
+## 30 hook swipe file
+
+- Here’s something weird I do with [X].
+- People think I’m weird for [X].
+- This [X] pissed me off today.
+- Most people don’t know this about [X].
+- Nobody talks about this part of [X].
+- I hate when people do [X].
+- I love when people do [X].
+- People call me crazy when I [X].
+- This is the worst advice about [X].
+- Be honest — have you ever [X]?
+- I just realized something about [X].
+- This completely changed how I think about [X].
+- I was today years old when I learned [X].
+- I didn’t learn [X] until way too late.
+- I can’t believe it took me so long to learn [X].
+- The first time I learned [X], I was shocked.
+- The moment I stopped [X], everything changed.
+- This one thing about [X] drives me insane.
+- Here’s how I explain [X] so people actually get it.
+- We’re not doing [X] anymore.
+- Every time I think about [X], I feel [Y].
+- The only way I can actually [X] is like this.
+- What did your first [X] feel like?
+- Something Gen [X] does that drives me crazy.
+- The last time I tried [X], this happened.
+- If you’re struggling with [X], try this instead.
+- It took me [N] years to understand [X].
+- I wish someone had told me this about [X].
+- Here’s a weird thing I do with [X].
+- I don’t know why, but [X] has always been easy for me.
+
+## Viral hook templates (curated)
+
+- This represents your X before, during, and after X
+- Here's exactly how much (insert action/item) you need to (insert result)
+- Can you tell us how to (insert result) in 60 seconds?
+- This is what (insert thing) looks like when you're (insert action). And this is what they look like when you're not (insert action).
+- I'm going to tell you how to get (Insert result), (insert mind blowing method).
+- It took me 10 years to learn this but I'll teach it to you in less than 1 minute.
+- When you get (insert item/result) here are the # things you got to do right away.
+- If you don't have (insert item/action), do (insert item/action).
+- My money rules as a (insert description) working towards financial independence.
+- Money can buy you (insert item) but it can not buy you (insert result).
+- Here's how to develop a (insert skill) so strong that you physically can't stop (doing skill).
+- This is what (insert #) of (insert item) looks like.
+- If I woke up (insert pain point) tomorrow, and wanted to (insert dream result) by (insert time) here's exactly what I would do.
+- If you're a (insert target audience) and you want (insert dream result) by (insert avenue) then listen to this video.
+- If you are (insert age group or range) do not do (insert action).
+- As an (insert trait) responsible (insert age) year old with a goal to (insert goal) here are 3 things I will never regret doing.
+- Not to flex, but I'm fretty f*cking good at (insert skill/niche).
+- This is what (insert object/item) looks like when you are using/doing (insert product/service).
+- Are you still (insert action)? I've got (insert result) in (insert time frame) and I have never (insert action).
+- 3 Youtube channels that will teach you more than any (insert industry/niche) degree.
+- I think I just found the biggest (insert niche/industry) cheat code.
+- Here are 3 people who will make you a better (insert title).
+- (insert trait) Guy vs (insert trait) Guy.
+- I see you doing nothing but (insert action) after (insert event) so follow this agenda to avoid that.
+- Want to be the first (insert dream result) in your family?
+- This is how many (insert item) you need to (insert result).
+- Everyone tells you to (insert action) but nobody actually tells you how to do it. Here is a # second step by step tutorial that you can save.
+- If you're (insert age range) these are the # things you need to do so you don't end up (insert pain point) by (insert age).
+- If I were starting over in my (insert age range) with no (insert item) here are the top # things I would do to (insert dream result).
+- Here are some slightly unethical (insert industry/niche) hacks that you should know if you're (insert target audience).
+- Here's exactly how you're gonna lock in if you want to (insert dream result).
+- This is the same exact (insert thing) but the first is/got (insert result) and the second is/got X
+- If you want to end up (insert pain point) then skip this video.
+- We have never used (insert noun) in our home because we have found it to be generally (insert trait/traits).
+- (insert action) for (insert period of time) and you will get (insert dream result).
+- If you're between the ages of (insert age) to (insert age) and you feel like (insert pain point).
+- (insert before state) to (insert after state) in # simple steps in under # of seconds.
+- If you're trying to (insert dream results) then here is the one (insert thing) you should do.
+- How long do you think you have to (insert action) to (insert result).
+- If you want to do this, first do this.
+- If you're trying to (insert dream result) and you haven't got a clue what to (insert action) on a daily basis I am going to show you an example.
+- I'm gonna save you # of minutes off your next workout with # of simple tips.
+- If I only had (insert time frame) in the (insert location/place) this is exactly what I would do to get (insert dream result).
+- How long can you skip (insert action) before losing (insert result).
+- If you want to (insert dream result) a week for the next (insert weeks) without (insert pain point) then listen up.
+- If you just turned (insert age) and you don't want to (insert pain point) then you should do the following # things immediately.
+- You can have a perfect (insert dream result) by simply dumbing it down.
+- Did you know that this, this, this, and this get (insert dream result).
+- Don't start doing (insert action) until you learn how to do this.
+- (insert industry) tier list for (insert year).
+- In 60 seconds i'm going to teach you more about (insert thing) than you have ever learned in your entire life.
+- Everyone tells you to (insert action) but no one actually shows you how to do it. Here is a # second step by step tutorial that you can save for later.
+- If you're in your (insert 20's, 30's, 40's, 50's, 60', etc) then these are the # of things you need to do to make sure you don't end up (insert pain point) by (insert age).
+- (Insert noun) loses (Insert noun) on this, so they can make (insert noun) on this.
+- You have (insert noun) tomorrow but you have no time to (insert action). Here's how you save your (insert noun).
+- (Insert scenario) and (Insert dream result), here are the # of steps to get (insert dream result).
+- Everyone tells you to do (insert action) but you think it's too late because you are (Insert age). I am a (insert occupation) and these are # of things you need to know in your (Insert age).
+- (Insert target audience) if you're serious about playing at the next level.
+- You only have to be dialed in on # of things to be an elite (insert title).
+- (Insert noun) for dummies.
+- Don't hate me but I don't really mind (insert noun).
+- Best ways to save money while (insert action).
+- This is every way to (insert action).
+- What if I told you this (insert item) could (insert result).
+- Did you know that if you (insert action, (Insert action), (insert action), etc.
+- The (insert thing) you have now in you (insert age group) is so (insert noun).
+- At age (insert age) the age that many (insert target audience) is when (insert pain point).
+- Listen if you're not forcing your (insert person/persons) to (insert action) in their (insert current state) don't expect them to be (insert trait) in their (insert after state).
+- Would you rather watch your (insert person/persons) (insert pain point) or join them in their (insert niche) journey to save their lives?
+- This is the amount of (insert noun) you would lose per day in a (insert state).
+- If your in a (insert dream result) journey, this is exactly what you need to do to (insert dream goal) in #simple steps.
+- If you told me # of years ago I'd be (insert dream result) I wouldn't have believed you.
+- If your getting (insert adjective) or know someone (insert adjective) there are # of incredulity important things you need to make sure you can do physically in order to (dream result).
+- If you don't want to fail (insert life event).
+- I crammed the hardest (insert noun) and (insert dream result).
+- If you're cooked for your (insert life event) but still can't find the motivation to do (insert action) you're gonna want to see this.
+- Here's the difference between (insert title), (insert title) , and (insert title).
+- If I were in my (insert age range) here is exactly how I would avoid (insert bad result).
+- Here's every (insert noun) that you actually need to know.
+- The most important things I will teach my kids as a (insert job title).
+- If you can't solve this (insert problem) in under 5 seconds go back to (insert pre-qualifying stage).
+- 30 seconds of (insert industry) advice I give my best friend if he/she were starting from scratch.
+- I would do this before quitting your job.
+- If you do this you'll (insert result).
+- If your a (insert target audience) who (insert pain point) and you want to (insert dream result) let's go over a very simple # step plan you can follow to quickly (insert dream result).
+- Here are 5 books to (insert dream result) better than 99% of other people.
+- If you're somebody who (insert action) and your goal is to (insert dream result) and (insert dream result) at the same time. Then here are my # best tips.
+- If you can't do (insert action).
+- If you can do # of (insert action), than you can do # of (insert action).
+- If your mom didn't teach you how to make (insert noun) growing up, don't worry i'm your mommy now.
+- Never lose a game of (insert game) for the rest of your life.
+- 3 levels of (insert noun).
+- Did you know that if you... (Insert action), (insert action), (insert action), etc
+- I am a professional (insert industry) hacker, and here's every hack at (insert store/location/event/etc).
+- I have a very long list of (insert noun) that I (insert action) that I gate keep from other people. But today I feel like giving back so I am going to tell you.
+- I am going to teach you how to identify a good (insert noun) to a bad (insert noun).
+- I went to (insert school type) so you don't have to.
+- Ranking all the most popular (insert noun), so I can rank them from worst to best.
+- Here is how I (insert action) as a (insert label) (insert age).
+- You wouldn't get (insert bad result) when you (insert action) if you (insert action).
+- This is harder than getting into Harvard.
+- Now how much does it really cost to (insert action).
+- This is why no one remembers you.
+- I'm 20 which means my teenage years are officially over, so here;s everything I learned from the 7 most weirdest years of my life.
+- If you're a (target audience) and you want to become (insert dream result) by (insert action) then listen to this video because you have such a big advantage and I will tell you how to conquer it.
+- If you take (insert noun) it will (insert result).
+- I just made a website called (insert the longest but most relatable website name).
+- How to turn just one (insert noun) into a lifetime of free (insert noun).
+- Things that are damaging your (insert noun) without you even realizing it.
+- If you have when you see a girl and she just has (insert dream result).
+- I've (insert dream result) despite having (insert pain point) and this is the routine that did it.
+- Swap these (insert noun) for better (insert result).
+- Did you know that this, this, and this target (insert dream result).
+- Your (insert noun) looks like this and you want them to look like this.
+- (Insert last year) (insert noun), (insert current year) (insert noun).
+- Okay (insert pain point), how about we don't f up (insert current year)
+- This is the program/steps I would follow if I was trying to (insert dream result).
+- If your (insert noun) looks anything like this, these are not (insert noun) these are (insert noun) and here is how you can get (insert dream result).
+- Here are some (insert action) you can do without (insert noun).
+- Let's find out what (insert noun) you are in # steps.
+- Most people can only do (insert action) when trying to (insert action) but as an (insert title) you should be able to (insert action).
+- As an (insert title) you should be able to do this, if you can't (insert diagnosis).
+- If you're an (insert title) you should be able to do this, this, and this. If you can't I got you, just do this # step/routine/program to (insert dream result).
+- If you have (insert pain point), (insert pain point), and (insert pain point) you might be (insert action) wrong.
+- If you feel like your never (insert point) here is everything you need for a (insert dream result).
+- Do you have a (insert pain point) don't waste your money trying to (insert solution) it's just going to come back.
+- If giving yourself (insert result) causes (insert pain point), (insert pain point), and (insert pain point) here is how I cheat it.
+- You don't have (insert pain point), your not (insert adjective), your not (insert adjective) you just need to (insert solution) and I am going to tell you how to do it.
+- Worst thing you can do for your (insert thing) is to ignore your (insert noun) when (insert scenario).
+- Ladies, you can do all the (insert action) but that's not going to do sh*t for your (insert noun).
+- Never (insert action) first and then (insert action).
+- What happens when you go X hours/days/weeks/years without (insert noun).
+- There is no doubt in my mind that (insert action) are the best (insert noun) for your (insert noun).
+- Don't touch this.
+- What I wish I knew at (insert age) instead of (insert age).
+- You're damaging your (insert noun) if you (insert noun) looks like this or like this.
+- My most complemented (insert noun) of (insert year).
+- I have been dating my girlfriend/boyfriend for # years here are # basics I learned that every guy/girl should do for a partner in (insert scenario).
+- When I say I (insert action) everyday and I don't (insert action) everyday people always ask me...
+- # of ways to raise (insert adjective) children.
+- It's okay f you mom didn't talk to you about
+- The reason you can't (insert dream result) to get that (insert dream result) you keep talking about is because...
+- This is your (insert noun) on a regular day, this is you (insert noun) on (insert scenario).
+- You guys know this look, when someone perfectly (insert action) and (insert action) I am obsessed with this (insert noun).
+- You crave (insert noun) on your (insert scenario) here's why.
+- This is you (insert noun) when you (insert action), and this is your (insert noun) when you (insert action).
+- I have (insert noun) commercial (insert noun).
+- Stop (insert action) if you actually want to (insert dream result).
+- This is how much (insert dream result) you achieve if you (insert action), and this is how much (insert dream result) if you (insert action) and these # of hacks.
+- If you want to (insert # of dream result) per week this is how you are going to do it.
+- This is for the homies who promised (insert person/persons) and nice and fancy (insert noun).
+- What if I told you, you could (insert action) for only (insert low cost).
+- Why did it take me over # years to realize you can make (insert result) in # minutes.
+- Don't hate me but I don't really mind (insert basic niche thing) but don't worry I am going to show you how to make it way better.
+- (insert dream result) and (insert dream result) with these # of tips. For reference I have (insert personal result).
+- If you have a (insert dream result) keep scrolling. Today we are going to talk about a (insert routine, method strategy) to (insert dream result)
+- Did you know that if you (insert action), (insert action), (insert action), etc.
+- Here's exactly how much (insert noun) you can make with under (insert dollar amount).
+- The lack of clinical studies on (insert noun) isn't because it doesn't work, it's because...
+- You'll never get (insert dream result) in your (insert age range) if you don't do these 3 things when you turn (insert age).
+- #lessons, # of (insert person/persons) , in # of days/weeks/months.
+- I make more money than doctors, engineers, and lawyers and no I didn't go to college for more than 6 years to get a degree.
+- I worked at (insert company) for X months/years and now I am exposing everything they keep from customers.
+- This is what (insert money amount) will get you in (insert location).
+- How much do I need to make or buy a (insert price) (insert noun).
+- I make (insert hourly rate) can I qualify/buy (insert loan/noun).
+- Let's see what your monthly payment would look like if you owned (insert noun).
+- Lets see what $1,800 a month gets you in (insert location).
+- If you are paying over (insert price amount) for a (insert noun), you might as well buy a (insert noun).
+- I have made a spreadsheet with over (insert large number) of (insert noun).
+- This is (insert large number) of (insert noun).
+- There is one thing above all that sets the top (insert title) apart from the rest.
+- This is how I would (insert action) if I were starting from scratch).
+- If you're spending a lot of money on (insert noun) then you need to try this (insert recipe/method/strategy) because it's super easy and (insert dream outcome).
+- If you have a (insert noun) you have probably experienced this.
+- (insert noun) (insert trait) (insert similar noun) (insert trait).
+- It looks like you haven't done (insert noun) since (insert time frame).
+- I don't know who needs to see this but if you have a (insert symptom) this is how I literally (insert dream result) every single time.
+- Oh look I found (insert $), that means I am going to (insert verb) I only need this.
+- One (insert noun), one (insert noun), and you have (insert time frame).
+
+## Additional templates from 1,000 Viral Hooks PDF
+
+- Here’s exactly how much (insert action/item) you need to (insert result)
+- I’m going to tell you how to get (Insert result), (insert mind blowing method).
+- If you don’t have (insert item/action), do (insert item/action).
+- My money rules as a (insert description) working towards ﬁnancial independence.
+- If I woke up (insert pain point) tomorrow, and wanted to (insert dream result) by (insert time) here’s exactly what I would do.
+- dream result) by (insert avenue) then listen to this video.
+- Not to ﬂex, but I'm fretty f*cking good at (insert skill/niche).
+- Are you still (insert action)? I’ve got (insert result) in (insert time frame) and I have never (insert action).
+- Want to be the ﬁrst (insert dream result) in your family?
+- This is the same exact (insert thing) but the ﬁrst is/got (insert result and the second is/got X
+- If you’re between the ages of (insert age) to (insert age) and you feel like (insert pain point).
+- If you’re trying to (insert dream result) and you haven't got a clue what to (insert action) on a daily basis I am going to show you an example.
+- If you just turned (insert age) and you don’t want to (insert pain point) then you should do the following # things immediately.
+- Don’t start doing (insert action) until you learn how to do this.
+- In 60 seconds i’m going to teach you more about (insert thing) than you have ever learned in your entire life.
+- If you’re in your (insert 20’s, 30’s, 40’s, 50’s, 60’, etc) then these are the # of things you need to do to make sure you don;t end up (insert pain point) by (insert age).
+- You have (insert noun) tomorrow but you have no time to (insert action). Here’s how you save your (insert noun).
+- Everyone tells you to do (insert action) but you think it’s too late because you are (Insert age). I am a (insert occupation) and these are # of things you need to know in your (Insert age).
+- Listen if you’re not forcing your (insert person/persons) to (insert action) in their (insert current state) don’t expect them to be (insert trait) in their (insert after state).
+- If your in a (insert dream result) journey, this is exactly what you need to do to (insert dream goal) in # simple steps.
+- If you told me # of years ago I’d be (insert dream result) I wouldn't have believed you.
+- If you’re cooked for your (insert life event) but still can’t ﬁnd the motivation to do (insert action) you’re gonna want to see this.
+- Here’s the difference between (insert title), (insert title) , and (insert title).
+- Here’s every (insert noun) that you actually need to know.
+- If you can’t solve this (insert problem) in under 5 seconds go back to (insert pre-qualifying stage).
+- noun) growing up, don't worry i'm your mommy now. Never lose a game of (insert game) for the rest of your life.
+- Did you know that if you… (Insert action), (insert action), (insert action), etc
+- most relatable website name). How to turn just one (insert noun) into a lifetime of free (insert noun).
+- Do you have a (insert pain point) don’t waste your money trying to (insert solution) it's just going to come back.
+- When I say I (insert action) everyday and I don't (insert action) everyday people always ask me…
+- The reason you can't (insert dream result) to get that (insert dream result) you keep talking about is because…
+- Don't hate me but I don’t really mind (insert basic niche thing) but don;t worry I am going to show you how to make it way better.
+- If you have a (insert dream result) keep scrolling. Today we are going to talk about a (insert routine, method
+- strategy) to (insert dream result) Did you know that if you (insert action), (insert action), (insert action), etc.
+- The lack of clinical studies on (insert noun) isn't because it doesn't work, it's because…
+- You'll never get (insert dream result) in your (insert age range) if you don;t do these 3 things when you turn (insert age).
+- # lessons, # of (insert person/persons), in # of days/weeks/months.
+- I don’t know who needs to see this but if you have a (insert symptom) this is how I literally (insert dream result) every single time.
+- You’ve heard of the viral (insert method/strategy/noun name) right? Well I invested that!
+- If I have to learn (insert noun) again here’s 5 tips of everything I would do in # seconds.
+- Here’s what to look for when buying (insert noun) in (insert location).
+- Today I am going to show you have to make the perfect (insert noun) because I went to (insert school) so you don’t have to.
+- If you’ve ever secretly (insert action) and hope no one noticed this is for you.
+- If this is your ﬁrst time being (insert adjective) I am (insert name) and I am trying to make it (insert adjective) to (insert verb) by using (insert noun).
+- This is what you would (insert verb) for (insert person) if you weren't terriﬁed to talk to them.
+- Guys this is so nerdy but it’s the coolest thing I have ever done with my (insert noun).
+- Here are # of (insert noun) from across the world, let’s break them down to their core components.
+- I see so many people using their (insert noun) just like this or maybe like this even when you (insert action). So let me show you the trick to perfectly (insert action).
+- Here’s how the form of (insert noun) you add into (insert noun) affects them.
+- Why (insert action) like a normal person, when you can be a psycho instead.
+- (insert noun) is my second (insert noun) so here are # of (insert noun) that I used to do a lot and I recommend my students as well.
+- If you gave me (insert time frame) to get a job as a (insert title) this is what I would do.
+- Did you know if you have a (insert noun), (insert noun), (insert noun), (insert noun), (insert noun) then you can (insert dream result).
+- I bought all the (insert noun) so you could ﬁnd out which are the best in each category and which is not worth your money.
+- Here’s how I get people the best (insert noun) on (insert noun).
+- Here is how I make (insert noun) that lasts up to (insert time frame) and only costs (insert $).
+- I teach (insert noun) to people like they are in kindergarten, and it's time for class.
+- (insert noun) can be reversed so let’s talk about # things you can do to improve your (insert noun).
+- This is how much (insert noun) you would lose at the end of the day with a (insert metric) (insert noun).
+- Did you know your (insert noun) are programmed to make your (insert result).
+- To (insert verb) the (insert metric) in this (insert noun) the average would have to (insert action) for (insert time frame).
+- If you (insert verb) this (insert noun) this is the amount of (insert noun) your body would (insert result).
+- The worst (insert noun) that you will regret buying for your (insert noun) is right here.
+- (insert noun) how to (insert action) and still (insert dream result).
+- If I told you, you would (insert result) form (insert action) you would probably believe me right? Well here’s the thing…
+- How to budget with a (insert $) salary using this special (insert name) technique.
+- I spent (insert $) on new (insert noun) for my (insert noun).
+- Here’s a quick what to (insert result) (insert metric) of you (insert noun) legally.
+- This is the exact order in which you should be (insert verb) for all of your (insert noun).
+- Why is it we are all so stressed about (insert noun) but we also all have a (insert noun) in (insert location).
+- Today my kids (insert noun) is due. So let’s (insert action).
+- There are # things I like to do when I buy a new (insert noun).
+- # things everyone needs to know how to ﬁx in an (insert location).
+- Top # ways not to (insert action) to the (insert person) you (insert noun).
+- Top # deadliest (insert noun) that can kill (insert living thing) in one (insert verb).
+- What is this? This is your (insert description of visual) and this is this #1 reason that (insert noun) die.
+- If you're wanting to transfer your (insert noun) from this into (insert noun).
+- This was the most popular (insert noun) in all of (insert year).
+- Did you know that you could (insert verb) a year's worth of (insert noun) in (insert time frame).
+- Give me 60 seconds to show you how to (insert action) for the ﬁrst time after (insert life event).
+- Want a (insert noun) that (insert dream result) even when you (insert action).
+- # minutes ago (insert pain point) and had (insert pain
+- point) if you want to (insert dream result), here is how you do it under # minutes.
+- If you have a (insert noun) in your house and a (insert noun) I am going to show you guys the # of the best things we did to (insert dream outcome).
+- If I could suggest any tip to any (insert person) out these it would be this.
+- Your (insert noun) is to (insert adjective) and (insert adjective). Here are # of (insert noun) to (insert result).
+- If you (insert verb) and (insert action) and it doesn't (insert result) it’s time to (insert action).
+- I just made over # of (insert noun) in under (insert time) and I will show you how I did it.
+- If you storing your (insert noun) in (insert noun) stop what you're doing and watch this video.
+- We spent $ of (insert noun) for our family of #, and this will last us (insert time frame).
+- People always ask me (insert name) (insert fact) (insert question) well, let’s ﬁnd out.
+- Whatever you do, do not let you (insert person) (insert action).
+- I am sick of hearing this word (insert word).
+- After (insert time frame) of research here is why I choose (insert noun) and started (insert action).
+- Does your (insert person) (insert action) like this?
+- If you have a (insert person) at home, then (insert action) will dramatically change their (insert noun).
+- I built this (insert noun) for (insert $).
+- I bought this (insert noun) for (insert $) and let me show you what I did next.
+- In (insert year) the (insert company/person) introduced the (insert noun).
+- Here’s the only way I will ever (insert action).
+- So I spent (insert $) at (insert store) on my last trip.
+- I turned one (insert noun) into # different (insert noun).
+- (insert company) did not sponsor me this year, so here is how to make their (insert noun) at home.
+- Want a (insert person) who (insert dream result) every time, even when you don’t (insert noun/action).
+- It’s (insert noun) season, so let’s make a (insert noun) for your (insert person).
+- Your favorite (insert noun) hacks from (insert year).
+- # years as a (insert occupation) you guys still don’t believe me when I say these things.
+- I am not a DIY guy/girl but I am going to show you how I spent (insert $) to transform my (insert noun).
+- 3 (insert noun) we do not recommend for the ﬁrst time (insert noun) owners/users.
+- People keep asking me what to do with (insert noun).
+- Does (insert noun) really kill (insert live thing).
+- I am going to show you how to (insert verb) your (insert noun) so they don’t (insert pain point).
+- # things you should never put in the (insert noun).
+- Almost everyone thinks they know how to (insert action).
+- Let’s get this brand new (insert noun) (insert action) so we can put it to good use.
+- This one mistake can actually kill your (insert living thing).
+- (insert name), how do you (insert result)?
+- We are going to text (insert noun), today on how (insert adjective) is it.
+- All you need is a (insert amount) of (insert noun) and you can turn (insert amount) of (insert noun) into
+- (insert result). Here are # (insert noun) that you should never (insert action).

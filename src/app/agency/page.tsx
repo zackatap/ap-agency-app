@@ -14,6 +14,13 @@ type LinkCard = {
 
 const LINKS: LinkCard[] = [
   {
+    href: "/agency/content-ideas",
+    title: "Content Ideas",
+    description:
+      "Generate content ideas from Granola meetings → Google Sheet.",
+    accent: "sky",
+  },
+  {
     href: "/agency/presentation",
     title: "Client Roadmap Presentation",
     description:
