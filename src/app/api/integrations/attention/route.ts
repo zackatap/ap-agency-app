@@ -1,15 +1,19 @@
 import { NextResponse } from "next/server";
-import { buildAttentionFeed, ATTENTION_WINDOWS } from "@/lib/attention-feed";
+import { buildAttentionFeed } from "@/lib/attention-feed";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Read-only KPI feed for Zapier (replaces the "Get Many Rows" read of the
- * Attention Dashboard sheet). Returns a top-level JSON array — one object per
- * active/2nd-cmpn campaign — so Zapier treats each as its own item/row.
+ * Read-only Attention Dashboard feed for Zapier (replaces the "Get Many Rows"
+ * read of the sheet). Returns a top-level JSON array — one object per flagged
+ * campaign, sorted by urgency — so Zapier treats each as its own item.
+ *
+ * The payload carries only the fields the ClickUp zap maps, with keys named to
+ * match those fields (reason / client / pipeline / status / urgency /
+ * client_relationship_id). "status" is the attention flag code (e.g. S_R4).
  *
  * Auth: `Authorization: Bearer <ATTENTION_API_KEY>` or `?token=<key>`.
- * Optional `?window=3|7|30` returns a single window (default: all three).
+ * `?flagged=0` returns every campaign instead of only the flagged ones.
  */
 export async function GET(req: Request) {
   const secret = process.env.ATTENTION_API_KEY?.trim();
@@ -28,31 +32,26 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  let windows: number[] | undefined;
-  const windowParam = url.searchParams.get("window");
-  if (windowParam) {
-    const requested = Number(windowParam);
-    if (!ATTENTION_WINDOWS.includes(requested as (typeof ATTENTION_WINDOWS)[number])) {
-      return NextResponse.json(
-        { error: `window must be one of ${ATTENTION_WINDOWS.join(", ")}` },
-        { status: 400 }
-      );
-    }
-    windows = [requested];
-  }
-
-  // ?flagged=1 returns only campaigns with an attention flag, sorted by urgency
-  // (the Attention Dashboard view the zap consumes). Default returns everything.
+  // Defaults to the flagged-only Attention Dashboard view; ?flagged=0 opts out.
   const flaggedParam = url.searchParams.get("flagged");
-  const flaggedOnly = flaggedParam === "1" || flaggedParam === "true";
+  const flaggedOnly = !(flaggedParam === "0" || flaggedParam === "false");
 
   try {
-    const feed = await buildAttentionFeed({ windows, flaggedOnly });
-    return NextResponse.json(feed.rows, {
+    const feed = await buildAttentionFeed({ flaggedOnly });
+    const items = feed.rows.map((r) => ({
+      reason: r.reason ?? "",
+      client: r.client_name ?? "",
+      pipeline: r.pipeline_name ?? "",
+      status: r.attention_code ?? "",
+      urgency: r.urgency ?? null,
+      client_relationship_id: r.clickup_relation_id ?? "",
+    }));
+    return NextResponse.json(items, {
       headers: {
         "Cache-Control": "no-store",
         "X-Snapshot-Id": feed.snapshotId == null ? "" : String(feed.snapshotId),
         "X-Snapshot-Finished": feed.snapshotFinishedAt ?? "",
+        "X-Row-Count": String(items.length),
       },
     });
   } catch (err) {

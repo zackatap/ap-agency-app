@@ -529,7 +529,12 @@ async function processLocation(args: {
     const attributionMode = settings?.attributionMode ?? "lastUpdated";
     const customMappings = settings?.stageMappings?.[pipeline.id];
 
-    let oppFetch = oppCountsCache.get(pipeline.id);
+    // Cache key includes the tag filter: two campaigns sharing a pipeline but
+    // scoped to different tags (e.g. Pain vs Decompression) need separate
+    // counts + quality signals, so they can't share one fetch.
+    const tagFilter = campaign.tagFilter?.trim() || undefined;
+    const cacheKey = `${pipeline.id}::${tagFilter?.toLowerCase() ?? ""}`;
+    let oppFetch = oppCountsCache.get(cacheKey);
     if (!oppFetch) {
       const quality = new QualityAccumulator(customMappings);
       oppFetch = getOpportunityCountsByStagePerDay(
@@ -538,9 +543,9 @@ async function processLocation(args: {
         stored.access_token,
         windowRange,
         attributionMode,
-        { onOpp: quality.accept }
+        { onOpp: quality.accept, tagFilter }
       ).then((perDay) => ({ perDay, quality }));
-      oppCountsCache.set(pipeline.id, oppFetch);
+      oppCountsCache.set(cacheKey, oppFetch);
     }
     const { perDay, quality } = await oppFetch;
 

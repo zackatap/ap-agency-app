@@ -69,6 +69,24 @@ export function isOpportunityWon(opp: GHLOpportunity): boolean {
 }
 
 /**
+ * True when the opportunity carries the given tag (case-insensitive). GHL
+ * returns tags as a `tags` string array; we also tolerate a comma-joined
+ * string. Match is substring so a sheet value of "pain" matches a "Pain
+ * Patients" tag, mirroring the keyword philosophy used elsewhere.
+ */
+export function opportunityHasTag(opp: GHLOpportunity, tagLower: string): boolean {
+  if (!tagLower) return true;
+  const raw = (opp as Record<string, unknown>).tags;
+  if (Array.isArray(raw)) {
+    return raw.some((t) => String(t).trim().toLowerCase().includes(tagLower));
+  }
+  if (typeof raw === "string") {
+    return raw.toLowerCase().includes(tagLower);
+  }
+  return false;
+}
+
+/**
  * Local calendar date (YYYY-MM-DD) for Created vs Last Updated attribution.
  * lastUpdated: stage/status change → record update → created (aligned with monthly + funnel).
  * created: created timestamp only.
@@ -432,6 +450,12 @@ export async function getOpportunityCountsByStagePerDay(
   attributionMode: AttributionMode = "lastUpdated",
   opts?: {
     onOpp?: (opp: GHLOpportunity, stageName: string) => void;
+    /**
+     * When set, only opportunities carrying this tag are counted (and fed to
+     * onOpp). Used to split one GHL pipeline across multiple campaign rows that
+     * share it — e.g. a "Leads" pipeline tagged "pain" vs "decompression".
+     */
+    tagFilter?: string;
   }
 ): Promise<
   Array<{
@@ -441,6 +465,7 @@ export async function getOpportunityCountsByStagePerDay(
   }>
 > {
   const stageIdToName = buildStageIdToName(pipeline.stages);
+  const tagWanted = opts?.tagFilter?.trim().toLowerCase() ?? "";
   const limit = 100;
   let page = 1;
 
@@ -486,6 +511,11 @@ export async function getOpportunityCountsByStagePerDay(
       if (seenOpp.has(opp.id)) continue;
       seenOpp.add(opp.id);
 
+      // Tag-scoped campaign: drop opps without the tag before they touch the
+      // buckets or the quality signals, so this row only reflects its slice of
+      // a shared pipeline.
+      if (tagWanted && !opportunityHasTag(opp, tagWanted)) continue;
+
       const resolvedStageName =
         opp.stageName ??
         (opp.pipelineStageId
@@ -494,7 +524,7 @@ export async function getOpportunityCountsByStagePerDay(
         (opp.pipelineStageId as string) ??
         "Unknown";
 
-      // Quality callback sees every opp regardless of window.
+      // Quality callback sees every (tag-matching) opp regardless of window.
       opts?.onOpp?.(opp, resolvedStageName);
 
       const dateStr = getOpportunityAttributionLocalDate(opp, attributionMode);

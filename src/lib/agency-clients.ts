@@ -10,6 +10,7 @@
  *   G  AD ACCOUNT ID
  *   I  PIPELINE KEYWORD   (pipeline name in GHL contains this value)
  *   J  CAMPAIGN KEYWORD   (Meta/Facebook campaign name contains this value)
+ *   K  TAG FILTER         (GHL opportunity tag this campaign is scoped to)
  *   Z  PACKAGE ENROLLED   (fallback label when pipeline keyword is blank)
  *   AO GHL LOCATION ID
  *
@@ -30,6 +31,7 @@ const COL_STATUS = 4; // E
 const COL_AD_ACCOUNT = 6; // G
 const COL_PIPELINE_KEYWORD = 8; // I
 const COL_CAMPAIGN_KEYWORD = 9; // J
+const COL_TAG_FILTER = 10; // K — "Tag Filter (Troy Method Hack)"
 const COL_PACKAGE_ENROLLED = 25; // Z
 const COL_LOCATION_ID = 40; // AO
 
@@ -59,6 +61,13 @@ export interface ActiveCampaign {
   pipelineKeyword: string | null;
   /** Column J — Meta campaign name should contain this value (substring match). */
   campaignKeyword: string | null;
+  /**
+   * Column K — GHL opportunity tag this campaign is scoped to. When two rows
+   * share the same pipeline (e.g. Hornback's "Leads" pipeline split into Pain
+   * vs Decompression), this tag is what attributes each opportunity to the
+   * right campaign. Blank = count every opportunity in the pipeline.
+   */
+  tagFilter: string | null;
   /** Column Z — display fallback when Column I is blank. */
   packageEnrolled: string | null;
   adAccountId: string | null;
@@ -134,12 +143,25 @@ export async function listActiveCampaigns(): Promise<ActiveCampaignsResult> {
     const status = rawStatus as CampaignStatus;
     const pipelineKeyword = safeString(row[COL_PIPELINE_KEYWORD]);
     const campaignKeyword = safeString(row[COL_CAMPAIGN_KEYWORD]);
+    const tagFilter = safeString(row[COL_TAG_FILTER]);
     const packageEnrolled = safeString(row[COL_PACKAGE_ENROLLED]);
-    // Disambiguator: prefer the pipeline keyword (defines which GHL pipeline
-    // this row is about), fall back to the Meta keyword, then status.
-    const disambiguator = pipelineKeyword ?? campaignKeyword ?? status;
-    const campaignKey = `${locationId}:${disambiguator.toLowerCase()}`;
-    if (seenKeys.has(campaignKey)) continue;
+    // Build a key from everything that distinguishes one campaign row from
+    // another at the same location: pipeline keyword, Meta keyword, tag filter,
+    // and status. Two rows sharing a pipeline (Hornback's "Leads" split into
+    // Pain vs Decompression) differ on the Meta keyword + tag filter, so they
+    // get distinct keys instead of collapsing into one. The old scheme keyed on
+    // pipeline keyword alone and silently dropped the second row.
+    const parts = [pipelineKeyword, campaignKeyword, tagFilter, status]
+      .map((p) => (p ?? "").trim().toLowerCase())
+      .filter(Boolean);
+    let campaignKey = `${locationId}:${parts.join("|") || status.toLowerCase()}`;
+    // Last-resort guard for genuinely identical rows — keep both rather than
+    // discard one.
+    if (seenKeys.has(campaignKey)) {
+      let n = 2;
+      while (seenKeys.has(`${campaignKey}#${n}`)) n += 1;
+      campaignKey = `${campaignKey}#${n}`;
+    }
     seenKeys.add(campaignKey);
     locationIds.add(locationId);
 
@@ -153,6 +175,7 @@ export async function listActiveCampaigns(): Promise<ActiveCampaignsResult> {
       ownerLastName: safeString(row[COL_OWNER_LAST]),
       pipelineKeyword,
       campaignKeyword,
+      tagFilter,
       packageEnrolled,
       adAccountId: normalizeAdAccount(String(row[COL_AD_ACCOUNT] ?? "")),
     });
