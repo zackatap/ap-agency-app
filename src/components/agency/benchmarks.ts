@@ -171,7 +171,10 @@ export function aggregateCampaigns(
       closed = 0,
       totalValue = 0,
       successValue = 0,
-      adSpend = 0;
+      adSpend = 0,
+      impressions = 0,
+      clicks = 0,
+      linkClicks = 0;
     for (const c of campaigns) {
       const m = c.months.find((mm) => mm.monthKey === mk);
       if (!m) continue;
@@ -183,6 +186,9 @@ export function aggregateCampaigns(
       totalValue += m.totalValue;
       successValue += m.successValue;
       adSpend += m.adSpend;
+      impressions += m.impressions;
+      clicks += m.clicks;
+      linkClicks += m.linkClicks;
     }
     return buildMonthRow(
       mk,
@@ -193,7 +199,10 @@ export function aggregateCampaigns(
       closed,
       totalValue,
       successValue,
-      adSpend
+      adSpend,
+      impressions,
+      clicks,
+      linkClicks
     );
   });
   const total = sumMonthRows(months);
@@ -209,7 +218,10 @@ function buildMonthRow(
   closed: number,
   totalValue: number,
   successValue: number,
-  adSpend: number
+  adSpend: number,
+  impressions = 0,
+  clicks = 0,
+  linkClicks = 0
 ): ClientCampaignMonth {
   // No-shows count as booked (they made it past "lead") but do NOT count
   // toward the show-rate numerator. Mirrors applyRollup in funnel-metrics.ts.
@@ -234,6 +246,9 @@ function buildMonthRow(
     totalValue,
     successValue,
     adSpend,
+    impressions,
+    clicks,
+    linkClicks,
     bookingRate,
     showRate,
     closeRate,
@@ -243,6 +258,13 @@ function buildMonthRow(
       adSpend > 0 && showed > 0 ? Math.round((adSpend / showed) * 100) / 100 : null,
     cpClose:
       adSpend > 0 && closed > 0 ? Math.round((adSpend / closed) * 100) / 100 : null,
+    cplc:
+      adSpend > 0 && linkClicks > 0
+        ? Math.round((adSpend / linkClicks) * 100) / 100
+        : null,
+    // Link CTR = link clicks / impressions.
+    ctr:
+      impressions > 0 ? Math.round((linkClicks / impressions) * 1000) / 10 : null,
     roas:
       adSpend > 0 ? Math.round((successValue / adSpend) * 100) / 100 : null,
   };
@@ -261,6 +283,9 @@ function sumMonthRows(
       acc.totalValue += m.totalValue;
       acc.successValue += m.successValue;
       acc.adSpend += m.adSpend;
+      acc.impressions += m.impressions;
+      acc.clicks += m.clicks;
+      acc.linkClicks += m.linkClicks;
       return acc;
     },
     {
@@ -272,6 +297,9 @@ function sumMonthRows(
       totalValue: 0,
       successValue: 0,
       adSpend: 0,
+      impressions: 0,
+      clicks: 0,
+      linkClicks: 0,
     }
   );
   const row = buildMonthRow(
@@ -283,7 +311,10 @@ function sumMonthRows(
     totals.closed,
     totals.totalValue,
     totals.successValue,
-    totals.adSpend
+    totals.adSpend,
+    totals.impressions,
+    totals.clicks,
+    totals.linkClicks
   );
   // strip monthKey
   const { monthKey: _mk, ...rest } = row;
@@ -301,12 +332,17 @@ function emptyTotals(): Omit<ClientCampaignMonth, "monthKey"> {
     totalValue: 0,
     successValue: 0,
     adSpend: 0,
+    impressions: 0,
+    clicks: 0,
+    linkClicks: 0,
     bookingRate: null,
     showRate: null,
     closeRate: null,
     cpl: null,
     cps: null,
     cpClose: null,
+    cplc: null,
+    ctr: null,
     roas: null,
   };
 }

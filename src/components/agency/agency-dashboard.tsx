@@ -20,6 +20,7 @@ import { RefreshControls } from "./refresh-controls";
 import { ClientBenchmark } from "./client-benchmark";
 import { ClientMap } from "./client-map";
 import { MetaAdsTab } from "./meta-ads-tab";
+import { ScorecardTab } from "./scorecard-tab";
 import {
   aggregateCampaignWindow,
   aggregateCampaignWindowTopFraction,
@@ -48,7 +49,7 @@ interface Props {
   initialLatest: ClientAgencySnapshot | null;
 }
 
-type DashboardTab = "performance" | "ads" | "map";
+type DashboardTab = "performance" | "scorecard" | "ads" | "map";
 
 const KPI_RATE_METRICS = new Set<DashboardKpiMetric>([
   "bookingRate",
@@ -283,6 +284,8 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
     initialLatest
   );
   const [activeTab, setActiveTab] = useState<DashboardTab>("performance");
+  /** Bumped when a refresh completes so the Scorecard tab re-fetches. */
+  const [refreshNonce, setRefreshNonce] = useState(0);
 
   // Date range state — mirrors the client dashboard (select + optional custom
   // from/to + Apply button for custom).
@@ -379,6 +382,8 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
     // Re-pull the range view using the current preset so new snapshot data
     // flows through immediately.
     await fetchRollup(dateRangePreset, customDateFrom, customDateTo);
+    // Let other tabs (Scorecard) know the snapshot changed.
+    setRefreshNonce((n) => n + 1);
   }, [dateRangePreset, customDateFrom, customDateTo, fetchRollup]);
 
   useEffect(() => {
@@ -528,12 +533,14 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
           <p className="mt-1 text-sm text-slate-400">
             {activeTab === "performance"
               ? "Performance across every active & 2nd campaign client. Each sheet row is its own campaign; clients with ACTIVE + 2ND CMPN show both pipelines rolled up under their CID."
-              : activeTab === "ads"
-                ? "Ad-level Meta performance across active client ad accounts with recent spend, including creative thumbnails and name-based rollups."
-                : "Every client from the Client DB sheet plotted on a map. Filter by status to focus the view; each pin is one client even when they have multiple campaigns."}
+              : activeTab === "scorecard"
+                ? "Ad spend, leads, CPL, link clicks, CPLC, and CTR per active & 2nd campaign client over a 3/7/30-day window, with movement vs the prior period."
+                : activeTab === "ads"
+                  ? "Ad-level Meta performance across active client ad accounts with recent spend, including creative thumbnails and name-based rollups."
+                  : "Every client from the Client DB sheet plotted on a map. Filter by status to focus the view; each pin is one client even when they have multiple campaigns."}
           </p>
         </div>
-        {activeTab === "performance" && (
+        {(activeTab === "performance" || activeTab === "scorecard") && (
           <RefreshControls
             latest={currentLatest}
             completeFinishedAt={latestSnapshotFinished}
@@ -546,6 +553,7 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
         {(
           [
             { id: "performance", label: "Performance" },
+            { id: "scorecard", label: "Scorecard" },
             { id: "ads", label: "Ads" },
             { id: "map", label: "Client map" },
           ] as Array<{ id: DashboardTab; label: string }>
@@ -564,6 +572,8 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
           </button>
         ))}
       </nav>
+
+      {activeTab === "scorecard" && <ScorecardTab reloadKey={refreshNonce} />}
 
       {activeTab === "ads" && <MetaAdsTab />}
 

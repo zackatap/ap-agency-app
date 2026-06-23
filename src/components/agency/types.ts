@@ -54,12 +54,17 @@ export interface ClientCampaignMonth {
   totalValue: number;
   successValue: number;
   adSpend: number;
+  impressions: number;
+  clicks: number;
+  linkClicks: number;
   bookingRate: number | null;
   showRate: number | null;
   closeRate: number | null;
   cpl: number | null;
   cps: number | null;
   cpClose: number | null;
+  cplc: number | null;
+  ctr: number | null;
   roas: number | null;
 }
 
@@ -72,12 +77,17 @@ export interface ClientCampaignWindowTotals {
   totalValue: number;
   successValue: number;
   adSpend: number;
+  impressions: number;
+  clicks: number;
+  linkClicks: number;
   bookingRate: number | null;
   showRate: number | null;
   closeRate: number | null;
   cpl: number | null;
   cps: number | null;
   cpClose: number | null;
+  cplc: number | null;
+  ctr: number | null;
   roas: number | null;
 }
 

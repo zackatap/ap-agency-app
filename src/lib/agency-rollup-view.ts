@@ -49,12 +49,15 @@ export type MetricKey =
   | "totalValue"
   | "successValue"
   | "adSpend"
+  | "linkClicks"
   | "bookingRate"
   | "showRate"
   | "closeRate"
   | "cpl"
   | "cps"
   | "cpClose"
+  | "cplc"
+  | "ctr"
   | "roas";
 
 export interface DateRangeDescriptor {
@@ -100,12 +103,17 @@ export interface CampaignMonthly {
   totalValue: number;
   successValue: number;
   adSpend: number;
+  impressions: number;
+  clicks: number;
+  linkClicks: number;
   bookingRate: number | null;
   showRate: number | null;
   closeRate: number | null;
   cpl: number | null;
   cps: number | null;
   cpClose: number | null;
+  cplc: number | null;
+  ctr: number | null;
   roas: number | null;
 }
 
@@ -118,12 +126,17 @@ export interface CampaignWindowTotals {
   totalValue: number;
   successValue: number;
   adSpend: number;
+  impressions: number;
+  clicks: number;
+  linkClicks: number;
   bookingRate: number | null;
   showRate: number | null;
   closeRate: number | null;
   cpl: number | null;
   cps: number | null;
   cpClose: number | null;
+  cplc: number | null;
+  ctr: number | null;
   roas: number | null;
 }
 
@@ -197,6 +210,9 @@ function emptyAccumulator(): {
   totalValue: number;
   successValue: number;
   adSpend: number;
+  impressions: number;
+  clicks: number;
+  linkClicks: number;
 } {
   return {
     leads: 0,
@@ -207,6 +223,9 @@ function emptyAccumulator(): {
     totalValue: 0,
     successValue: 0,
     adSpend: 0,
+    impressions: 0,
+    clicks: 0,
+    linkClicks: 0,
   };
 }
 
@@ -233,6 +252,9 @@ function disjointToOnTotalsCounts(acc: CountAccumulator): CountAccumulator {
     totalValue: acc.totalValue,
     successValue: acc.successValue,
     adSpend: acc.adSpend,
+    impressions: acc.impressions,
+    clicks: acc.clicks,
+    linkClicks: acc.linkClicks,
   };
 }
 
@@ -255,6 +277,12 @@ function deriveRatesFromDisjointCounts(base: CountAccumulator): CampaignWindowTo
       base.adSpend > 0 && base.closed > 0
         ? moneyOrNull(base.adSpend, base.closed)
         : null,
+    cplc:
+      base.adSpend > 0 && base.linkClicks > 0
+        ? moneyOrNull(base.adSpend, base.linkClicks)
+        : null,
+    // Link CTR = link clicks / impressions, to pair with link clicks / CPLC.
+    ctr: base.impressions > 0 ? rateOrNull(base.linkClicks, base.impressions) : null,
     roas: base.adSpend > 0 ? moneyOrNull(base.successValue, base.adSpend) : null,
   };
 }
@@ -280,6 +308,12 @@ function deriveRatesFromRollupCounts(base: CountAccumulator): CampaignWindowTota
       base.adSpend > 0 && base.closed > 0
         ? moneyOrNull(base.adSpend, base.closed)
         : null,
+    cplc:
+      base.adSpend > 0 && base.linkClicks > 0
+        ? moneyOrNull(base.adSpend, base.linkClicks)
+        : null,
+    // Link CTR = link clicks / impressions, to pair with link clicks / CPLC.
+    ctr: base.impressions > 0 ? rateOrNull(base.linkClicks, base.impressions) : null,
     roas: base.adSpend > 0 ? moneyOrNull(base.successValue, base.adSpend) : null,
   };
 }
@@ -304,6 +338,9 @@ function accumulateDay(
   acc.totalValue += row.totalValue;
   acc.successValue += row.successValue;
   acc.adSpend += row.adSpend;
+  acc.impressions += row.impressions;
+  acc.clicks += row.clicks;
+  acc.linkClicks += row.linkClicks;
 }
 
 function inRange(date: string, start: string, end: string): boolean {
@@ -657,12 +694,15 @@ export const METRIC_META: Record<
   totalValue: { label: "Pipeline value", kind: "money", higherIsBetter: true },
   successValue: { label: "Closed value", kind: "money", higherIsBetter: true },
   adSpend: { label: "Ad spend", kind: "money", higherIsBetter: false },
+  linkClicks: { label: "Link clicks", kind: "count", higherIsBetter: true },
   bookingRate: { label: "Booking rate", kind: "rate", higherIsBetter: true },
   showRate: { label: "Show rate", kind: "rate", higherIsBetter: true },
   closeRate: { label: "Close rate", kind: "rate", higherIsBetter: true },
   cpl: { label: "Cost / Lead", kind: "money", higherIsBetter: false },
   cps: { label: "Cost / Show", kind: "money", higherIsBetter: false },
   cpClose: { label: "Cost / Close", kind: "money", higherIsBetter: false },
+  cplc: { label: "Cost / Link Click", kind: "money", higherIsBetter: false },
+  ctr: { label: "CTR", kind: "rate", higherIsBetter: true },
   roas: { label: "ROAS", kind: "ratio", higherIsBetter: true },
 };
 
@@ -685,6 +725,8 @@ export function getCampaignMetricValue(
       return monthly.successValue;
     case "adSpend":
       return monthly.adSpend;
+    case "linkClicks":
+      return monthly.linkClicks;
     case "bookingRate":
       return monthly.bookingRate;
     case "showRate":
@@ -697,6 +739,10 @@ export function getCampaignMetricValue(
       return monthly.cps;
     case "cpClose":
       return monthly.cpClose;
+    case "cplc":
+      return monthly.cplc;
+    case "ctr":
+      return monthly.ctr;
     case "roas":
       return monthly.roas;
     default:
@@ -723,6 +769,8 @@ export function getCampaignTotalsMetricValue(
       return totals.successValue;
     case "adSpend":
       return totals.adSpend;
+    case "linkClicks":
+      return totals.linkClicks;
     case "bookingRate":
       return totals.bookingRate;
     case "showRate":
@@ -735,6 +783,10 @@ export function getCampaignTotalsMetricValue(
       return totals.cps;
     case "cpClose":
       return totals.cpClose;
+    case "cplc":
+      return totals.cplc;
+    case "ctr":
+      return totals.ctr;
     case "roas":
       return totals.roas;
     default:

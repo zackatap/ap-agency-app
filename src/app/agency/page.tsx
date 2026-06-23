@@ -5,134 +5,89 @@ export const metadata: Metadata = {
   title: "Agency · Launcher | Automated Practice",
 };
 
-type LinkCard = {
-  href: string;
-  title: string;
-  description: string;
-  accent: "indigo" | "emerald" | "fuchsia" | "amber" | "sky";
-};
-
-const LINKS: LinkCard[] = [
+const LINKS = [
   {
     href: "/agency/content-ideas",
     title: "Content Ideas",
-    description:
-      "Generate content ideas from Granola meetings → Google Sheet.",
-    accent: "sky",
+    description: "Granola meetings → Google Sheet",
   },
   {
     href: "/agency/presentation",
     title: "Client Roadmap Presentation",
-    description:
-      "Bright Zoom-ready deck for walking clients through onboarding and month-by-month growth.",
-    accent: "sky",
+    description: "Zoom-ready onboarding deck",
   },
   {
     href: "/agency/dashboard",
     title: "Agency Rollup",
-    description:
-      "Cross-client leaderboard, pipeline metrics, and client map.",
-    accent: "indigo",
+    description: "Leaderboard, pipeline metrics, client map",
   },
   {
     href: "/v2/location/Yl8c8Rmoh5TsTfVN5q5F/dashboard",
     title: "Conversions Dashboard (demo)",
-    description:
-      "Per-location pipeline conversion view. Swap the locationId in the URL for any client.",
-    accent: "emerald",
+    description: "Per-location pipeline view",
   },
   {
     href: "/agency/discounts",
     title: "Pricing Discounts",
-    description: "Manage custom promo URLs and discounted pricing.",
-    accent: "emerald",
+    description: "Promo URLs and discounted pricing",
   },
   {
     href: "/pulse",
     title: "Monthly Pulse",
-    description: "Client feedback survey — writes responses to Google Sheets.",
-    accent: "fuchsia",
+    description: "Client feedback survey",
   },
   {
     href: "/customizer",
     title: "Customizer",
-    description: "Internal funnel & workflow customizer tool.",
-    accent: "amber",
+    description: "Funnel & workflow customizer",
   },
   {
     href: "/",
     title: "Public Pricing Page",
-    description: "Offerings + ROI calculator shown at the root URL.",
-    accent: "indigo",
+    description: "Offerings + ROI calculator",
   },
 ];
 
-const ACCENT: Record<LinkCard["accent"], string> = {
-  indigo:
-    "from-indigo-500/15 to-slate-900/40 border-indigo-400/30 hover:border-indigo-300/60",
-  emerald:
-    "from-emerald-500/15 to-slate-900/40 border-emerald-400/30 hover:border-emerald-300/60",
-  fuchsia:
-    "from-fuchsia-500/15 to-slate-900/40 border-fuchsia-400/30 hover:border-fuchsia-300/60",
-  amber:
-    "from-amber-500/15 to-slate-900/40 border-amber-400/30 hover:border-amber-300/60",
-  sky: "from-sky-500/15 to-slate-900/40 border-sky-400/30 hover:border-sky-300/60",
-};
-
 export default function AgencyIndexPage() {
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-indigo-950 text-white">
-      <div className="pointer-events-none absolute inset-x-0 top-0 -z-0 h-[420px] bg-[radial-gradient(60%_60%_at_50%_0%,rgba(99,102,241,0.22),transparent_70%)]" />
-
-      <main className="relative z-10 mx-auto max-w-5xl px-6 py-16">
-        <div className="flex flex-col items-start gap-2">
-          <span className="inline-flex items-center rounded-full border border-white/15 bg-white/5 px-3 py-1 text-[11px] font-medium uppercase tracking-widest text-indigo-200">
-            Internal · Agency
-          </span>
-          <h1 className="text-4xl font-semibold tracking-tight sm:text-5xl">
-            Launcher
-          </h1>
-          <p className="max-w-2xl text-slate-400">
-            Quick access to everything behind the agency password.
+    <div className="min-h-screen bg-neutral-950 text-neutral-100">
+      <main className="mx-auto max-w-xl px-6 py-12">
+        <header className="mb-8">
+          <h1 className="text-xl font-medium text-neutral-100">Launcher</h1>
+          <p className="mt-1 text-sm text-neutral-500">
+            Agency tools
           </p>
-        </div>
+        </header>
 
-        <div className="mt-10 grid gap-4 sm:grid-cols-2">
+        <ul className="divide-y divide-neutral-800 border-y border-neutral-800">
           {LINKS.map((link) => (
-            <Link
-              key={link.href}
-              href={link.href}
-              className={`group flex flex-col justify-between rounded-2xl border bg-gradient-to-b ${ACCENT[link.accent]} p-6 shadow-lg shadow-slate-950/30 transition hover:-translate-y-0.5`}
-            >
-              <div>
-                <h2 className="text-lg font-semibold tracking-tight">
+            <li key={link.href}>
+              <Link
+                href={link.href}
+                className="block py-4 transition hover:bg-neutral-900/50"
+              >
+                <span className="text-[15px] text-neutral-100">
                   {link.title}
-                </h2>
-                <p className="mt-1 text-sm text-slate-300">{link.description}</p>
-              </div>
-              <div className="mt-6 flex items-center justify-between text-xs text-slate-400">
-                <code className="rounded bg-white/10 px-2 py-1 font-mono text-slate-300">
-                  {link.href}
-                </code>
-                <span className="text-slate-300 transition group-hover:translate-x-0.5">
-                  Open →
                 </span>
-              </div>
-            </Link>
+                <span className="mt-0.5 block text-sm text-neutral-500">
+                  {link.description}
+                </span>
+              </Link>
+            </li>
           ))}
-        </div>
+        </ul>
 
-        <div className="mt-12 flex items-center justify-between border-t border-white/10 pt-6 text-xs text-slate-500">
-          <span>Automated Practice · Agency tools</span>
+        <footer className="mt-8 flex items-center justify-between text-sm text-neutral-600">
+          <span>Automated Practice</span>
           <form action="/api/agency/auth/logout" method="POST">
             <button
               type="submit"
-              className="rounded-full border border-white/15 bg-white/5 px-3 py-1 text-slate-300 hover:bg-white/10"
+              className="text-neutral-500 underline-offset-2 hover:text-neutral-300 hover:underline"
             >
               Log out
             </button>
           </form>
-        </div>
+        </footer>
       </main>
     </div>
   );

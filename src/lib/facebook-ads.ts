@@ -220,6 +220,99 @@ export async function fetchSpendByDay(
   }
 }
 
+/** Per-day Meta insight bucket. All fields are additive across days/campaigns. */
+export interface DailyInsight {
+  spend: number;
+  impressions: number;
+  clicks: number;
+  linkClicks: number;
+}
+
+/**
+ * Fetch Meta insights bucketed by DAY over an inclusive `[since, until]`
+ * window. Like {@link fetchSpendByDay} but also returns impressions, clicks,
+ * and inline link clicks so the agency rollup can derive CPLC / CTR. Returns a
+ * sparse map keyed by YYYY-MM-DD (empty object on error). Follows pagination.
+ */
+export async function fetchDailyInsights(
+  nodeId: string,
+  isCampaign: boolean,
+  since: string,
+  until: string
+): Promise<{ insightsByDate: Record<string, DailyInsight>; error?: string }> {
+  const token = getAccessToken();
+  if (!token) {
+    return { insightsByDate: {}, error: "META_ACCESS_TOKEN not configured" };
+  }
+
+  const graphId = isCampaign ? nodeId : normalizeAdAccountId(nodeId);
+  if (!graphId) {
+    return { insightsByDate: {}, error: "Invalid ad account or campaign ID" };
+  }
+
+  const params = new URLSearchParams({
+    fields: "spend,impressions,clicks,inline_link_clicks",
+    access_token: token,
+    time_range: JSON.stringify({ since, until }),
+    time_increment: "1", // daily
+  });
+
+  let url: string | null = `${META_GRAPH}/${META_API_VERSION}/${graphId}/insights?${params}`;
+  const insightsByDate: Record<string, DailyInsight> = {};
+
+  const add = (day: string, key: keyof DailyInsight, raw: unknown) => {
+    const val = parseFloat(String(raw ?? ""));
+    if (Number.isNaN(val)) return;
+    const bucket = (insightsByDate[day] ??= {
+      spend: 0,
+      impressions: 0,
+      clicks: 0,
+      linkClicks: 0,
+    });
+    bucket[key] += val;
+  };
+
+  try {
+    // Meta paginates day-bucket responses — follow `paging.next` until exhausted.
+    while (url) {
+      const res: Response = await fetch(url);
+      const json = (await res.json()) as {
+        data?: Array<{
+          date_start?: string;
+          spend?: string;
+          impressions?: string;
+          clicks?: string;
+          inline_link_clicks?: string;
+        }>;
+        paging?: { next?: string };
+        error?: { message?: string };
+      };
+      if (json.error) {
+        return {
+          insightsByDate,
+          error: json.error.message ?? String(json.error),
+        };
+      }
+      const data = Array.isArray(json.data) ? json.data : [];
+      for (const row of data) {
+        const day = row.date_start;
+        if (!day) continue;
+        add(day, "spend", row.spend);
+        add(day, "impressions", row.impressions);
+        add(day, "clicks", row.clicks);
+        add(day, "linkClicks", row.inline_link_clicks);
+      }
+      url = json.paging?.next ?? null;
+    }
+    return { insightsByDate };
+  } catch (err) {
+    return {
+      insightsByDate,
+      error: err instanceof Error ? err.message : "Failed to fetch daily insights",
+    };
+  }
+}
+
 export type MetaInsightsLevel = "campaign" | "adset" | "ad";
 
 export interface MetaAdInsight {

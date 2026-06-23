@@ -9,6 +9,8 @@ import {
 const PRESETS: DateRangePreset[] = [
   "this_month",
   "last_month",
+  "last_3",
+  "last_7",
   "last_30",
   "last_60",
   "last_90",

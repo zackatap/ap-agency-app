@@ -30,6 +30,8 @@ export function isoToLocalDateString(isoString: string): string {
 export type DateRangePreset =
   | "this_month"
   | "last_month"
+  | "last_3"
+  | "last_7"
   | "last_30"
   | "last_60"
   | "last_90"
@@ -88,6 +90,16 @@ export function getDateRangeForPreset(
       const start = startOfMonth(prevMonth);
       const end = endOfMonth(prevMonth);
       return { startDate: toLocalDate(start), endDate: toLocalDate(end) };
+    }
+    case "last_3": {
+      const start = new Date(today);
+      start.setDate(start.getDate() - 3);
+      return { startDate: toLocalDate(start), endDate: toLocalDate(today) };
+    }
+    case "last_7": {
+      const start = new Date(today);
+      start.setDate(start.getDate() - 7);
+      return { startDate: toLocalDate(start), endDate: toLocalDate(today) };
     }
     case "last_30": {
       const start = new Date(today);
@@ -156,6 +168,8 @@ export function getMonthsBack(
 export const DATE_RANGE_LABELS: Record<DateRangePreset, string> = {
   this_month: "This month",
   last_month: "Last month",
+  last_3: "Last 3 days",
+  last_7: "Last 7 days",
   last_30: "Last 30 days",
   last_60: "Last 60 days",
   last_90: "Last 90 days",

@@ -41,7 +41,8 @@ import { getMonthsBack } from "@/lib/date-ranges";
 import { getLocationSettings } from "@/lib/location-settings";
 import {
   fetchCampaigns,
-  fetchSpendByDay,
+  fetchDailyInsights,
+  type DailyInsight,
   type FacebookCampaign,
 } from "@/lib/facebook-ads";
 import {
@@ -549,7 +550,7 @@ async function processLocation(args: {
     // monthly rollup effectively did the same thing.
     const configuredAdSpend = settings?.adSpend?.[pipeline.id] ?? {};
 
-    const fbSpendByDay = await resolveCampaignSpendByDay({
+    const fbInsightsByDay = await resolveCampaignDailyInsights({
       campaign,
       windowRange,
       getFbCampaigns,
@@ -569,7 +570,7 @@ async function processLocation(args: {
       snapshotId,
       campaign,
       daysWithMetrics,
-      fbSpendByDay,
+      fbInsightsByDay,
       configuredAdSpend,
     });
 
@@ -628,10 +629,10 @@ function buildDayRows(args: {
   snapshotId: number;
   campaign: ActiveCampaign;
   daysWithMetrics: Array<{ date: string; metrics: FunnelMetrics }>;
-  fbSpendByDay: Record<string, number>;
+  fbInsightsByDay: Record<string, DailyInsight>;
   configuredAdSpend: Record<string, number>;
 }): AgencyCampaignDay[] {
-  const { snapshotId, campaign, daysWithMetrics, fbSpendByDay, configuredAdSpend } =
+  const { snapshotId, campaign, daysWithMetrics, fbInsightsByDay, configuredAdSpend } =
     args;
 
   const metricsByDate = new Map<string, FunnelMetrics>();
@@ -654,8 +655,10 @@ function buildDayRows(args: {
   // Union of days with any activity — keeps the table sparse.
   const activeDays = new Set<string>();
   for (const d of daysWithMetrics) activeDays.add(d.date);
-  for (const day of Object.keys(fbSpendByDay)) {
-    if (fbSpendByDay[day] > 0) activeDays.add(day);
+  for (const [day, insight] of Object.entries(fbInsightsByDay)) {
+    if (insight.spend > 0 || insight.impressions > 0 || insight.linkClicks > 0) {
+      activeDays.add(day);
+    }
   }
   // Also include every day of a manual-override month so the monthly total
   // is preserved even when there's no GHL activity on some days.
@@ -675,11 +678,11 @@ function buildDayRows(args: {
   const rows: AgencyCampaignDay[] = [];
   for (const date of activeDays) {
     const m = metricsByDate.get(date);
+    const insight = fbInsightsByDay[date];
     const monthKey = date.slice(0, 7);
     const manualDaily = manualDailyByMonth.get(monthKey);
     // Manual override fully replaces API when set (legacy behavior).
-    const adSpend =
-      manualDaily != null ? manualDaily : Number(fbSpendByDay[date] ?? 0);
+    const adSpend = manualDaily != null ? manualDaily : insight?.spend ?? 0;
 
     rows.push({
       snapshotId,
@@ -694,6 +697,9 @@ function buildDayRows(args: {
       totalValue: m?.totalValue ?? 0,
       successValue: m?.successValue ?? 0,
       adSpend,
+      impressions: insight?.impressions ?? 0,
+      clicks: insight?.clicks ?? 0,
+      linkClicks: insight?.linkClicks ?? 0,
     });
   }
   return rows;
@@ -768,18 +774,36 @@ function resolvePipeline(
   };
 }
 
+function addInsight(
+  target: Record<string, DailyInsight>,
+  date: string,
+  src: DailyInsight
+): void {
+  const bucket = (target[date] ??= {
+    spend: 0,
+    impressions: 0,
+    clicks: 0,
+    linkClicks: 0,
+  });
+  bucket.spend += src.spend;
+  bucket.impressions += src.impressions;
+  bucket.clicks += src.clicks;
+  bucket.linkClicks += src.linkClicks;
+}
+
 /**
- * Resolve ad spend for a campaign at DAY granularity over the window. Meta
- * is called with time_increment=1 so we get one row per spend-day. Returns
- * a sparse `{ "YYYY-MM-DD": spend }` map — days with zero spend are absent.
+ * Resolve Meta insights for a campaign at DAY granularity over the window.
+ * Meta is called with time_increment=1 so we get one row per day, carrying
+ * spend + impressions + clicks + link clicks. Returns a sparse
+ * `{ "YYYY-MM-DD": DailyInsight }` map — days with no activity are absent.
  */
-async function resolveCampaignSpendByDay(args: {
+async function resolveCampaignDailyInsights(args: {
   campaign: ActiveCampaign;
   windowRange: { startDate: string; endDate: string };
   getFbCampaigns: (
     adAccountId: string
   ) => Promise<{ campaigns: FacebookCampaign[]; error?: string }>;
-}): Promise<Record<string, number>> {
+}): Promise<Record<string, DailyInsight>> {
   const { campaign, windowRange, getFbCampaigns } = args;
   if (!campaign.adAccountId) return {};
   const { startDate, endDate } = windowRange;
@@ -789,16 +813,16 @@ async function resolveCampaignSpendByDay(args: {
 
   if (!keyword) {
     try {
-      const { spendByDate } = await fetchSpendByDay(
+      const { insightsByDate } = await fetchDailyInsights(
         campaign.adAccountId,
         false,
         startDate,
         endDate
       );
-      return spendByDate;
+      return insightsByDate;
     } catch (err) {
       console.warn(
-        `[agency-rollup-runner] account-level daily spend failed for ${campaign.locationId}:`,
+        `[agency-rollup-runner] account-level daily insights failed for ${campaign.locationId}:`,
         err
       );
       return {};
@@ -806,7 +830,7 @@ async function resolveCampaignSpendByDay(args: {
   }
 
   // Keyword filter: list FB campaigns (cached per ad account), match by
-  // name, aggregate daily spend across matches.
+  // name, aggregate daily insights across matches.
   const { campaigns: fbCampaigns, error } = await getFbCampaigns(
     campaign.adAccountId
   );
@@ -825,22 +849,22 @@ async function resolveCampaignSpendByDay(args: {
   );
   if (matches.length === 0) return {};
 
-  const aggregated: Record<string, number> = {};
+  const aggregated: Record<string, DailyInsight> = {};
   for (const fb of matches) {
     try {
-      const { spendByDate, error: spendErr } = await fetchSpendByDay(
+      const { insightsByDate, error: insightErr } = await fetchDailyInsights(
         fb.id,
         true,
         startDate,
         endDate
       );
-      if (spendErr) continue;
-      for (const [date, amount] of Object.entries(spendByDate)) {
-        aggregated[date] = (aggregated[date] ?? 0) + amount;
+      if (insightErr) continue;
+      for (const [date, insight] of Object.entries(insightsByDate)) {
+        addInsight(aggregated, date, insight);
       }
     } catch (err) {
       console.warn(
-        `[agency-rollup-runner] daily spend failed for FB campaign ${fb.id}:`,
+        `[agency-rollup-runner] daily insights failed for FB campaign ${fb.id}:`,
         err
       );
     }

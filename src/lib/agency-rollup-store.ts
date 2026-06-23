@@ -137,6 +137,14 @@ export interface AgencyCampaignDay {
   totalValue: number;
   successValue: number;
   adSpend: number;
+  /**
+   * Meta ad metrics, additive across days/campaigns. Used to derive link
+   * clicks, CPLC, and CTR in the scorecard. Null/0 on older snapshots that
+   * predate these columns until the next refresh repopulates them.
+   */
+  impressions: number;
+  clicks: number;
+  linkClicks: number;
 }
 
 /**
@@ -299,6 +307,9 @@ async function ensureSchema(sql: Sql): Promise<void> {
         total_value NUMERIC(14,2) NOT NULL DEFAULT 0,
         success_value NUMERIC(14,2) NOT NULL DEFAULT 0,
         ad_spend NUMERIC(14,2) NOT NULL DEFAULT 0,
+        impressions BIGINT NOT NULL DEFAULT 0,
+        clicks BIGINT NOT NULL DEFAULT 0,
+        link_clicks BIGINT NOT NULL DEFAULT 0,
         PRIMARY KEY (snapshot_id, campaign_key, date)
       )
     `;
@@ -307,6 +318,18 @@ async function ensureSchema(sql: Sql): Promise<void> {
         ON agency_rollup_campaign_days (snapshot_id, date)
     `;
   });
+  // Additive Meta-metric columns for existing campaign_days tables. Cheap on
+  // warm starts: Postgres short-circuits ADD COLUMN IF NOT EXISTS when present.
+  try {
+    await sql`
+      ALTER TABLE agency_rollup_campaign_days
+        ADD COLUMN IF NOT EXISTS impressions BIGINT NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS clicks BIGINT NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS link_clicks BIGINT NOT NULL DEFAULT 0
+    `;
+  } catch (err) {
+    console.warn("[agency-rollup-store] ADD COLUMN meta metrics failed:", err);
+  }
   await runIfNotExists(sql, "agency_rollup_campaign_runs", async () => {
     await sql`
       CREATE TABLE IF NOT EXISTS agency_rollup_campaign_runs (
@@ -750,11 +773,15 @@ export async function insertCampaignDays(
     const totalValue = chunk.map((r) => r.totalValue);
     const successValue = chunk.map((r) => r.successValue);
     const adSpend = chunk.map((r) => r.adSpend);
+    const impressions = chunk.map((r) => r.impressions);
+    const clicks = chunk.map((r) => r.clicks);
+    const linkClicks = chunk.map((r) => r.linkClicks);
     await sql`
       INSERT INTO agency_rollup_campaign_days (
         snapshot_id, campaign_key, location_id, date,
         leads, total_appts, showed, no_show, closed,
-        total_value, success_value, ad_spend
+        total_value, success_value, ad_spend,
+        impressions, clicks, link_clicks
       )
       SELECT * FROM UNNEST(
         ${snapshotIds}::bigint[],
@@ -768,7 +795,10 @@ export async function insertCampaignDays(
         ${closed}::int[],
         ${totalValue}::numeric[],
         ${successValue}::numeric[],
-        ${adSpend}::numeric[]
+        ${adSpend}::numeric[],
+        ${impressions}::bigint[],
+        ${clicks}::bigint[],
+        ${linkClicks}::bigint[]
       )
       ON CONFLICT (snapshot_id, campaign_key, date) DO UPDATE SET
         leads = EXCLUDED.leads,
@@ -778,7 +808,10 @@ export async function insertCampaignDays(
         closed = EXCLUDED.closed,
         total_value = EXCLUDED.total_value,
         success_value = EXCLUDED.success_value,
-        ad_spend = EXCLUDED.ad_spend
+        ad_spend = EXCLUDED.ad_spend,
+        impressions = EXCLUDED.impressions,
+        clicks = EXCLUDED.clicks,
+        link_clicks = EXCLUDED.link_clicks
     `;
   }
 }
@@ -799,7 +832,8 @@ export async function listSnapshotCampaignDays(
     ? await sql`
         SELECT snapshot_id, campaign_key, location_id, date,
                leads, total_appts, showed, no_show, closed,
-               total_value, success_value, ad_spend
+               total_value, success_value, ad_spend,
+               impressions, clicks, link_clicks
         FROM agency_rollup_campaign_days
         WHERE snapshot_id = ${snapshotId}
           AND date >= ${range.startDate}::date
@@ -809,7 +843,8 @@ export async function listSnapshotCampaignDays(
     : await sql`
         SELECT snapshot_id, campaign_key, location_id, date,
                leads, total_appts, showed, no_show, closed,
-               total_value, success_value, ad_spend
+               total_value, success_value, ad_spend,
+               impressions, clicks, link_clicks
         FROM agency_rollup_campaign_days
         WHERE snapshot_id = ${snapshotId}
         ORDER BY campaign_key, date
@@ -832,6 +867,9 @@ export async function listSnapshotCampaignDays(
       totalValue: Number(r.total_value ?? 0),
       successValue: Number(r.success_value ?? 0),
       adSpend: Number(r.ad_spend ?? 0),
+      impressions: Number(r.impressions ?? 0),
+      clicks: Number(r.clicks ?? 0),
+      linkClicks: Number(r.link_clicks ?? 0),
     };
   });
 }
