@@ -8,14 +8,29 @@ const OPPORTUNITY_TIMEZONE =
   process.env.OPPORTUNITY_TIMEZONE?.trim() || "America/Chicago";
 
 /**
- * Convert ISO UTC string (e.g. from GHL API) to YYYY-MM-DD in the configured timezone.
- * Fixes misattribution: Jan 31 10:41pm CDT was incorrectly showing as Feb 1 when using UTC.
+ * Convert ISO UTC string (e.g. from GHL API) to YYYY-MM-DD in a timezone.
+ * Defaults to the opportunity-attribution tz; pass `tzOverride` to render the
+ * date as a specific viewer would see it (e.g. the browser's tz). Fixes
+ * misattribution: Jan 31 10:41pm CDT was incorrectly showing as Feb 1 in UTC.
  */
-export function isoToLocalDateString(isoString: string): string {
+export function isoToLocalDateString(
+  isoString: string,
+  tzOverride?: string
+): string {
   if (!isoString) return "";
   const date = new Date(isoString);
+  let timeZone = OPPORTUNITY_TIMEZONE;
+  if (tzOverride) {
+    try {
+      // Throws RangeError on an invalid IANA tz; fall back to the default.
+      new Intl.DateTimeFormat("en-CA", { timeZone: tzOverride });
+      timeZone = tzOverride;
+    } catch {
+      timeZone = OPPORTUNITY_TIMEZONE;
+    }
+  }
   const formatter = new Intl.DateTimeFormat("en-CA", {
-    timeZone: OPPORTUNITY_TIMEZONE,
+    timeZone,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",

@@ -17,10 +17,11 @@ import {
 } from "./format";
 import { getTodayLocal } from "@/lib/date-ranges";
 
-/** 3 / 7 / 30-day trailing windows. Each maps to a rollup preset. */
+/** Trailing windows. Each maps to a rollup preset. */
 const WINDOWS = [
   { id: "last_3", days: 3, label: "3 days" },
   { id: "last_7", days: 7, label: "7 days" },
+  { id: "last_14", days: 14, label: "14 days" },
   { id: "last_30", days: 30, label: "30 days" },
 ] as const;
 
@@ -129,6 +130,25 @@ const URGENCY_META: Record<
 const TH_BASE =
   "sticky top-0 z-20 whitespace-nowrap border-b border-white/10 bg-slate-900 px-4 py-3 font-medium";
 
+/** "Jul 18" from a YYYY-MM-DD string (parsed as local, no UTC shift). */
+function formatDay(dateStr: string | undefined | null): string {
+  if (!dateStr) return "";
+  const [y, m, d] = dateStr.split("-").map(Number);
+  if (!y || !m || !d) return "";
+  return new Date(y, m - 1, d).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+  });
+}
+
+/** "Jul 18 – Jul 20" for a {startDate,endDate} range. */
+function formatRange(
+  range: { startDate: string; endDate: string } | null | undefined
+): string {
+  if (!range?.startDate || !range?.endDate) return "";
+  return `${formatDay(range.startDate)} – ${formatDay(range.endDate)}`;
+}
+
 export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
   const [windowId, setWindowId] = useState<WindowId>("last_30");
   const [view, setView] = useState<ClientRollupView | null>(null);
@@ -161,6 +181,11 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
       const params = new URLSearchParams({
         preset,
         clientDate: getTodayLocal(),
+        // Anchor the window to the last refresh so the date line matches the data.
+        anchor: "snapshot",
+        // Floor the refresh time in the viewer's tz so the window ends on the
+        // same date the "Last refresh" line shows (not the next day).
+        tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
       });
       // Pull the rollup view and the attention flags together. Flags are
       // window-agnostic (3/7/14/30), so they hold across the window toggle.
@@ -276,15 +301,19 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
     });
   }, []);
 
-  const windowDef = WINDOWS.find((w) => w.id === windowId)!;
-
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-white/10 bg-slate-900/40 p-4">
         <div className="flex flex-wrap items-end gap-6">
           <div>
-            <div className="text-xs uppercase tracking-wide text-slate-400">
+            <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-slate-400">
               Window
+              {loading && view && (
+                <span className="inline-flex items-center gap-1.5 rounded-full bg-indigo-500/15 px-2 py-0.5 text-[10px] font-medium normal-case tracking-normal text-indigo-200">
+                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-indigo-300" />
+                  Updating…
+                </span>
+              )}
             </div>
             <div className="mt-2 inline-flex rounded-lg border border-white/10 bg-slate-950/40 p-1">
               {WINDOWS.map((w) => (
@@ -302,6 +331,22 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
                 </button>
               ))}
             </div>
+            {view?.range && (
+              <div className="mt-2 text-xs text-slate-400">
+                <span className="text-slate-300">
+                  {formatRange(view.range)}
+                </span>
+                {view.priorRange && (
+                  <>
+                    {" "}
+                    <span className="text-slate-600">vs prior</span>{" "}
+                    <span className="text-slate-500">
+                      {formatRange(view.priorRange)}
+                    </span>
+                  </>
+                )}
+              </div>
+            )}
           </div>
           <div>
             <div className="text-xs uppercase tracking-wide text-slate-400">
@@ -335,9 +380,6 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
         </div>
         <div className="text-right text-xs text-slate-400">
           <div>
-            Last {windowDef.days} days vs the prior {windowDef.days} days
-          </div>
-          <div className="mt-1">
             Tip: click the <span className="text-slate-200">›</span> on any
             column to compare it to the prior period.
           </div>
@@ -367,7 +409,12 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
       )}
 
       {view && rows.length > 0 && (
-        <div className="max-h-[calc(100vh-16rem)] max-w-full overflow-auto rounded-2xl border border-white/10 bg-slate-900/40">
+        <div
+          aria-busy={loading}
+          className={`max-h-[calc(100vh-16rem)] max-w-full overflow-auto rounded-2xl border border-white/10 bg-slate-900/40 transition-opacity duration-200 ${
+            loading ? "pointer-events-none opacity-50" : "opacity-100"
+          }`}
+        >
           <table className="w-max min-w-full border-separate border-spacing-0 text-sm">
             <thead>
               <tr className="text-left text-xs uppercase tracking-wide text-slate-400">

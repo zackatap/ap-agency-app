@@ -1,10 +1,39 @@
 import { NextResponse } from "next/server";
 import { buildAgencyRollupView } from "@/lib/agency-rollup-view";
+import { getLatestCompleteSnapshot } from "@/lib/agency-rollup-store";
 import {
   getDateRangeForPreset,
+  getTodayLocal,
+  isoToLocalDateString,
   DATE_RANGE_LABELS,
   type DateRangePreset,
 } from "@/lib/date-ranges";
+
+/**
+ * Exact day-counts for trailing presets, used only when `?anchor=snapshot` is
+ * set (the Scorecard). Anchoring ends the window at the refresh date and makes
+ * "last N days" exactly N days, so the Scorecard's date line matches the data
+ * (which stops at the last refresh, not today).
+ */
+const TRAILING_DAYS: Partial<Record<DateRangePreset, number>> = {
+  last_3: 3,
+  last_7: 7,
+  last_14: 14,
+  last_30: 30,
+  last_60: 60,
+  last_90: 90,
+};
+
+/** Shift a YYYY-MM-DD string by `delta` days (local). */
+function shiftDateStr(dateStr: string, delta: number): string {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() + delta);
+  const yy = dt.getFullYear();
+  const mm = String(dt.getMonth() + 1).padStart(2, "0");
+  const dd = String(dt.getDate()).padStart(2, "0");
+  return `${yy}-${mm}-${dd}`;
+}
 
 const PRESETS: DateRangePreset[] = [
   "this_month",
@@ -33,12 +62,34 @@ export async function GET(req: Request) {
   const onTotals = onTotalsParam !== "false" && onTotalsParam !== "0";
 
   const preset: DateRangePreset = isPreset(presetParam) ? presetParam : "last_30";
-  const { startDate, endDate } = getDateRangeForPreset(
-    preset,
-    customFrom,
-    customTo,
-    clientDate
-  );
+
+  // Anchor trailing windows to the snapshot's data date (the last refresh) so
+  // "last N days" means the N days ending at the refresh, not today — the data
+  // doesn't extend past the refresh, so a today-anchored window would show
+  // empty/partial days and mismatch the labels.
+  const anchorToSnapshot = url.searchParams.get("anchor") === "snapshot";
+  // The viewer's tz, so the window ends on the same calendar date the "Last
+  // refresh" line shows (a late-night refresh otherwise rolls into "tomorrow"
+  // in the data tz and tacks on a partial day).
+  const tz = url.searchParams.get("tz") ?? undefined;
+  const trailingDays = TRAILING_DAYS[preset];
+  let startDate: string;
+  let endDate: string;
+  if (anchorToSnapshot && trailingDays) {
+    const snap = await getLatestCompleteSnapshot();
+    const anchor = snap?.finishedAt
+      ? isoToLocalDateString(snap.finishedAt, tz)
+      : clientDate ?? getTodayLocal();
+    endDate = anchor;
+    startDate = shiftDateStr(anchor, -(trailingDays - 1));
+  } else {
+    ({ startDate, endDate } = getDateRangeForPreset(
+      preset,
+      customFrom,
+      customTo,
+      clientDate
+    ));
+  }
 
   const view = await buildAgencyRollupView({
     onTotals,
