@@ -198,11 +198,15 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
         // same date the "Last refresh" line shows (not the next day).
         tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
       });
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
       // Pull the rollup view and the attention flags together. Flags are
       // window-agnostic (3/7/14/30), so they hold across the window toggle.
+      // Same tz so flag windows anchor to the refresh date like the table.
       const [res, attnRes] = await Promise.all([
         fetch(`/api/agency/rollup/latest?${params}`, { cache: "no-store" }),
-        fetch(`/api/agency/attention`, { cache: "no-store" }),
+        fetch(`/api/agency/attention?tz=${encodeURIComponent(tz)}`, {
+          cache: "no-store",
+        }),
       ]);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Failed to load scorecard");

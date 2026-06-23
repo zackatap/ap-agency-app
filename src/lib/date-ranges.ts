@@ -59,6 +59,17 @@ export interface DateRange {
   endDate: string;
 }
 
+/** Shift a YYYY-MM-DD string by `delta` days, staying in local calendar terms. */
+export function shiftDateString(dateStr: string, delta: number): string {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const dt = new Date(y, m - 1, d);
+  dt.setDate(dt.getDate() + delta);
+  const yy = dt.getFullYear();
+  const mm = String(dt.getMonth() + 1).padStart(2, "0");
+  const dd = String(dt.getDate()).padStart(2, "0");
+  return `${yy}-${mm}-${dd}`;
+}
+
 /** Format date as YYYY-MM-DD in local timezone (not UTC) */
 function toLocalDate(date: Date): string {
   const y = date.getFullYear();

@@ -18,15 +18,17 @@ import {
   type CampaignWindowTotals,
 } from "@/lib/agency-rollup-view";
 import {
-  getDateRangeForPreset,
   DATE_RANGE_LABELS,
   getTodayLocal,
+  isoToLocalDateString,
+  shiftDateString,
   type DateRangePreset,
 } from "@/lib/date-ranges";
 import {
   computeAttentionFlag,
   type AttentionMetrics,
 } from "@/lib/attention-flags";
+import { getLatestCompleteSnapshot } from "@/lib/agency-rollup-store";
 import { fetchClickUpRelationMap } from "@/lib/google-sheets";
 
 /** Supported trailing windows and the rollup preset each maps to. */
@@ -94,12 +96,20 @@ export interface AttentionFeedResult {
 export async function buildAttentionFeed(opts?: {
   windows?: number[];
   flaggedOnly?: boolean;
+  /** Viewer tz so windows align with the KPI table's refresh-date anchor. */
+  tz?: string;
 }): Promise<AttentionFeedResult> {
   const outputWindows = (opts?.windows ?? [...ATTENTION_WINDOWS])
     .filter((w) => w in WINDOW_PRESETS)
     .sort((a, b) => a - b);
 
-  const today = getTodayLocal();
+  // Anchor every window to the snapshot's refresh date (exact N days ending on
+  // it), identical to the KPI table — so a "7-day" flag is computed over the
+  // same dates the table shows. Falls back to today if no snapshot yet.
+  const snap = await getLatestCompleteSnapshot();
+  const anchor = snap?.finishedAt
+    ? isoToLocalDateString(snap.finishedAt, opts?.tz)
+    : getTodayLocal();
 
   // Always build all four windows: flags need 3/7/14/30 even if the caller only
   // wants a subset of metric columns. Each is a Neon read of the latest
@@ -109,12 +119,8 @@ export async function buildAttentionFeed(opts?: {
     Promise.all(
       allWindows.map(async (w) => {
         const preset = WINDOW_PRESETS[w];
-        const { startDate, endDate } = getDateRangeForPreset(
-          preset,
-          undefined,
-          undefined,
-          today
-        );
+        const endDate = anchor;
+        const startDate = shiftDateString(anchor, -(w - 1));
         const view = await buildAgencyRollupView({
           onTotals: true,
           range: { preset, startDate, endDate, label: DATE_RANGE_LABELS[preset] },

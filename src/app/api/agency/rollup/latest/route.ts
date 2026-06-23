@@ -5,6 +5,7 @@ import {
   getDateRangeForPreset,
   getTodayLocal,
   isoToLocalDateString,
+  shiftDateString,
   DATE_RANGE_LABELS,
   type DateRangePreset,
 } from "@/lib/date-ranges";
@@ -23,17 +24,6 @@ const TRAILING_DAYS: Partial<Record<DateRangePreset, number>> = {
   last_60: 60,
   last_90: 90,
 };
-
-/** Shift a YYYY-MM-DD string by `delta` days (local). */
-function shiftDateStr(dateStr: string, delta: number): string {
-  const [y, m, d] = dateStr.split("-").map(Number);
-  const dt = new Date(y, m - 1, d);
-  dt.setDate(dt.getDate() + delta);
-  const yy = dt.getFullYear();
-  const mm = String(dt.getMonth() + 1).padStart(2, "0");
-  const dd = String(dt.getDate()).padStart(2, "0");
-  return `${yy}-${mm}-${dd}`;
-}
 
 const PRESETS: DateRangePreset[] = [
   "this_month",
@@ -81,7 +71,7 @@ export async function GET(req: Request) {
       ? isoToLocalDateString(snap.finishedAt, tz)
       : clientDate ?? getTodayLocal();
     endDate = anchor;
-    startDate = shiftDateStr(anchor, -(trailingDays - 1));
+    startDate = shiftDateString(anchor, -(trailingDays - 1));
   } else {
     ({ startDate, endDate } = getDateRangeForPreset(
       preset,

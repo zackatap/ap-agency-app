@@ -7,9 +7,12 @@ export const dynamic = "force-dynamic";
  * Cookie-guarded feed for the in-app Attention Dashboard tab (auth handled by
  * middleware on `/api/agency/*`). Returns flagged campaigns sorted by urgency.
  */
-export async function GET() {
+export async function GET(req: Request) {
   try {
-    const feed = await buildAttentionFeed({ flaggedOnly: true });
+    // Pass the viewer's tz so flag windows anchor to the same refresh date the
+    // KPI table uses (a late-night refresh otherwise lands on the next day).
+    const tz = new URL(req.url).searchParams.get("tz") ?? undefined;
+    const feed = await buildAttentionFeed({ flaggedOnly: true, tz });
     return NextResponse.json(feed, { headers: { "Cache-Control": "no-store" } });
   } catch (err) {
     console.error("[agency/attention]", err);
