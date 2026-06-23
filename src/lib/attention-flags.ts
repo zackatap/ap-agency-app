@@ -113,14 +113,3 @@ export function computeAttentionFlag(m: AttentionMetrics): AttentionFlag | null 
 
   return { code, reason: ATTENTION_REASONS[code], urgency: urgencyForCode(code) };
 }
-
-/**
- * The sheet's "Status" column: a headline of the 3-day CPL dollar move,
- * current period vs the prior 3 days. Pass the precomputed delta (current
- * minus previous); null when CPL isn't defined for either side.
- */
-export function attentionStatusText(cplDelta3d: number | null): string {
-  if (!isNum(cplDelta3d)) return "-";
-  const body = `$${Math.abs(cplDelta3d).toFixed(2)}`;
-  return cplDelta3d >= 0 ? `${body} more` : `${body} less`;
-}

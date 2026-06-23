@@ -12,7 +12,6 @@ interface AttentionRow {
   reason: string;
   attention_code: string;
   urgency: number | null;
-  attention_status: string;
   clickup_relation_id: string;
 }
 
@@ -96,7 +95,7 @@ export function AttentionTab({ reloadKey = 0 }: { reloadKey?: number }) {
                 <th className="px-4 py-3 font-medium">Client</th>
                 <th className="px-4 py-3 font-medium">Campaign</th>
                 <th className="px-4 py-3 font-medium">Reason</th>
-                <th className="px-4 py-3 text-right font-medium">CPL change</th>
+                <th className="px-4 py-3 text-right font-medium">Status</th>
               </tr>
             </thead>
             <tbody>
@@ -127,8 +126,10 @@ export function AttentionTab({ reloadKey = 0 }: { reloadKey?: number }) {
                       {r.campaign_name ?? r.pipeline_name ?? "—"}
                     </td>
                     <td className="px-4 py-3 text-slate-200">{r.reason}</td>
-                    <td className="px-4 py-3 text-right tabular-nums text-slate-300">
-                      {r.attention_status}
+                    <td className="px-4 py-3 text-right">
+                      <span className="rounded bg-white/5 px-2 py-0.5 font-mono text-xs text-slate-300">
+                        {r.attention_code}
+                      </span>
                     </td>
                   </tr>
                 );

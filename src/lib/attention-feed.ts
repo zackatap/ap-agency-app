@@ -25,7 +25,6 @@ import {
 } from "@/lib/date-ranges";
 import {
   computeAttentionFlag,
-  attentionStatusText,
   type AttentionMetrics,
 } from "@/lib/attention-flags";
 import { fetchClickUpRelationMap } from "@/lib/google-sheets";
@@ -188,13 +187,13 @@ export async function buildAttentionFeed(opts?: {
       campaign_name: campaignName,
       included: base.included,
       needs_setup: Boolean(base.needsSetupReason),
-      // Attention Dashboard fields (the sheet's derived columns).
+      // Attention Dashboard fields (the sheet's derived columns). The sheet's
+      // "STATUS" column is this code (S_R4, S_O3, ...); `status` above is the
+      // ACTIVE / 2ND CMPN campaign status, a different thing.
       flagged: flag != null,
       attention_code: flag?.code ?? "-",
       reason: flag?.reason ?? "",
       urgency: flag?.urgency ?? null,
-      // CPL "$X more/less" headline (the sheet's STATUS column): 3-day change.
-      attention_status: attentionStatusText(metrics.cplDelta3d),
       clickup_relation_id: relationId,
     };
 
