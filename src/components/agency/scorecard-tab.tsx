@@ -65,14 +65,25 @@ function formatValue(key: MetricKey, value: number | null): string {
 
 type DeltaTone = "good" | "bad" | "flat" | "none";
 
+/** Signed relative change as a tidy "+/-N%" string, or null when prior is ~0. */
+function formatPctChange(delta: number, prior: number): string | null {
+  if (Math.abs(prior) < 1e-9) return null;
+  const pct = (delta / Math.abs(prior)) * 100;
+  const sign = pct > 0 ? "+" : "−";
+  const mag = Math.abs(pct);
+  if (mag >= 1000) return `${sign}>999%`;
+  const body = mag < 10 ? mag.toFixed(1) : Math.round(mag).toString();
+  return `${sign}${body}%`;
+}
+
 function computeDelta(
   key: MetricKey,
   cur: number | null,
   prior: number | null
-): { text: string; tone: DeltaTone } {
-  if (cur == null || prior == null) return { text: "—", tone: "none" };
+): { text: string; pct: string | null; tone: DeltaTone } {
+  if (cur == null || prior == null) return { text: "—", pct: null, tone: "none" };
   const delta = cur - prior;
-  if (Math.abs(delta) < 1e-9) return { text: "0", tone: "flat" };
+  if (Math.abs(delta) < 1e-9) return { text: "0", pct: null, tone: "flat" };
   const higherIsBetter = METRIC_META[key].higherIsBetter;
   const tone: DeltaTone =
     (delta > 0 && higherIsBetter) || (delta < 0 && !higherIsBetter)
@@ -99,7 +110,7 @@ function computeDelta(
     default:
       body = formatCount(magnitude);
   }
-  return { text: `${sign}${body}`, tone };
+  return { text: `${sign}${body}`, pct: formatPctChange(delta, prior), tone };
 }
 
 const TONE_CLASS: Record<DeltaTone, string> = {
@@ -568,7 +579,12 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
                           <td
                             className={`whitespace-nowrap border-b border-b-white/5 px-3 py-3 text-right tabular-nums ${TONE_CLASS[delta.tone]}`}
                           >
-                            {delta.text}
+                            <div>{delta.text}</div>
+                            {delta.pct && (
+                              <div className="text-[11px] text-slate-500">
+                                {delta.pct}
+                              </div>
+                            )}
                           </td>
                         </Fragment>
                       );
