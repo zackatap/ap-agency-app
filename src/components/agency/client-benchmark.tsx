@@ -182,7 +182,7 @@ function BenchmarkCompareColumn({
       </div>
       {rank && (
         <div className="mt-1 text-[11px] leading-snug text-slate-400">
-          {ordinalSuffix(rank.rank)} of {rank.of} · {rank.percentile}th percentile
+          {ordinalSuffix(rank.rank)} of {rank.of} · {ordinalSuffix(rank.percentile)} percentile
         </div>
       )}
     </div>
@@ -599,7 +599,7 @@ export function ClientBenchmark({
                     {rank ? `${rank.rank} of ${rank.of}` : "—"}
                   </td>
                   <td className="px-3 py-2 text-right tabular-nums text-slate-300">
-                    {rank ? `${rank.percentile}th` : "—"}
+                    {rank ? ordinalSuffix(rank.percentile) : "—"}
                   </td>
                 </tr>
               ))}
