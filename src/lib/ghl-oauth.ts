@@ -69,19 +69,33 @@ export function isOpportunityWon(opp: GHLOpportunity): boolean {
 }
 
 /**
- * True when the opportunity carries the given tag (case-insensitive). GHL
- * returns tags as a `tags` string array; we also tolerate a comma-joined
- * string. Match is substring so a sheet value of "pain" matches a "Pain
- * Patients" tag, mirroring the keyword philosophy used elsewhere.
+ * True when the opportunity carries the given tag (case-insensitive). GHL is
+ * inconsistent about where tags live, so we look in every common spot: the
+ * opportunity's own `tags`, and the associated contact's tags (which is where
+ * GHL usually stores them). Accepts arrays or comma-joined strings. Match is
+ * substring so a sheet value of "pain" matches a "Pain Patients" tag,
+ * mirroring the keyword philosophy used elsewhere.
  */
 export function opportunityHasTag(opp: GHLOpportunity, tagLower: string): boolean {
   if (!tagLower) return true;
-  const raw = (opp as Record<string, unknown>).tags;
-  if (Array.isArray(raw)) {
-    return raw.some((t) => String(t).trim().toLowerCase().includes(tagLower));
-  }
-  if (typeof raw === "string") {
-    return raw.toLowerCase().includes(tagLower);
+  const rec = opp as Record<string, unknown>;
+  const contact = (rec.contact ?? rec.contactData ?? rec.Contact) as
+    | Record<string, unknown>
+    | undefined;
+  const sources: unknown[] = [
+    rec.tags,
+    rec.contactTags,
+    contact?.tags,
+    contact?.contactTags,
+  ];
+  for (const src of sources) {
+    if (Array.isArray(src)) {
+      if (src.some((t) => String(t).trim().toLowerCase().includes(tagLower))) {
+        return true;
+      }
+    } else if (typeof src === "string") {
+      if (src.toLowerCase().includes(tagLower)) return true;
+    }
   }
   return false;
 }

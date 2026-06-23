@@ -473,13 +473,20 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
                         </span>
                         <StatusBadge status={c.status} />
                       </div>
-                      {(c.pipelineName ??
-                        c.campaignKeyword ??
-                        c.adAccountId) && (
-                        <div className="text-xs text-slate-400">
-                          {c.pipelineName ?? c.campaignKeyword ?? c.adAccountId}
-                        </div>
-                      )}
+                      {(() => {
+                        // Show pipeline + campaign keyword together so two
+                        // campaigns sharing one pipeline (e.g. Leads · Pain vs
+                        // Leads · Decompression) are distinguishable.
+                        const pn = c.pipelineName?.trim() || null;
+                        const ck = c.campaignKeyword?.trim() || null;
+                        const subtitle =
+                          pn && ck && pn.toLowerCase() !== ck.toLowerCase()
+                            ? `${pn} · ${ck}`
+                            : pn ?? ck ?? c.adAccountId;
+                        return subtitle ? (
+                          <div className="text-xs text-slate-400">{subtitle}</div>
+                        ) : null;
+                      })()}
                     </td>
                     <td className="whitespace-nowrap border-b border-b-white/5 border-l border-l-white/10 px-4 py-3">
                       {urgency != null ? (
