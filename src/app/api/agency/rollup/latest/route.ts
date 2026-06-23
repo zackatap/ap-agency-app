@@ -11,6 +11,7 @@ const PRESETS: DateRangePreset[] = [
   "last_month",
   "last_3",
   "last_7",
+  "last_14",
   "last_30",
   "last_60",
   "last_90",

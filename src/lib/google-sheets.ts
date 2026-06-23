@@ -77,6 +77,38 @@ export interface LocationFacebookConfig {
   campaignKeywords: string[];
 }
 
+/** Column BC (index 54) — "CLICKUP CLIENT RELATIONSHIP ID" in the Client DB. */
+const COL_BC = 54;
+const COL_AO_LOCATION = 40;
+const COL_A_CID = 0;
+
+/**
+ * Map of each client's ClickUp Relationship ID (Client DB column BC), keyed by
+ * GHL location ID and by CID so callers can resolve either way. The Attention
+ * Dashboard / Zapier flow needs this ID to attach tasks to the right ClickUp
+ * client record.
+ */
+export async function fetchClickUpRelationMap(): Promise<{
+  byLocation: Map<string, string>;
+  byCid: Map<string, string>;
+  error?: string;
+}> {
+  const byLocation = new Map<string, string>();
+  const byCid = new Map<string, string>();
+  const { rows, error } = await fetchSheetRows({ columnEnd: "BC" });
+  if (error) return { byLocation, byCid, error };
+
+  for (const row of rows.slice(1)) {
+    const relationId = String(row[COL_BC] ?? "").trim();
+    if (!relationId) continue;
+    const locationId = String(row[COL_AO_LOCATION] ?? "").trim();
+    const cid = String(row[COL_A_CID] ?? "").trim();
+    if (locationId && !byLocation.has(locationId)) byLocation.set(locationId, relationId);
+    if (cid && !byCid.has(cid)) byCid.set(cid, relationId);
+  }
+  return { byLocation, byCid };
+}
+
 /** Column letter to 0-based index: G=6, J=9, AO=40 */
 const COL_G = 6;
 const COL_J = 9;

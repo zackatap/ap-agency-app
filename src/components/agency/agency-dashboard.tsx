@@ -21,6 +21,7 @@ import { ClientBenchmark } from "./client-benchmark";
 import { ClientMap } from "./client-map";
 import { MetaAdsTab } from "./meta-ads-tab";
 import { ScorecardTab } from "./scorecard-tab";
+import { AttentionTab } from "./attention-tab";
 import {
   aggregateCampaignWindow,
   aggregateCampaignWindowTopFraction,
@@ -49,7 +50,7 @@ interface Props {
   initialLatest: ClientAgencySnapshot | null;
 }
 
-type DashboardTab = "performance" | "scorecard" | "ads" | "map";
+type DashboardTab = "performance" | "scorecard" | "attention" | "ads" | "map";
 
 const KPI_RATE_METRICS = new Set<DashboardKpiMetric>([
   "bookingRate",
@@ -535,12 +536,16 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
               ? "Performance across every active & 2nd campaign client. Each sheet row is its own campaign; clients with ACTIVE + 2ND CMPN show both pipelines rolled up under their CID."
               : activeTab === "scorecard"
                 ? "Ad spend, leads, CPL, link clicks, CPLC, and CTR per active & 2nd campaign client over a 3/7/30-day window, with movement vs the prior period."
-                : activeTab === "ads"
-                  ? "Ad-level Meta performance across active client ad accounts with recent spend, including creative thumbnails and name-based rollups."
-                  : "Every client from the Client DB sheet plotted on a map. Filter by status to focus the view; each pin is one client even when they have multiple campaigns."}
+                : activeTab === "attention"
+                  ? "Campaigns tripping a CPL, lead, or ad-spend threshold, ranked by urgency. Same flags that feed the ClickUp tasks, computed from the 3/7/14/30-day windows."
+                  : activeTab === "ads"
+                    ? "Ad-level Meta performance across active client ad accounts with recent spend, including creative thumbnails and name-based rollups."
+                    : "Every client from the Client DB sheet plotted on a map. Filter by status to focus the view; each pin is one client even when they have multiple campaigns."}
           </p>
         </div>
-        {(activeTab === "performance" || activeTab === "scorecard") && (
+        {(activeTab === "performance" ||
+          activeTab === "scorecard" ||
+          activeTab === "attention") && (
           <RefreshControls
             latest={currentLatest}
             completeFinishedAt={latestSnapshotFinished}
@@ -554,6 +559,7 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
           [
             { id: "performance", label: "Performance" },
             { id: "scorecard", label: "Scorecard" },
+            { id: "attention", label: "Attention" },
             { id: "ads", label: "Ads" },
             { id: "map", label: "Client map" },
           ] as Array<{ id: DashboardTab; label: string }>
@@ -574,6 +580,8 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
       </nav>
 
       {activeTab === "scorecard" && <ScorecardTab reloadKey={refreshNonce} />}
+
+      {activeTab === "attention" && <AttentionTab reloadKey={refreshNonce} />}
 
       {activeTab === "ads" && <MetaAdsTab />}
 

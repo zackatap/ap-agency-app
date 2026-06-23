@@ -32,6 +32,7 @@ export type DateRangePreset =
   | "last_month"
   | "last_3"
   | "last_7"
+  | "last_14"
   | "last_30"
   | "last_60"
   | "last_90"
@@ -99,6 +100,11 @@ export function getDateRangeForPreset(
     case "last_7": {
       const start = new Date(today);
       start.setDate(start.getDate() - 7);
+      return { startDate: toLocalDate(start), endDate: toLocalDate(today) };
+    }
+    case "last_14": {
+      const start = new Date(today);
+      start.setDate(start.getDate() - 14);
       return { startDate: toLocalDate(start), endDate: toLocalDate(today) };
     }
     case "last_30": {
@@ -170,6 +176,7 @@ export const DATE_RANGE_LABELS: Record<DateRangePreset, string> = {
   last_month: "Last month",
   last_3: "Last 3 days",
   last_7: "Last 7 days",
+  last_14: "Last 14 days",
   last_30: "Last 30 days",
   last_60: "Last 60 days",
   last_90: "Last 90 days",

@@ -1,13 +1,19 @@
 /**
  * Builds the JSON feed that replaces the Zapier "Get Many Rows" read of the
  * Attention Dashboard sheet. One object per active/2nd-cmpn campaign, carrying
- * the same KPIs (ad spend, leads, CPL, link clicks, CPLC, CTR) for the 3/7/30
- * day windows with current / prior / delta — sourced straight from the rollup
- * snapshot via {@link buildAgencyRollupView}, the same data the Scorecard uses.
+ * the KPIs (ad spend, leads, CPL, link clicks, CPLC, CTR) for the 3/7/14/30 day
+ * windows with current / prior / delta, plus the sheet's derived attention
+ * fields: flag code, reason, urgency, the CPL "$ more/less" status, and the
+ * ClickUp relationship ID.
+ *
+ * Data comes from the rollup snapshot via {@link buildAgencyRollupView} (the
+ * same source the Scorecard uses); the ClickUp ID comes live from the Client DB
+ * (column BC). Flags are computed by {@link computeAttentionFlag}.
  */
 
 import {
   buildAgencyRollupView,
+  type AgencyRollupView,
   type CampaignSummary,
   type CampaignWindowTotals,
 } from "@/lib/agency-rollup-view";
@@ -17,15 +23,22 @@ import {
   getTodayLocal,
   type DateRangePreset,
 } from "@/lib/date-ranges";
+import {
+  computeAttentionFlag,
+  attentionStatusText,
+  type AttentionMetrics,
+} from "@/lib/attention-flags";
+import { fetchClickUpRelationMap } from "@/lib/google-sheets";
 
 /** Supported trailing windows and the rollup preset each maps to. */
 const WINDOW_PRESETS: Record<number, DateRangePreset> = {
   3: "last_3",
   7: "last_7",
+  14: "last_14",
   30: "last_30",
 };
 
-export const ATTENTION_WINDOWS = [3, 7, 30] as const;
+export const ATTENTION_WINDOWS = [3, 7, 14, 30] as const;
 
 /** Metrics emitted per window, with the output key prefix used in the feed. */
 const FEED_METRICS: Array<{
@@ -55,6 +68,15 @@ function decimalsFor(out: string): number {
   return out === "leads" || out === "link_clicks" ? 0 : 2;
 }
 
+/** CPL dollar delta (current minus prior) for a window, null if either side is null. */
+function cplDelta(summary: CampaignSummary | undefined): number | null {
+  if (!summary) return null;
+  const cur = summary.totals.cpl;
+  const prev = summary.priorTotals.cpl;
+  if (typeof cur !== "number" || typeof prev !== "number") return null;
+  return cur - prev;
+}
+
 export interface AttentionFeedResult {
   snapshotId: number | null;
   snapshotFinishedAt: string | null;
@@ -63,68 +85,99 @@ export interface AttentionFeedResult {
 }
 
 /**
- * @param windows Which trailing windows to include (defaults to all of 3/7/30).
- *   Reads the day table once per window — fine for a scheduled Zapier poll.
+ * @param windows Which trailing windows to include as metric columns (defaults
+ *   to all of 3/7/14/30). Flags are always computed from all four windows
+ *   regardless of this setting.
+ * @param flaggedOnly When true, returns only campaigns that have an attention
+ *   flag (matching the sheet's `CI <> '-'` filter), excludes client names with
+ *   `*`, and sorts by urgency then name. This is the Attention Dashboard view.
  */
 export async function buildAttentionFeed(opts?: {
   windows?: number[];
+  flaggedOnly?: boolean;
 }): Promise<AttentionFeedResult> {
-  const windows = (opts?.windows ?? [...ATTENTION_WINDOWS])
+  const outputWindows = (opts?.windows ?? [...ATTENTION_WINDOWS])
     .filter((w) => w in WINDOW_PRESETS)
     .sort((a, b) => a - b);
 
   const today = getTodayLocal();
 
-  // Build one rollup view per requested window. Each is a Neon read of the
-  // latest complete snapshot aggregated over that window + its prior period.
-  const views = await Promise.all(
-    windows.map(async (w) => {
-      const preset = WINDOW_PRESETS[w];
-      const { startDate, endDate } = getDateRangeForPreset(
-        preset,
-        undefined,
-        undefined,
-        today
-      );
-      const view = await buildAgencyRollupView({
-        onTotals: true,
-        range: {
+  // Always build all four windows: flags need 3/7/14/30 even if the caller only
+  // wants a subset of metric columns. Each is a Neon read of the latest
+  // complete snapshot aggregated over that window + its prior period.
+  const allWindows = [...ATTENTION_WINDOWS];
+  const [views, relationMap] = await Promise.all([
+    Promise.all(
+      allWindows.map(async (w) => {
+        const preset = WINDOW_PRESETS[w];
+        const { startDate, endDate } = getDateRangeForPreset(
           preset,
-          startDate,
-          endDate,
-          label: DATE_RANGE_LABELS[preset],
-        },
-      });
-      return { window: w, view };
-    })
-  );
+          undefined,
+          undefined,
+          today
+        );
+        const view = await buildAgencyRollupView({
+          onTotals: true,
+          range: { preset, startDate, endDate, label: DATE_RANGE_LABELS[preset] },
+        });
+        return { window: w, view };
+      })
+    ),
+    fetchClickUpRelationMap(),
+  ]);
 
-  const firstView = views.find((v) => v.view)?.view ?? null;
-  if (!firstView) {
-    return {
-      snapshotId: null,
-      snapshotFinishedAt: null,
-      windows,
-      rows: [],
-    };
-  }
-
-  // Index every window's campaigns by campaignKey so we can merge per campaign.
   const byWindow = new Map<number, Map<string, CampaignSummary>>();
+  let baseView: AgencyRollupView | null = null;
   for (const { window, view } of views) {
     const map = new Map<string, CampaignSummary>();
     if (view) {
       for (const c of view.campaigns) map.set(c.campaignKey, c);
+      if (!baseView) baseView = view;
     }
     byWindow.set(window, map);
   }
 
-  // Roster comes from the first view; campaign sets are identical across
-  // windows (same snapshot), so this covers everyone.
+  if (!baseView) {
+    return { snapshotId: null, snapshotFinishedAt: null, windows: outputWindows, rows: [] };
+  }
+
+  const w3 = byWindow.get(3)!;
+  const w7 = byWindow.get(7)!;
+  const w14 = byWindow.get(14)!;
+  const w30 = byWindow.get(30)!;
+
   const rows: Array<Record<string, unknown>> = [];
-  for (const base of firstView.campaigns) {
+  for (const base of baseView.campaigns) {
+    const key = base.campaignKey;
+    const s3 = w3.get(key);
+    const s7 = w7.get(key);
+    const s14 = w14.get(key);
+    const s30 = w30.get(key);
+    const campaignName = base.campaignKeyword ?? base.pipelineName;
+
+    const metrics: AttentionMetrics = {
+      businessName: base.businessName,
+      campaignName,
+      leads3d: s3?.totals.leads ?? 0,
+      leads7d: s7?.totals.leads ?? 0,
+      cpl7d: s7?.totals.cpl ?? null,
+      cpl30d: s30?.totals.cpl ?? null,
+      cpl30dPrev: s30?.priorTotals.cpl ?? null,
+      cplDelta14d: cplDelta(s14),
+      cplDelta7d: cplDelta(s7),
+      cplDelta3d: cplDelta(s3),
+      adSpend3d: s3?.totals.adSpend ?? 0,
+      adSpend30d: s30?.totals.adSpend ?? 0,
+    };
+    const flag = computeAttentionFlag(metrics);
+
+    const relationId =
+      relationMap.byLocation.get(base.locationId) ??
+      (base.cid ? relationMap.byCid.get(base.cid) : undefined) ??
+      "";
+
     const row: Record<string, unknown> = {
-      campaign_key: base.campaignKey,
+      campaign_key: key,
       cid: base.cid,
       client_name: base.businessName,
       owner_name: base.ownerName,
@@ -132,13 +185,21 @@ export async function buildAttentionFeed(opts?: {
       ad_account_id: base.adAccountId,
       location_id: base.locationId,
       pipeline_name: base.pipelineName,
-      campaign_name: base.campaignKeyword ?? base.pipelineName,
+      campaign_name: campaignName,
       included: base.included,
       needs_setup: Boolean(base.needsSetupReason),
+      // Attention Dashboard fields (the sheet's derived columns).
+      flagged: flag != null,
+      attention_code: flag?.code ?? "-",
+      reason: flag?.reason ?? "",
+      urgency: flag?.urgency ?? null,
+      // CPL "$X more/less" headline (the sheet's STATUS column).
+      attention_status: attentionStatusText(metrics.cpl30d, metrics.cpl30dPrev),
+      clickup_relation_id: relationId,
     };
 
-    for (const w of windows) {
-      const summary = byWindow.get(w)?.get(base.campaignKey);
+    for (const w of outputWindows) {
+      const summary = byWindow.get(w)?.get(key);
       for (const metric of FEED_METRICS) {
         const prefix = `${metric.out}_${w}d`;
         const cur = summary ? num(summary.totals, metric.key) : null;
@@ -154,10 +215,24 @@ export async function buildAttentionFeed(opts?: {
     rows.push(row);
   }
 
+  let finalRows = rows;
+  if (opts?.flaggedOnly) {
+    finalRows = rows
+      .filter((r) => r.flagged === true)
+      // Sheet's `NOT B LIKE '%*%'`: drop paused/internal names marked with "*".
+      .filter((r) => !String(r.client_name ?? "").includes("*"))
+      .sort((a, b) => {
+        const ua = (a.urgency as number | null) ?? 99;
+        const ub = (b.urgency as number | null) ?? 99;
+        if (ua !== ub) return ua - ub;
+        return String(a.client_name ?? "").localeCompare(String(b.client_name ?? ""));
+      });
+  }
+
   return {
-    snapshotId: firstView.snapshot.id,
-    snapshotFinishedAt: firstView.snapshot.finishedAt,
-    windows,
-    rows,
+    snapshotId: baseView.snapshot.id,
+    snapshotFinishedAt: baseView.snapshot.finishedAt,
+    windows: outputWindows,
+    rows: finalRows,
   };
 }

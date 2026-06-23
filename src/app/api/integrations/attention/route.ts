@@ -41,8 +41,13 @@ export async function GET(req: Request) {
     windows = [requested];
   }
 
+  // ?flagged=1 returns only campaigns with an attention flag, sorted by urgency
+  // (the Attention Dashboard view the zap consumes). Default returns everything.
+  const flaggedParam = url.searchParams.get("flagged");
+  const flaggedOnly = flaggedParam === "1" || flaggedParam === "true";
+
   try {
-    const feed = await buildAttentionFeed({ windows });
+    const feed = await buildAttentionFeed({ windows, flaggedOnly });
     return NextResponse.json(feed.rows, {
       headers: {
         "Cache-Control": "no-store",
