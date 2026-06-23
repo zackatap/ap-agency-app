@@ -115,22 +115,14 @@ interface AttentionInfo {
   reason: string;
 }
 
-/**
- * Row tint + matching opaque background for the frozen Client cell when a
- * campaign is flagged in the Attention tab. The frozen cell needs an opaque
- * tone (scrolled content would otherwise bleed under it); the hexes are the
- * semi-transparent tint pre-blended over the dark panel so both read as the
- * same hue. Opacity is high enough that the hue survives the blue slate base —
- * low values turn every color into the same muddy olive.
- */
-const URGENCY_ROW: Record<number, { row: string; sticky: string }> = {
-  0: { row: "bg-red-500/20 hover:bg-red-500/25", sticky: "bg-[#311220]" },
-  1: { row: "bg-orange-500/20 hover:bg-orange-500/25", sticky: "bg-[#331c17]" },
-  2: { row: "bg-yellow-400/20 hover:bg-yellow-400/25", sticky: "bg-[#342e17]" },
-};
-const DEFAULT_ROW = {
-  row: "hover:bg-white/5",
-  sticky: "bg-slate-900 group-hover:bg-slate-800",
+/** Urgency badge styling, mirrored from the Attention tab (red / orange / yellow). */
+const URGENCY_META: Record<
+  number,
+  { label: string; dot: string; text: string; ring: string }
+> = {
+  0: { label: "Red", dot: "bg-red-500", text: "text-red-300", ring: "ring-red-500/30" },
+  1: { label: "Orange", dot: "bg-amber-500", text: "text-amber-300", ring: "ring-amber-500/30" },
+  2: { label: "Yellow", dot: "bg-yellow-400", text: "text-yellow-200", ring: "ring-yellow-400/30" },
 };
 
 /** Header cell: sticks to the top on vertical scroll (matches the leaderboard). */
@@ -147,11 +139,16 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
   const [expandedMetrics, setExpandedMetrics] = useState<Set<MetricKey>>(
     new Set()
   );
-  // "client" groups a client's campaigns together (Active above 2nd); the
-  // metric keys sort by that KPI. Default is client name, ascending.
-  const [sortKey, setSortKey] = useState<MetricKey | "client">("client");
+  // "client" groups a client's campaigns together (Active above 2nd); "urgency"
+  // sorts by attention flag (red→yellow); metric keys sort by that KPI. Default
+  // is client name, ascending.
+  const [sortKey, setSortKey] = useState<MetricKey | "client" | "urgency">(
+    "client"
+  );
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
-  // Attention flags by campaignKey, used to tint flagged rows + show the reason.
+  // When on, only campaigns flagged in the Attention tab are shown.
+  const [flaggedOnly, setFlaggedOnly] = useState(false);
+  // Attention flags by campaignKey, used for the urgency badge + reason column.
   const [attentionByKey, setAttentionByKey] = useState<Map<string, AttentionInfo>>(
     new Map()
   );
@@ -213,8 +210,16 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
     if (!view) return [];
     // Only campaigns that produced data this snapshot — needs-setup and
     // failed campaigns carry no spend/lead signal worth scoring.
-    const visible = view.campaigns.filter((c) => c.included);
+    let visible = view.campaigns.filter((c) => c.included);
+    // "Attention only" narrows to the same set the Attention tab shows.
+    if (flaggedOnly) {
+      visible = visible.filter((c) => attentionByKey.has(c.campaignKey));
+    }
     const dir = sortDir === "desc" ? -1 : 1;
+    const urgencyOf = (c: ClientCampaignSummary) => {
+      const u = attentionByKey.get(c.campaignKey)?.urgency;
+      return typeof u === "number" ? u : null;
+    };
     // Keeps a client's campaigns adjacent: name first, then Active before 2nd
     // (status order is fixed regardless of direction), then campaign label.
     const byClient = (a: ClientCampaignSummary, b: ClientCampaignSummary) => {
@@ -229,6 +234,16 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
     };
     return visible.slice().sort((a, b) => {
       if (sortKey === "client") return byClient(a, b);
+      if (sortKey === "urgency") {
+        const au = urgencyOf(a);
+        const bu = urgencyOf(b);
+        // Unflagged rows sink; flagged ties fall back to client grouping.
+        if (au == null && bu == null) return byClient(a, b);
+        if (au == null) return 1;
+        if (bu == null) return -1;
+        if (au === bu) return byClient(a, b);
+        return (au - bu) * dir;
+      }
       const av = metricValue(a.totals, sortKey);
       const bv = metricValue(b.totals, sortKey);
       // Nulls always sort to the bottom regardless of direction; ties fall back
@@ -239,7 +254,7 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
       if (av === bv) return byClient(a, b);
       return (av - bv) * dir;
     });
-  }, [view, sortKey, sortDir]);
+  }, [view, sortKey, sortDir, flaggedOnly, attentionByKey]);
 
   const toggleMetric = useCallback((key: MetricKey) => {
     setExpandedMetrics((prev) => {
@@ -250,7 +265,7 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
     });
   }, []);
 
-  const toggleSort = useCallback((key: MetricKey | "client") => {
+  const toggleSort = useCallback((key: MetricKey | "client" | "urgency") => {
     setSortKey((prevKey) => {
       if (prevKey === key) {
         setSortDir((d) => (d === "desc" ? "asc" : "desc"));
@@ -266,25 +281,56 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-white/10 bg-slate-900/40 p-4">
-        <div>
-          <div className="text-xs uppercase tracking-wide text-slate-400">
-            Window
+        <div className="flex flex-wrap items-end gap-6">
+          <div>
+            <div className="text-xs uppercase tracking-wide text-slate-400">
+              Window
+            </div>
+            <div className="mt-2 inline-flex rounded-lg border border-white/10 bg-slate-950/40 p-1">
+              {WINDOWS.map((w) => (
+                <button
+                  key={w.id}
+                  type="button"
+                  onClick={() => setWindowId(w.id)}
+                  className={`rounded-md px-4 py-1.5 text-sm transition-colors ${
+                    windowId === w.id
+                      ? "bg-indigo-600 text-white"
+                      : "text-slate-300 hover:text-white"
+                  }`}
+                >
+                  {w.label}
+                </button>
+              ))}
+            </div>
           </div>
-          <div className="mt-2 inline-flex rounded-lg border border-white/10 bg-slate-950/40 p-1">
-            {WINDOWS.map((w) => (
+          <div>
+            <div className="text-xs uppercase tracking-wide text-slate-400">
+              Show
+            </div>
+            <div className="mt-2 inline-flex rounded-lg border border-white/10 bg-slate-950/40 p-1">
               <button
-                key={w.id}
                 type="button"
-                onClick={() => setWindowId(w.id)}
+                onClick={() => setFlaggedOnly(false)}
                 className={`rounded-md px-4 py-1.5 text-sm transition-colors ${
-                  windowId === w.id
+                  !flaggedOnly
                     ? "bg-indigo-600 text-white"
                     : "text-slate-300 hover:text-white"
                 }`}
               >
-                {w.label}
+                All campaigns
               </button>
-            ))}
+              <button
+                type="button"
+                onClick={() => setFlaggedOnly(true)}
+                className={`rounded-md px-4 py-1.5 text-sm transition-colors ${
+                  flaggedOnly
+                    ? "bg-indigo-600 text-white"
+                    : "text-slate-300 hover:text-white"
+                }`}
+              >
+                Attention only
+              </button>
+            </div>
           </div>
         </div>
         <div className="text-right text-xs text-slate-400">
@@ -335,6 +381,20 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
                   >
                     Client
                     {sortKey === "client" && (
+                      <span aria-hidden>{sortDir === "desc" ? "▾" : "▴"}</span>
+                    )}
+                  </button>
+                </th>
+                <th className={`${TH_BASE} border-l text-left`}>
+                  <button
+                    type="button"
+                    onClick={() => toggleSort("urgency")}
+                    className={`inline-flex items-center gap-1 transition-colors hover:text-white ${
+                      sortKey === "urgency" ? "text-white" : ""
+                    }`}
+                  >
+                    Urgency
+                    {sortKey === "urgency" && (
                       <span aria-hidden>{sortDir === "desc" ? "▾" : "▴"}</span>
                     )}
                   </button>
@@ -400,18 +460,13 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
             <tbody>
               {rows.map((c) => {
                 const attn = attentionByKey.get(c.campaignKey);
-                const tint =
-                  attn && attn.urgency != null
-                    ? URGENCY_ROW[attn.urgency] ?? DEFAULT_ROW
-                    : DEFAULT_ROW;
+                const urgency = attn?.urgency ?? null;
                 return (
                   <tr
                     key={c.campaignKey}
-                    className={`group transition-colors ${tint.row}`}
+                    className="group transition-colors hover:bg-white/5"
                   >
-                    <td
-                      className={`sticky left-0 z-10 whitespace-nowrap border-b border-b-white/5 border-r border-r-white/10 px-4 py-3 shadow-[4px_0_12px_-4px_rgba(0,0,0,0.45)] ${tint.sticky}`}
-                    >
+                    <td className="sticky left-0 z-10 whitespace-nowrap border-b border-b-white/5 border-r border-r-white/10 bg-slate-900 px-4 py-3 shadow-[4px_0_12px_-4px_rgba(0,0,0,0.45)] transition-colors group-hover:bg-slate-800">
                       <div className="flex items-center gap-2">
                         <span className="font-medium text-white">
                           {c.businessName}
@@ -424,6 +479,13 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
                         <div className="text-xs text-slate-400">
                           {c.pipelineName ?? c.campaignKeyword ?? c.adAccountId}
                         </div>
+                      )}
+                    </td>
+                    <td className="whitespace-nowrap border-b border-b-white/5 border-l border-l-white/10 px-4 py-3">
+                      {urgency != null ? (
+                        <UrgencyBadge urgency={urgency} />
+                      ) : (
+                        <span className="text-slate-600">—</span>
                       )}
                     </td>
                     {SCORECARD_METRICS.map((m) => {
@@ -470,10 +532,24 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
 
       {view && rows.length === 0 && !loading && (
         <div className="rounded-2xl border border-white/10 bg-slate-900/40 p-8 text-center text-slate-300">
-          No campaigns with data in this window.
+          {flaggedOnly
+            ? "Nothing flagged right now. Every active campaign is within thresholds."
+            : "No campaigns with data in this window."}
         </div>
       )}
     </div>
+  );
+}
+
+function UrgencyBadge({ urgency }: { urgency: number }) {
+  const meta = URGENCY_META[urgency] ?? URGENCY_META[2];
+  return (
+    <span
+      className={`inline-flex items-center gap-2 rounded-full bg-white/5 px-2.5 py-1 text-xs font-semibold ring-1 ${meta.ring} ${meta.text}`}
+    >
+      <span className={`h-2 w-2 rounded-full ${meta.dot}`} />
+      {meta.label}
+    </span>
   );
 }
 
