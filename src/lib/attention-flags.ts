@@ -115,19 +115,12 @@ export function computeAttentionFlag(m: AttentionMetrics): AttentionFlag | null 
 }
 
 /**
- * The sheet's "Status" column: a headline of the 30-day CPL dollar move.
- *
- * Note: the original formula was `ROUND(AX - AT)` where those columns are the
- * 30d CPL delta and current, which computes to -previous and is almost
- * certainly a sheet bug. This ships the intended value (current minus prior
- * 30d CPL) so the Zapier "Status" field reads correctly.
+ * The sheet's "Status" column: a headline of the 3-day CPL dollar move,
+ * current period vs the prior 3 days. Pass the precomputed delta (current
+ * minus previous); null when CPL isn't defined for either side.
  */
-export function attentionStatusText(
-  cpl30d: number | null,
-  cpl30dPrev: number | null
-): string {
-  if (!isNum(cpl30d) || !isNum(cpl30dPrev)) return "-";
-  const diff = cpl30d - cpl30dPrev;
-  const body = `$${Math.abs(diff).toFixed(2)}`;
-  return diff >= 0 ? `${body} more` : `${body} less`;
+export function attentionStatusText(cplDelta3d: number | null): string {
+  if (!isNum(cplDelta3d)) return "-";
+  const body = `$${Math.abs(cplDelta3d).toFixed(2)}`;
+  return cplDelta3d >= 0 ? `${body} more` : `${body} less`;
 }

@@ -193,8 +193,8 @@ export async function buildAttentionFeed(opts?: {
       attention_code: flag?.code ?? "-",
       reason: flag?.reason ?? "",
       urgency: flag?.urgency ?? null,
-      // CPL "$X more/less" headline (the sheet's STATUS column).
-      attention_status: attentionStatusText(metrics.cpl30d, metrics.cpl30dPrev),
+      // CPL "$X more/less" headline (the sheet's STATUS column): 3-day change.
+      attention_status: attentionStatusText(metrics.cplDelta3d),
       clickup_relation_id: relationId,
     };
 
