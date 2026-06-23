@@ -87,15 +87,25 @@ export function AttentionTab({ reloadKey = 0 }: { reloadKey?: number }) {
       )}
 
       {feed && rows.length > 0 && (
-        <div className="overflow-x-auto rounded-2xl border border-white/10 bg-slate-900/40">
-          <table className="min-w-full text-sm">
+        <div className="max-h-[calc(100vh-16rem)] max-w-full overflow-auto rounded-2xl border border-white/10 bg-slate-900/40">
+          <table className="min-w-full border-separate border-spacing-0 text-sm">
             <thead>
-              <tr className="border-b border-white/10 text-left text-xs uppercase tracking-wide text-slate-400">
-                <th className="px-4 py-3 font-medium">Urgency</th>
-                <th className="px-4 py-3 font-medium">Client</th>
-                <th className="px-4 py-3 font-medium">Campaign</th>
-                <th className="px-4 py-3 font-medium">Reason</th>
-                <th className="px-4 py-3 text-right font-medium">Status</th>
+              <tr className="text-left text-xs uppercase tracking-wide text-slate-400">
+                <th className="sticky top-0 z-20 whitespace-nowrap border-b border-white/10 bg-slate-900 px-4 py-3 font-medium">
+                  Urgency
+                </th>
+                <th className="sticky top-0 z-20 whitespace-nowrap border-b border-white/10 bg-slate-900 px-4 py-3 font-medium">
+                  Client
+                </th>
+                <th className="sticky top-0 z-20 whitespace-nowrap border-b border-white/10 bg-slate-900 px-4 py-3 font-medium">
+                  Campaign
+                </th>
+                <th className="sticky top-0 z-20 whitespace-nowrap border-b border-white/10 bg-slate-900 px-4 py-3 font-medium">
+                  Reason
+                </th>
+                <th className="sticky top-0 z-20 whitespace-nowrap border-b border-white/10 bg-slate-900 px-4 py-3 text-right font-medium">
+                  Status
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -104,9 +114,9 @@ export function AttentionTab({ reloadKey = 0 }: { reloadKey?: number }) {
                 return (
                   <tr
                     key={r.campaign_key}
-                    className="border-b border-white/5 transition-colors hover:bg-white/5"
+                    className="transition-colors hover:bg-white/5"
                   >
-                    <td className="px-4 py-3">
+                    <td className="border-b border-white/5 px-4 py-3">
                       <span
                         className={`inline-flex items-center gap-2 rounded-full bg-white/5 px-2.5 py-1 text-xs font-semibold ring-1 ${meta.ring} ${meta.text}`}
                       >
@@ -114,7 +124,7 @@ export function AttentionTab({ reloadKey = 0 }: { reloadKey?: number }) {
                         {meta.label}
                       </span>
                     </td>
-                    <td className="px-4 py-3">
+                    <td className="border-b border-white/5 px-4 py-3">
                       <div className="flex items-center gap-2">
                         <span className="font-medium text-white">
                           {r.client_name ?? "—"}
@@ -122,11 +132,13 @@ export function AttentionTab({ reloadKey = 0 }: { reloadKey?: number }) {
                         <StatusBadge status={r.status} />
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-slate-300">
+                    <td className="border-b border-white/5 px-4 py-3 text-slate-300">
                       {r.campaign_name ?? r.pipeline_name ?? "—"}
                     </td>
-                    <td className="px-4 py-3 text-slate-200">{r.reason}</td>
-                    <td className="px-4 py-3 text-right">
+                    <td className="border-b border-white/5 px-4 py-3 text-slate-200">
+                      {r.reason}
+                    </td>
+                    <td className="border-b border-white/5 px-4 py-3 text-right">
                       <span className="rounded bg-white/5 px-2 py-0.5 font-mono text-xs text-slate-300">
                         {r.attention_code}
                       </span>

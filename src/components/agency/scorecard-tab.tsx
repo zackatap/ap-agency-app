@@ -108,6 +108,35 @@ const TONE_CLASS: Record<DeltaTone, string> = {
   none: "text-slate-600",
 };
 
+/** What the Attention tab knows about a campaign, keyed by campaignKey. */
+interface AttentionInfo {
+  urgency: number | null;
+  code: string;
+  reason: string;
+}
+
+/**
+ * Row tint + matching opaque background for the frozen Client cell when a
+ * campaign is flagged in the Attention tab. The frozen cell needs an opaque
+ * tone (scrolled content would otherwise bleed under it); the hexes are the
+ * semi-transparent tint pre-blended over the dark panel so both read as the
+ * same hue. Opacity is high enough that the hue survives the blue slate base —
+ * low values turn every color into the same muddy olive.
+ */
+const URGENCY_ROW: Record<number, { row: string; sticky: string }> = {
+  0: { row: "bg-red-500/20 hover:bg-red-500/25", sticky: "bg-[#311220]" },
+  1: { row: "bg-orange-500/20 hover:bg-orange-500/25", sticky: "bg-[#331c17]" },
+  2: { row: "bg-yellow-400/20 hover:bg-yellow-400/25", sticky: "bg-[#342e17]" },
+};
+const DEFAULT_ROW = {
+  row: "hover:bg-white/5",
+  sticky: "bg-slate-900 group-hover:bg-slate-800",
+};
+
+/** Header cell: sticks to the top on vertical scroll (matches the leaderboard). */
+const TH_BASE =
+  "sticky top-0 z-20 whitespace-nowrap border-b border-white/10 bg-slate-900 px-4 py-3 font-medium";
+
 export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
   const [windowId, setWindowId] = useState<WindowId>("last_30");
   const [view, setView] = useState<ClientRollupView | null>(null);
@@ -122,6 +151,10 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
   // metric keys sort by that KPI. Default is client name, ascending.
   const [sortKey, setSortKey] = useState<MetricKey | "client">("client");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  // Attention flags by campaignKey, used to tint flagged rows + show the reason.
+  const [attentionByKey, setAttentionByKey] = useState<Map<string, AttentionInfo>>(
+    new Map()
+  );
 
   const load = useCallback(async (preset: WindowId) => {
     setLoading(true);
@@ -132,11 +165,28 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
         preset,
         clientDate: getTodayLocal(),
       });
-      const res = await fetch(`/api/agency/rollup/latest?${params}`, {
-        cache: "no-store",
-      });
+      // Pull the rollup view and the attention flags together. Flags are
+      // window-agnostic (3/7/14/30), so they hold across the window toggle.
+      const [res, attnRes] = await Promise.all([
+        fetch(`/api/agency/rollup/latest?${params}`, { cache: "no-store" }),
+        fetch(`/api/agency/attention`, { cache: "no-store" }),
+      ]);
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Failed to load scorecard");
+
+      if (attnRes.ok) {
+        const attn = await attnRes.json();
+        const map = new Map<string, AttentionInfo>();
+        for (const r of (attn?.rows ?? []) as Array<Record<string, unknown>>) {
+          map.set(String(r.campaign_key), {
+            urgency: typeof r.urgency === "number" ? r.urgency : null,
+            code: String(r.attention_code ?? ""),
+            reason: String(r.reason ?? ""),
+          });
+        }
+        setAttentionByKey(map);
+      }
+
       if (!data.snapshot) {
         setView(null);
         setMessage(
@@ -271,11 +321,11 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
       )}
 
       {view && rows.length > 0 && (
-        <div className="overflow-x-auto rounded-2xl border border-white/10 bg-slate-900/40">
-          <table className="min-w-full text-sm">
+        <div className="max-h-[calc(100vh-16rem)] max-w-full overflow-auto rounded-2xl border border-white/10 bg-slate-900/40">
+          <table className="w-max min-w-full border-separate border-spacing-0 text-sm">
             <thead>
-              <tr className="border-b border-white/10 text-left text-xs uppercase tracking-wide text-slate-400">
-                <th className="sticky left-0 z-20 border-r border-white/10 bg-slate-900 px-4 py-3 font-medium">
+              <tr className="text-left text-xs uppercase tracking-wide text-slate-400">
+                <th className="sticky left-0 top-0 z-30 whitespace-nowrap border-b border-r border-white/10 bg-slate-900 px-4 py-3 font-medium shadow-[4px_0_12px_-4px_rgba(0,0,0,0.45)]">
                   <button
                     type="button"
                     onClick={() => toggleSort("client")}
@@ -294,7 +344,7 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
                   const exp = expandedMetrics.has(m.key);
                   return (
                     <Fragment key={m.key}>
-                      <th className="border-l border-white/10 px-4 py-3 text-right font-medium">
+                      <th className={`${TH_BASE} border-l text-right`}>
                         <div className="flex items-center justify-end gap-1.5">
                           <button
                             type="button"
@@ -332,74 +382,87 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
                         </div>
                       </th>
                       {exp && (
-                        <th className="px-3 py-3 text-right font-medium text-slate-500">
+                        <th className={`${TH_BASE} text-right text-slate-500`}>
                           Prev
                         </th>
                       )}
                       {exp && (
-                        <th className="px-3 py-3 pr-4 text-right font-medium text-slate-500">
+                        <th className={`${TH_BASE} text-right text-slate-500`}>
                           Δ
                         </th>
                       )}
                     </Fragment>
                   );
                 })}
+                <th className={`${TH_BASE} border-l text-left`}>Reason</th>
               </tr>
             </thead>
             <tbody>
-              {rows.map((c) => (
-                <tr
-                  key={c.campaignKey}
-                  className="group border-b border-white/5 transition-colors hover:bg-white/5"
-                >
-                  <td className="sticky left-0 z-10 border-r border-white/10 bg-slate-900 px-4 py-3 transition-colors group-hover:bg-slate-800">
-                    <div className="flex items-center gap-2">
-                      <span className="font-medium text-white">
-                        {c.businessName}
-                      </span>
-                      <StatusBadge status={c.status} />
-                    </div>
-                    {(c.pipelineName ??
-                      c.campaignKeyword ??
-                      c.adAccountId) && (
-                      <div className="text-xs text-slate-400">
-                        {c.pipelineName ?? c.campaignKeyword ?? c.adAccountId}
+              {rows.map((c) => {
+                const attn = attentionByKey.get(c.campaignKey);
+                const tint =
+                  attn && attn.urgency != null
+                    ? URGENCY_ROW[attn.urgency] ?? DEFAULT_ROW
+                    : DEFAULT_ROW;
+                return (
+                  <tr
+                    key={c.campaignKey}
+                    className={`group transition-colors ${tint.row}`}
+                  >
+                    <td
+                      className={`sticky left-0 z-10 whitespace-nowrap border-b border-b-white/5 border-r border-r-white/10 px-4 py-3 shadow-[4px_0_12px_-4px_rgba(0,0,0,0.45)] ${tint.sticky}`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-white">
+                          {c.businessName}
+                        </span>
+                        <StatusBadge status={c.status} />
                       </div>
-                    )}
-                  </td>
-                  {SCORECARD_METRICS.map((m) => {
-                    const cur = metricValue(c.totals, m.key);
-                    const exp = expandedMetrics.has(m.key);
-                    if (!exp) {
+                      {(c.pipelineName ??
+                        c.campaignKeyword ??
+                        c.adAccountId) && (
+                        <div className="text-xs text-slate-400">
+                          {c.pipelineName ?? c.campaignKeyword ?? c.adAccountId}
+                        </div>
+                      )}
+                    </td>
+                    {SCORECARD_METRICS.map((m) => {
+                      const cur = metricValue(c.totals, m.key);
+                      const exp = expandedMetrics.has(m.key);
+                      if (!exp) {
+                        return (
+                          <td
+                            key={m.key}
+                            className="whitespace-nowrap border-b border-b-white/5 border-l border-l-white/10 px-4 py-3 text-right tabular-nums text-slate-100"
+                          >
+                            {formatValue(m.key, cur)}
+                          </td>
+                        );
+                      }
+                      const prior = metricValue(c.priorTotals, m.key);
+                      const delta = computeDelta(m.key, cur, prior);
                       return (
-                        <td
-                          key={m.key}
-                          className="border-l border-white/10 px-4 py-3 text-right tabular-nums text-slate-100"
-                        >
-                          {formatValue(m.key, cur)}
-                        </td>
+                        <Fragment key={m.key}>
+                          <td className="whitespace-nowrap border-b border-b-white/5 border-l border-l-white/10 px-4 py-3 text-right tabular-nums text-slate-100">
+                            {formatValue(m.key, cur)}
+                          </td>
+                          <td className="whitespace-nowrap border-b border-b-white/5 px-3 py-3 text-right tabular-nums text-slate-400">
+                            {formatValue(m.key, prior)}
+                          </td>
+                          <td
+                            className={`whitespace-nowrap border-b border-b-white/5 px-3 py-3 text-right tabular-nums ${TONE_CLASS[delta.tone]}`}
+                          >
+                            {delta.text}
+                          </td>
+                        </Fragment>
                       );
-                    }
-                    const prior = metricValue(c.priorTotals, m.key);
-                    const delta = computeDelta(m.key, cur, prior);
-                    return (
-                      <Fragment key={m.key}>
-                        <td className="border-l border-white/10 px-4 py-3 text-right tabular-nums text-slate-100">
-                          {formatValue(m.key, cur)}
-                        </td>
-                        <td className="px-3 py-3 text-right tabular-nums text-slate-400">
-                          {formatValue(m.key, prior)}
-                        </td>
-                        <td
-                          className={`px-3 py-3 pr-4 text-right tabular-nums ${TONE_CLASS[delta.tone]}`}
-                        >
-                          {delta.text}
-                        </td>
-                      </Fragment>
-                    );
-                  })}
-                </tr>
-              ))}
+                    })}
+                    <td className="whitespace-nowrap border-b border-b-white/5 border-l border-l-white/10 px-4 py-3 text-slate-300">
+                      {attn?.reason ?? ""}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
