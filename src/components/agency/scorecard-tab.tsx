@@ -304,7 +304,7 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-white/10 bg-slate-900/40 p-4">
-        <div className="flex flex-wrap items-end gap-6">
+        <div className="flex flex-wrap items-start gap-6">
           <div>
             <div className="flex items-center gap-2 text-xs uppercase tracking-wide text-slate-400">
               Window
