@@ -25,7 +25,7 @@ const WINDOWS = [
   { id: "last_30", days: 30, label: "30 days" },
 ] as const;
 
-type WindowId = (typeof WINDOWS)[number]["id"];
+type WindowId = (typeof WINDOWS)[number]["id"] | "custom";
 
 /** The six KPIs, in the order the agency reads them. */
 const SCORECARD_METRICS: Array<{ key: MetricKey; label: string }> = [
@@ -179,26 +179,40 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   // When on, only campaigns flagged in the Attention tab are shown.
   const [flaggedOnly, setFlaggedOnly] = useState(false);
+  // Custom range inputs (draft) + the applied range that actually drives a
+  // fetch. Apply commits the draft so typing doesn't refetch on every keystroke.
+  const [customFrom, setCustomFrom] = useState("");
+  const [customTo, setCustomTo] = useState("");
+  const [appliedCustom, setAppliedCustom] = useState<{
+    from: string;
+    to: string;
+  } | null>(null);
   // Attention flags by campaignKey, used for the urgency badge + reason column.
   const [attentionByKey, setAttentionByKey] = useState<Map<string, AttentionInfo>>(
     new Map()
   );
 
-  const load = useCallback(async (preset: WindowId) => {
+  const load = useCallback(
+    async (preset: WindowId, from?: string, to?: string) => {
     setLoading(true);
     setError(null);
     setMessage(null);
     try {
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
       const params = new URLSearchParams({
         preset,
         clientDate: getTodayLocal(),
-        // Anchor the window to the last refresh so the date line matches the data.
+        // Anchor trailing windows to the last refresh (ignored for custom, which
+        // uses the explicit from/to below and its own same-length prior period).
         anchor: "snapshot",
         // Floor the refresh time in the viewer's tz so the window ends on the
         // same date the "Last refresh" line shows (not the next day).
-        tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        tz,
       });
-      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (preset === "custom" && from && to) {
+        params.set("from", from);
+        params.set("to", to);
+      }
       // Pull the rollup view and the attention flags together. Flags are
       // window-agnostic (3/7/14/30), so they hold across the window toggle.
       // Same tz so flag windows anchor to the refresh date like the table.
@@ -238,13 +252,26 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
     } finally {
       setLoading(false);
     }
-  }, []);
+    },
+    []
+  );
 
   useEffect(() => {
+    // Custom waits for an applied from/to (set by Apply); trailing windows fetch
+    // immediately on toggle. reloadKey bumps when a rollup refresh finishes,
+    // pulling the fresh snapshot in without a tab switch.
+    if (windowId === "custom") {
+      if (appliedCustom) void load("custom", appliedCustom.from, appliedCustom.to);
+      return;
+    }
     void load(windowId);
-    // reloadKey bumps when an agency rollup refresh finishes, pulling the
-    // freshly-stored snapshot into the scorecard without a tab switch.
-  }, [load, windowId, reloadKey]);
+  }, [load, windowId, reloadKey, appliedCustom]);
+
+  const applyCustomRange = useCallback(() => {
+    if (!customFrom || !customTo) return;
+    // New object identity each click re-triggers the effect even if unchanged.
+    setAppliedCustom({ from: customFrom, to: customTo });
+  }, [customFrom, customTo]);
 
   const rows = useMemo(() => {
     if (!view) return [];
@@ -345,7 +372,54 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
                   {w.label}
                 </button>
               ))}
+              <button
+                type="button"
+                onClick={() => setWindowId("custom")}
+                className={`rounded-md px-4 py-1.5 text-sm transition-colors ${
+                  windowId === "custom"
+                    ? "bg-indigo-600 text-white"
+                    : "text-slate-300 hover:text-white"
+                }`}
+              >
+                Custom
+              </button>
             </div>
+            {windowId === "custom" && (
+              <div className="mt-2 flex flex-wrap items-end gap-2">
+                <div>
+                  <label className="mb-1 block text-[11px] uppercase tracking-wide text-slate-400">
+                    From
+                  </label>
+                  <input
+                    type="date"
+                    value={customFrom}
+                    max={customTo || undefined}
+                    onChange={(e) => setCustomFrom(e.target.value)}
+                    className="rounded-lg border border-white/10 bg-slate-950/60 px-3 py-1.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+                <div>
+                  <label className="mb-1 block text-[11px] uppercase tracking-wide text-slate-400">
+                    To
+                  </label>
+                  <input
+                    type="date"
+                    value={customTo}
+                    min={customFrom || undefined}
+                    onChange={(e) => setCustomTo(e.target.value)}
+                    className="rounded-lg border border-white/10 bg-slate-950/60 px-3 py-1.5 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={applyCustomRange}
+                  disabled={!customFrom || !customTo || loading}
+                  className="rounded-lg bg-indigo-600 px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-indigo-500 disabled:opacity-50"
+                >
+                  Apply
+                </button>
+              </div>
+            )}
             {view?.range && (
               <div className="mt-2 text-xs text-slate-400">
                 <span className="text-slate-300">
