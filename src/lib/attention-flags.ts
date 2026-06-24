@@ -8,8 +8,11 @@
  * its value: SWITCH(MID(code, 3, 1), "R",0, "O",1, "Y",2).
  *
  * Number guards matter: the sheet bails to "-" (no flag) when the 14d/7d/3d CPL
- * deltas aren't numbers. Our `cpl` is null when leads or spend is 0, so a null
- * delta reproduces that ISNUMBER short-circuit faithfully.
+ * deltas aren't numbers. In the sheet CPL = spend/leads, so it's a numeric $0
+ * (not blank) when spend is $0 but leads exist — which is why the feed builds
+ * these metrics with a sheet-faithful CPL (see `sheetCpl` in attention-feed).
+ * Otherwise a paused campaign's null CPL would short-circuit the guards and the
+ * "$0 ad spend in 3 days" (S_O4) flag could never fire.
  */
 
 export type AttentionCode =

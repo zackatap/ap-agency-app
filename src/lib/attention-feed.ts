@@ -69,12 +69,34 @@ function decimalsFor(out: string): number {
   return out === "leads" || out === "link_clicks" ? 0 : 2;
 }
 
+/**
+ * CPL the way the sheet computed it: spend / leads. That's $0 when spend is $0
+ * but leads exist (a paused-ads campaign still pulling leads), and null only
+ * when there are no leads to divide by.
+ *
+ * The rollup view nulls CPL at $0 spend for display, but the flag logic needs
+ * the numeric 0 — otherwise the 14d/7d CPL-delta ISNUMBER guards short-circuit
+ * and the "$0 ad spend in 3 days" (S_O4) flag can never fire for fully-paused
+ * campaigns. The sheet's CPL was numeric here, so this matches it.
+ */
+function sheetCpl(totals: CampaignWindowTotals | undefined): number | null {
+  if (!totals) return null;
+  const spend = totals.adSpend;
+  const leads = totals.leads;
+  if (typeof spend !== "number" || typeof leads !== "number" || leads <= 0) {
+    return null;
+  }
+  // Round to cents to match the rollup view's moneyOrNull, so spend>0 campaigns
+  // are byte-for-byte identical and only $0-spend ones change (null -> 0).
+  return Math.round((spend / leads) * 100) / 100;
+}
+
 /** CPL dollar delta (current minus prior) for a window, null if either side is null. */
 function cplDelta(summary: CampaignSummary | undefined): number | null {
   if (!summary) return null;
-  const cur = summary.totals.cpl;
-  const prev = summary.priorTotals.cpl;
-  if (typeof cur !== "number" || typeof prev !== "number") return null;
+  const cur = sheetCpl(summary.totals);
+  const prev = sheetCpl(summary.priorTotals);
+  if (cur == null || prev == null) return null;
   return cur - prev;
 }
 
@@ -165,9 +187,9 @@ export async function buildAttentionFeed(opts?: {
       campaignName,
       leads3d: s3?.totals.leads ?? 0,
       leads7d: s7?.totals.leads ?? 0,
-      cpl7d: s7?.totals.cpl ?? null,
-      cpl30d: s30?.totals.cpl ?? null,
-      cpl30dPrev: s30?.priorTotals.cpl ?? null,
+      cpl7d: sheetCpl(s7?.totals),
+      cpl30d: sheetCpl(s30?.totals),
+      cpl30dPrev: sheetCpl(s30?.priorTotals),
       cplDelta14d: cplDelta(s14),
       cplDelta7d: cplDelta(s7),
       cplDelta3d: cplDelta(s3),
