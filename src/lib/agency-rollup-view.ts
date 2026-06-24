@@ -610,6 +610,12 @@ export async function buildAgencyRollupView(params?: {
   for (const record of campaignRecords) {
     if (seenCampaignKeys.has(record.campaignKey)) continue;
     const run = runByKey.get(record.campaignKey);
+    // Only surface roster entries actually attempted in THIS snapshot. The
+    // campaigns table is a persistent roster (never pruned), so a campaign that
+    // was paged out of the sheet — e.g. switched to PAUSED — keeps its old
+    // record. Without this guard it would linger forever as a stale "needs
+    // setup" ghost. No run row this snapshot = not attempted = skip it.
+    if (!run) continue;
     const months: CampaignMonthly[] = orderedMonthKeys.map(({ monthKey }) =>
       emptyMonth(monthKey, onTotals)
     );

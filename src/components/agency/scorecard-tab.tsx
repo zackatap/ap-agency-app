@@ -160,6 +160,24 @@ function formatRange(
   return `${formatDay(range.startDate)} – ${formatDay(range.endDate)}`;
 }
 
+/** True when a needs-setup reason points at a missing GHL OAuth token. */
+function isGhlDisconnected(reason: string | null): boolean {
+  if (!reason) return false;
+  const r = reason.toLowerCase();
+  return r.includes("oauth token") || r.includes("app not installed");
+}
+
+/**
+ * Pipeline + campaign keyword, so two campaigns sharing one pipeline stay
+ * distinguishable. Falls back to ad account id when neither is set.
+ */
+function subtitleFor(c: ClientCampaignSummary): string | null {
+  const pn = c.pipelineName?.trim() || null;
+  const ck = c.campaignKeyword?.trim() || null;
+  if (pn && ck && pn.toLowerCase() !== ck.toLowerCase()) return `${pn} · ${ck}`;
+  return pn ?? ck ?? c.adAccountId;
+}
+
 export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
   const [windowId, setWindowId] = useState<WindowId>("last_30");
   const [view, setView] = useState<ClientRollupView | null>(null);
@@ -322,6 +340,25 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
       return (av - bv) * dir;
     });
   }, [view, sortKey, sortDir, flaggedOnly, attentionByKey]);
+
+  // Campaigns the roster expects but that couldn't be read this snapshot
+  // (almost always: GHL app not installed for that location). They produce no
+  // data, so the scored table hides them — but a silently-missing client is
+  // worse than a greyed row. Dedupe on the display signature so a stale
+  // campaign-key orphan doesn't list the same client twice.
+  const disconnected = useMemo(() => {
+    if (!view || flaggedOnly) return [];
+    const seen = new Set<string>();
+    const out: ClientCampaignSummary[] = [];
+    for (const c of view.campaigns) {
+      if (c.included || !c.needsSetupReason) continue;
+      const sig = `${c.locationId}|${c.pipelineName ?? ""}|${c.campaignKeyword ?? ""}|${c.status}`;
+      if (seen.has(sig)) continue;
+      seen.add(sig);
+      out.push(c);
+    }
+    return out.sort((a, b) => a.businessName.localeCompare(b.businessName));
+  }, [view, flaggedOnly]);
 
   const toggleMetric = useCallback((key: MetricKey) => {
     setExpandedMetrics((prev) => {
@@ -497,7 +534,7 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
         </div>
       )}
 
-      {view && rows.length > 0 && (
+      {view && (rows.length > 0 || disconnected.length > 0) && (
         <div
           aria-busy={loading}
           className={`max-h-[calc(100vh-16rem)] max-w-full overflow-auto rounded-2xl border border-white/10 bg-slate-900/40 transition-opacity duration-200 ${
@@ -610,15 +647,7 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
                         <StatusBadge status={c.status} />
                       </div>
                       {(() => {
-                        // Show pipeline + campaign keyword together so two
-                        // campaigns sharing one pipeline (e.g. Leads · Pain vs
-                        // Leads · Decompression) are distinguishable.
-                        const pn = c.pipelineName?.trim() || null;
-                        const ck = c.campaignKeyword?.trim() || null;
-                        const subtitle =
-                          pn && ck && pn.toLowerCase() !== ck.toLowerCase()
-                            ? `${pn} · ${ck}`
-                            : pn ?? ck ?? c.adAccountId;
+                        const subtitle = subtitleFor(c);
                         return subtitle ? (
                           <div className="text-xs text-slate-400">{subtitle}</div>
                         ) : null;
@@ -695,12 +724,67 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
                   </tr>
                 );
               })}
+              {disconnected.map((c) => {
+                const subtitle = subtitleFor(c);
+                const ghl = isGhlDisconnected(c.needsSetupReason);
+                return (
+                  <tr
+                    key={`ns-${c.campaignKey}`}
+                    className="group bg-slate-950/40 transition-colors hover:bg-white/5"
+                  >
+                    <td className="sticky left-0 z-10 whitespace-nowrap border-b border-b-white/5 border-r border-r-white/10 bg-slate-900 px-4 py-3 shadow-[4px_0_12px_-4px_rgba(0,0,0,0.45)] transition-colors group-hover:bg-slate-800">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium text-slate-300">
+                          {c.businessName}
+                        </span>
+                        <StatusBadge status={c.status} />
+                      </div>
+                      {subtitle && (
+                        <div className="text-xs text-slate-500">{subtitle}</div>
+                      )}
+                      <span
+                        title={c.needsSetupReason ?? undefined}
+                        className="mt-1 inline-flex items-center gap-1 rounded-full bg-slate-500/15 px-2 py-0.5 text-[11px] font-medium text-slate-300 ring-1 ring-slate-400/30"
+                      >
+                        <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />
+                        {ghl ? "GHL not connected" : "Needs setup"}
+                      </span>
+                    </td>
+                    <td className="whitespace-nowrap border-b border-b-white/5 border-l border-l-white/10 px-4 py-3 text-slate-600">
+                      —
+                    </td>
+                    {SCORECARD_METRICS.map((m) => {
+                      const exp = expandedMetrics.has(m.key);
+                      return (
+                        <Fragment key={m.key}>
+                          <td className="whitespace-nowrap border-b border-b-white/5 border-l border-l-white/10 px-4 py-3 text-right tabular-nums text-slate-600">
+                            —
+                          </td>
+                          {exp && (
+                            <td className="whitespace-nowrap border-b border-b-white/5 px-3 py-3 text-right tabular-nums text-slate-600">
+                              —
+                            </td>
+                          )}
+                          {exp && (
+                            <td className="whitespace-nowrap border-b border-b-white/5 px-3 py-3 text-right tabular-nums text-slate-600">
+                              —
+                            </td>
+                          )}
+                        </Fragment>
+                      );
+                    })}
+                    <td className="whitespace-nowrap border-b border-b-white/5 border-l border-l-white/10 px-4 py-3 text-slate-500">
+                      {c.needsSetupReason ?? ""}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
       )}
 
-      {view && rows.length === 0 && !loading && (
+      {view && rows.length === 0 && disconnected.length === 0 && !loading && (
         <div className="rounded-2xl border border-white/10 bg-slate-900/40 p-8 text-center text-slate-300">
           {flaggedOnly
             ? "Nothing flagged right now. Every active campaign is within thresholds."
