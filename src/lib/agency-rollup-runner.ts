@@ -402,6 +402,7 @@ async function executeRollup(
                 locationId: campaign.locationId,
                 status: "error",
                 errorMessage: message,
+                metaError: null,
               },
             ]);
           } catch (inner) {
@@ -473,6 +474,7 @@ async function processLocation(args: {
           locationId: c.locationId,
           status: "skipped",
           errorMessage: reason,
+          metaError: null,
         },
       ]);
       onCampaignResult("skipped");
@@ -513,6 +515,7 @@ async function processLocation(args: {
           locationId: campaign.locationId,
           status: "skipped",
           errorMessage: resolution.reason,
+          metaError: null,
         },
       ]);
       onCampaignResult("skipped");
@@ -555,11 +558,12 @@ async function processLocation(args: {
     // monthly rollup effectively did the same thing.
     const configuredAdSpend = settings?.adSpend?.[pipeline.id] ?? {};
 
-    const fbInsightsByDay = await resolveCampaignDailyInsights({
-      campaign,
-      windowRange,
-      getFbCampaigns,
-    });
+    const { insights: fbInsightsByDay, metaError } =
+      await resolveCampaignDailyInsights({
+        campaign,
+        windowRange,
+        getFbCampaigns,
+      });
 
     const daysWithMetrics = perDay.map((d) => ({
       date: d.date,
@@ -611,6 +615,7 @@ async function processLocation(args: {
         locationId: campaign.locationId,
         status: "ok",
         errorMessage: null,
+        metaError,
       },
     ]);
 
@@ -808,29 +813,30 @@ async function resolveCampaignDailyInsights(args: {
   getFbCampaigns: (
     adAccountId: string
   ) => Promise<{ campaigns: FacebookCampaign[]; error?: string }>;
-}): Promise<Record<string, DailyInsight>> {
+}): Promise<{ insights: Record<string, DailyInsight>; metaError: string | null }> {
   const { campaign, windowRange, getFbCampaigns } = args;
-  if (!campaign.adAccountId) return {};
+  if (!campaign.adAccountId) return { insights: {}, metaError: null };
   const { startDate, endDate } = windowRange;
-  if (!startDate || !endDate) return {};
+  if (!startDate || !endDate) return { insights: {}, metaError: null };
 
   const keyword = campaign.campaignKeyword?.trim();
 
   if (!keyword) {
     try {
-      const { insightsByDate } = await fetchDailyInsights(
+      const { insightsByDate, error } = await fetchDailyInsights(
         campaign.adAccountId,
         false,
         startDate,
         endDate
       );
-      return insightsByDate;
+      return { insights: insightsByDate, metaError: error ?? null };
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       console.warn(
         `[agency-rollup-runner] account-level daily insights failed for ${campaign.locationId}:`,
         err
       );
-      return {};
+      return { insights: {}, metaError: message };
     }
   }
 
@@ -846,13 +852,15 @@ async function resolveCampaignDailyInsights(args: {
         error
       );
     }
-    return {};
+    // An empty list isn't an error (account may simply have no campaigns); only
+    // a real API failure (e.g. app not assigned to the ad account) is reported.
+    return { insights: {}, metaError: error ?? null };
   }
   const kwLower = keyword.toLowerCase();
   const matches = fbCampaigns.filter((c) =>
     (c.name ?? "").toLowerCase().includes(kwLower)
   );
-  if (matches.length === 0) return {};
+  if (matches.length === 0) return { insights: {}, metaError: null };
 
   const aggregated: Record<string, DailyInsight> = {};
   for (const fb of matches) {
@@ -874,7 +882,7 @@ async function resolveCampaignDailyInsights(args: {
       );
     }
   }
-  return aggregated;
+  return { insights: aggregated, metaError: null };
 }
 
 async function upsertCampaignWithoutPipeline(

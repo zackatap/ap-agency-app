@@ -115,6 +115,10 @@ export interface ClientCampaignSummary {
   included: boolean;
   errorMessage: string | null;
   needsSetupReason: string | null;
+  /** Meta fetch error for this ad account (e.g. app not assigned), else null. */
+  metaError: string | null;
+  /** Deep link to assign the app to this ad account, when one exists. */
+  metaConnectUrl: string | null;
   dataQuality: ClientCampaignDataQuality;
   /** Totals over the currently-selected date range. */
   totals: ClientCampaignWindowTotals;

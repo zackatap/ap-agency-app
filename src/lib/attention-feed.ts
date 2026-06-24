@@ -196,7 +196,10 @@ export async function buildAttentionFeed(opts?: {
       adSpend3d: s3?.totals.adSpend ?? 0,
       adSpend30d: s30?.totals.adSpend ?? 0,
     };
-    const flag = computeAttentionFlag(metrics);
+    // Only flag campaigns that actually ran this snapshot — needs-setup /
+    // skipped campaigns carry no real signal, and now that the lead/spend rules
+    // fire off raw counts they'd otherwise alert on empty rows.
+    const flag = base.included ? computeAttentionFlag(metrics) : null;
 
     const relationId =
       relationMap.byLocation.get(base.locationId) ??

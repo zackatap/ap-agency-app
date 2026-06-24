@@ -164,6 +164,10 @@ export interface CampaignSummary {
   included: boolean;
   errorMessage: string | null;
   needsSetupReason: string | null;
+  /** Meta fetch error for this ad account (e.g. app not assigned), else null. */
+  metaError: string | null;
+  /** Deep link to assign the app to this ad account, when an ad account exists. */
+  metaConnectUrl: string | null;
   dataQuality: CampaignDataQuality;
   totals: CampaignWindowTotals;
   priorTotals: CampaignWindowTotals;
@@ -368,6 +372,27 @@ function extractDataQuality(
   };
 }
 
+/** Business Manager that owns the agency's ad accounts (for connect deep links). */
+const META_BUSINESS_ID =
+  process.env.META_BUSINESS_ID?.trim() ||
+  process.env.FACEBOOK_BUSINESS_ID?.trim() ||
+  "1676628412629857";
+
+/**
+ * Deep link to the ad-account People/assets settings so a user can assign the
+ * app to an account that isn't connected. Null when there's no ad account.
+ */
+function metaConnectUrl(adAccountId: string | null | undefined): string | null {
+  const act = (adAccountId ?? "").replace(/^act_/, "").trim();
+  if (!act) return null;
+  const params = new URLSearchParams({
+    business_id: META_BUSINESS_ID,
+    selected_asset_id: act,
+    selected_asset_type: "ad-account",
+  });
+  return `https://business.facebook.com/latest/settings/ad_accounts?${params.toString()}`;
+}
+
 function displayBusinessName(record: AgencyCampaignRecord | undefined): string {
   if (!record) return "Unknown location";
   if (record.businessName && record.businessName.trim()) return record.businessName;
@@ -569,6 +594,8 @@ export async function buildAgencyRollupView(params?: {
       included,
       errorMessage,
       needsSetupReason: record?.needsSetupReason ?? null,
+      metaError: run?.metaError ?? null,
+      metaConnectUrl: metaConnectUrl(record?.adAccountId),
       dataQuality: extractDataQuality(record),
       totals,
       priorTotals,
@@ -608,6 +635,8 @@ export async function buildAgencyRollupView(params?: {
       errorMessage:
         run?.status !== "ok" ? run?.errorMessage ?? record.needsSetupReason : null,
       needsSetupReason: record.needsSetupReason,
+      metaError: run?.metaError ?? null,
+      metaConnectUrl: metaConnectUrl(record.adAccountId),
       dataQuality: extractDataQuality(record),
       totals: emptyWindowTotals(onTotals),
       priorTotals: emptyWindowTotals(onTotals),

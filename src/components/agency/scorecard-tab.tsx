@@ -623,6 +623,28 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
                           <div className="text-xs text-slate-400">{subtitle}</div>
                         ) : null;
                       })()}
+                      {(() => {
+                        // Surface ad accounts the app can't read (e.g. not
+                        // assigned). Pair with $0 spend so a transient blip on a
+                        // spending account doesn't cry wolf.
+                        const spend = c.totals.adSpend;
+                        const noSpend = spend == null || spend === 0;
+                        if (!c.metaError || !noSpend || !c.metaConnectUrl) {
+                          return null;
+                        }
+                        return (
+                          <a
+                            href={c.metaConnectUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            title={`Meta API can't read this ad account — ${c.metaError}. Click to assign the app in Business settings.`}
+                            className="mt-1 inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-200 ring-1 ring-amber-500/30 transition-colors hover:bg-amber-500/25"
+                          >
+                            <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+                            Meta not connected · Connect ↗
+                          </a>
+                        );
+                      })()}
                     </td>
                     <td className="whitespace-nowrap border-b border-b-white/5 border-l border-l-white/10 px-4 py-3">
                       {urgency != null ? (

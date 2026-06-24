@@ -158,6 +158,12 @@ export interface AgencyCampaignRun {
   locationId: string;
   status: CampaignRowStatus;
   errorMessage: string | null;
+  /**
+   * Meta fetch error for this campaign's ad account (e.g. the app isn't
+   * assigned). Null when Meta succeeded or there's no ad account. Lives apart
+   * from `status`, which stays "ok" since GHL data still came through.
+   */
+  metaError: string | null;
 }
 
 function getDb() {
@@ -346,6 +352,17 @@ async function ensureSchema(sql: Sql): Promise<void> {
         ON agency_rollup_campaign_runs (snapshot_id)
     `;
   });
+  // Additive: per-run Meta fetch error (e.g. app not assigned to the ad
+  // account). Distinct from `status`/`error_message`, which stay "ok" because
+  // GHL still succeeded. Null when Meta is fine or there's no ad account.
+  try {
+    await sql`
+      ALTER TABLE agency_rollup_campaign_runs
+        ADD COLUMN IF NOT EXISTS meta_error TEXT
+    `;
+  } catch (err) {
+    console.warn("[agency-rollup-store] ADD COLUMN meta_error failed:", err);
+  }
   schemaReady = true;
 }
 
@@ -887,13 +904,14 @@ export async function upsertCampaignRuns(
   for (const r of runs) {
     await sql`
       INSERT INTO agency_rollup_campaign_runs
-        (snapshot_id, campaign_key, location_id, status, error_message)
+        (snapshot_id, campaign_key, location_id, status, error_message, meta_error)
       VALUES
-        (${r.snapshotId}, ${r.campaignKey}, ${r.locationId}, ${r.status}, ${r.errorMessage})
+        (${r.snapshotId}, ${r.campaignKey}, ${r.locationId}, ${r.status}, ${r.errorMessage}, ${r.metaError})
       ON CONFLICT (snapshot_id, campaign_key) DO UPDATE SET
         location_id = EXCLUDED.location_id,
         status = EXCLUDED.status,
-        error_message = EXCLUDED.error_message
+        error_message = EXCLUDED.error_message,
+        meta_error = EXCLUDED.meta_error
     `;
   }
 }
@@ -905,7 +923,7 @@ export async function listSnapshotCampaignRuns(
   if (!sql) return [];
   await ensureSchema(sql);
   const rows = await sql`
-    SELECT snapshot_id, campaign_key, location_id, status, error_message
+    SELECT snapshot_id, campaign_key, location_id, status, error_message, meta_error
     FROM agency_rollup_campaign_runs
     WHERE snapshot_id = ${snapshotId}
   `;
@@ -917,6 +935,7 @@ export async function listSnapshotCampaignRuns(
       locationId: String(r.location_id),
       status: (r.status as CampaignRowStatus) ?? "ok",
       errorMessage: (r.error_message as string) ?? null,
+      metaError: (r.meta_error as string) ?? null,
     };
   });
 }
