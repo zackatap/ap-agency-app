@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { generateContentIdeas } from "@/lib/content-ideas-generator";
+import { processNewGranolaMeetings } from "@/lib/content-ideas-generator";
 
 export async function GET(req: Request) {
   const authHeader = req.headers.get("authorization");
@@ -9,13 +9,11 @@ export async function GET(req: Request) {
   }
 
   try {
-    const result = await generateContentIdeas({
-      scope: "recent",
-      count: 5,
-      daysBack: 7,
-    });
+    const result = await processNewGranolaMeetings();
     return NextResponse.json({
       ok: true,
+      skipped: result.skipped ?? false,
+      reason: result.reason,
       appended: result.appended,
       meetingCount: result.meetingCount,
       titles: result.ideas.map((i) => i.title),

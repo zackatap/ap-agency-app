@@ -2,22 +2,33 @@
  * Generate content ideas from Granola meeting context + LLM (Gemini or Claude).
  */
 
-import { fetchMeetingContext } from "@/lib/granola-service";
+import {
+  fetchMeetingContext,
+  fetchMeetingContextForMeetings,
+  listGranolaMeetings,
+  type GranolaMeetingOption,
+} from "@/lib/granola-service";
+import {
+  filterUnprocessedMeetings,
+  markMeetingsProcessed,
+} from "@/lib/granola-sync-state";
 import {
   appendContentIdeas,
   fetchExistingContentTitles,
-  loadHookLibrary,
+  loadFullHookLibrary,
   type ContentIdeaRow,
 } from "@/lib/content-ideas-sheet";
 import { generateIdeasJson } from "@/lib/content-ideas-llm";
 
-export type GenerateScope = "recent" | "all" | "selected";
+export type GenerateScope = "recent" | "all" | "selected" | "new";
 
 export type GenerateOptions = {
   scope: GenerateScope;
   meetingIds?: string[];
+  /** Max ideas cap. Omit for dynamic count (1–max based on meeting density). */
   count?: number;
   daysBack?: number;
+  markProcessed?: boolean;
 };
 
 export type GeneratedIdea = ContentIdeaRow;
@@ -26,7 +37,16 @@ export type GenerateResult = {
   ideas: GeneratedIdea[];
   appended: number;
   meetingCount: number;
+  skipped?: boolean;
+  reason?: string;
 };
+
+function getMaxIdeas(): number {
+  const raw = process.env.CONTENT_IDEAS_MAX;
+  if (!raw) return 12;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.min(n, 20) : 12;
+}
 
 function parseIdeasJson(raw: string): GeneratedIdea[] {
   const trimmed = raw.trim();
@@ -59,22 +79,32 @@ function parseIdeasJson(raw: string): GeneratedIdea[] {
 }
 
 function buildPrompt(options: {
-  count: number;
+  count?: number;
+  maxCount: number;
   existingTitles: string[];
   hookLibrary: string;
   querySummary: string;
   meetings: { sourceLabel: string }[];
 }): string {
-  const { count, existingTitles, hookLibrary, querySummary, meetings } =
+  const { count, maxCount, existingTitles, hookLibrary, querySummary, meetings } =
     options;
+
+  const countInstruction = count
+    ? `Create exactly ${count} NEW content ideas.`
+    : `Decide how many content ideas to create (0 to ${maxCount}) based on how much substantive marketing content is in these meetings:
+- Quick call with one clear tactic → 1–2 ideas
+- Typical huddle with a few topics → 3–5 ideas
+- Jam-packed strategy session → up to ${maxCount} ideas
+- Small talk only, nothing post-worthy → return an empty array []
+Do NOT pad with weak ideas. Quality over quantity. Return only ideas with clear grounding in the meetings.`;
 
   return `You are a content strategist for Automated Practice, a digital marketing agency for health practice owners (especially chiropractors).
 
-Using the meeting analysis below, create exactly ${count} NEW content ideas for short-form video or social posts.
+Using the meeting analysis below, ${countInstruction}
 
 Rules:
 - Each idea must be grounded in something actually discussed in the meetings.
-- Titles: exactly 2 sentences that explain the content idea — what you'd teach and why it matters to a practice owner. Not a clickbait headline. Sentence 1 = the core idea or tactic. Sentence 2 = the payoff, context, or who it's for. Example: "Raw iPhone footage often outperforms polished video ads for chiropractic practices because it feels authentic to patients scrolling Meta. We saw this across multiple accounts where UGC-style creatives beat studio shoots on cost per booked appointment."
+- Titles: exactly 2 sentences that explain the content idea — what you'd teach and why it matters to a practice owner. Sentence 1 = the core idea or tactic. Sentence 2 = the payoff, context, or who it's for.
 - Source: meeting attribution like "Weekly Huddle - All Team (Jun 2)" or "Sean Sheridan - Zoom (Jun 10)".
 - Type: always "One-time".
 - Status: always "Saved".
@@ -85,16 +115,16 @@ Rules:
 Existing titles already in the sheet (avoid duplicates):
 ${existingTitles.slice(-40).map((t) => `- ${t}`).join("\n") || "(none yet)"}
 
-Hook library (use as templates):
+Hook library (full — use as templates):
 ${hookLibrary}
 
 Meeting analysis from Granola:
-${querySummary.slice(0, 6000)}
+${querySummary.slice(0, 8000)}
 
 Meetings in scope (${meetings.length}):
 ${meetings.map((m) => `- ${m.sourceLabel}`).join("\n") || "(none listed)"}
 
-Return ONLY a JSON array with ${count} objects:
+Return ONLY a JSON array of idea objects (or [] if nothing worth adding):
 [
   {
     "title": "...",
@@ -106,21 +136,58 @@ Return ONLY a JSON array with ${count} objects:
 ]`;
 }
 
-export async function generateContentIdeas(
+async function resolveMeetings(
   options: GenerateOptions
-): Promise<GenerateResult> {
-  const count = options.count ?? 5;
-  const { meetings, querySummary } = await fetchMeetingContext({
+): Promise<{ meetings: GranolaMeetingOption[]; skipped?: boolean; reason?: string }> {
+  if (options.scope === "new") {
+    const daysBack = options.daysBack ?? 14;
+    const listed = await listGranolaMeetings({ daysBack });
+    const unprocessed = await filterUnprocessedMeetings(listed);
+    if (unprocessed.length === 0) {
+      return {
+        meetings: [],
+        skipped: true,
+        reason: "No new meetings to process",
+      };
+    }
+    return { meetings: unprocessed };
+  }
+
+  const { meetings } = await fetchMeetingContext({
     scope: options.scope,
     meetingIds: options.meetingIds,
     daysBack: options.daysBack,
   });
+  return { meetings };
+}
+
+export async function generateContentIdeas(
+  options: GenerateOptions
+): Promise<GenerateResult> {
+  const maxCount = options.count ?? getMaxIdeas();
+  const markProcessed =
+    options.markProcessed ?? options.scope === "new";
+
+  const resolved = await resolveMeetings(options);
+  if (resolved.skipped || resolved.meetings.length === 0) {
+    return {
+      ideas: [],
+      appended: 0,
+      meetingCount: 0,
+      skipped: true,
+      reason: resolved.reason ?? "No meetings in scope",
+    };
+  }
+
+  const meetings = resolved.meetings;
+  const { querySummary } = await fetchMeetingContextForMeetings(meetings);
 
   const existingTitles = await fetchExistingContentTitles();
-  const hookLibrary = loadHookLibrary();
+  const hookLibrary = loadFullHookLibrary();
 
   const prompt = buildPrompt({
-    count,
+    count: options.count,
+    maxCount,
     existingTitles,
     hookLibrary,
     querySummary,
@@ -132,15 +199,34 @@ export async function generateContentIdeas(
     (idea) => idea.title && idea.source && idea.hooks.length >= 2
   );
 
-  if (ideas.length === 0) {
-    throw new Error("No valid ideas generated");
+  const capped = options.count
+    ? ideas.slice(0, options.count)
+    : ideas.slice(0, maxCount);
+
+  let appended = 0;
+  if (capped.length > 0) {
+    ({ appended } = await appendContentIdeas(capped));
   }
 
-  const { appended } = await appendContentIdeas(ideas.slice(0, count));
+  if (markProcessed) {
+    await markMeetingsProcessed(
+      meetings.map((m) => m.id),
+      appended
+    );
+  }
 
   return {
-    ideas: ideas.slice(0, count),
+    ideas: capped,
     appended,
     meetingCount: meetings.length,
   };
+}
+
+/** Cron / auto-sync entry point — new meetings only, dynamic count. */
+export async function processNewGranolaMeetings(): Promise<GenerateResult> {
+  return generateContentIdeas({
+    scope: "new",
+    daysBack: 14,
+    markProcessed: true,
+  });
 }

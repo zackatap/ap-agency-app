@@ -24,12 +24,15 @@ type Props = {
   sheetUrl: string;
 };
 
+type GenerateScope = "new" | "recent" | "all" | "selected";
+
 export default function ContentIdeasClient({
   initialConnected,
   sheetUrl,
 }: Props) {
   const searchParams = useSearchParams();
   const [connected, setConnected] = useState(initialConnected);
+  const [pendingNew, setPendingNew] = useState<number | null>(null);
   const [loading, setLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -48,14 +51,33 @@ export default function ContentIdeasClient({
     return null;
   }, [searchParams]);
 
+  const refreshStatus = useCallback(async () => {
+    try {
+      const res = await fetch("/api/agency/content-ideas/status");
+      const data = await res.json();
+      if (res.ok) {
+        setConnected(Boolean(data.connected));
+        if (typeof data.pendingNewMeetings === "number") {
+          setPendingNew(data.pendingNewMeetings);
+        }
+      }
+    } catch {
+      /* ignore */
+    }
+  }, []);
+
   useEffect(() => {
     if (flash?.type === "success") setConnected(true);
     if (flash?.type === "error") setError(flash.text);
     if (flash?.type === "success") setSuccess(flash.text);
   }, [flash]);
 
+  useEffect(() => {
+    void refreshStatus();
+  }, [refreshStatus]);
+
   const runGenerate = useCallback(
-    async (scope: "recent" | "all" | "selected", meetingIds?: string[]) => {
+    async (scope: GenerateScope, meetingIds?: string[]) => {
       setLoading(scope);
       setError(null);
       setSuccess(null);
@@ -67,24 +89,32 @@ export default function ContentIdeasClient({
           body: JSON.stringify({
             scope,
             meetingIds,
-            count: 5,
-            daysBack: scope === "recent" ? 7 : undefined,
+            daysBack: scope === "recent" ? 7 : scope === "new" ? 14 : undefined,
           }),
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error ?? "Generation failed");
         setIdeas(data.ideas ?? []);
-        setSuccess(
-          `Added ${data.appended} idea${data.appended === 1 ? "" : "s"} to the sheet (from ${data.meetingCount} meetings).`
-        );
+        if (data.skipped) {
+          setSuccess(data.reason ?? "No new meetings to process.");
+        } else if (data.appended === 0) {
+          setSuccess(
+            `Checked ${data.meetingCount} meeting${data.meetingCount === 1 ? "" : "s"} — nothing worth adding right now.`
+          );
+        } else {
+          setSuccess(
+            `Added ${data.appended} idea${data.appended === 1 ? "" : "s"} to the sheet (from ${data.meetingCount} meeting${data.meetingCount === 1 ? "" : "s"}).`
+          );
+        }
         setPickerOpen(false);
+        void refreshStatus();
       } catch (err) {
         setError(err instanceof Error ? err.message : "Generation failed");
       } finally {
         setLoading(null);
       }
     },
-    []
+    [refreshStatus]
   );
 
   const openPicker = useCallback(async () => {
@@ -149,7 +179,15 @@ export default function ContentIdeasClient({
           >
             content ideas sheet
           </a>
-          . Scheduled runs: Mon & Thu mornings.
+          . Auto-sync checks for new recordings every 3 hours.
+          {pendingNew !== null && pendingNew > 0 && (
+            <>
+              {" "}
+              <span className="font-semibold">
+                {pendingNew} new meeting{pendingNew === 1 ? "" : "s"} waiting.
+              </span>
+            </>
+          )}
         </div>
       )}
 
@@ -164,6 +202,21 @@ export default function ContentIdeasClient({
         </div>
       )}
 
+      <button
+        type="button"
+        disabled={!connected || loading !== null}
+        onClick={() => runGenerate("new")}
+        className="w-full rounded-xl border border-emerald-400/40 bg-emerald-600/25 px-4 py-4 text-left transition hover:border-emerald-300/50 hover:bg-emerald-600/35 disabled:opacity-50"
+      >
+        <span className="block text-sm font-semibold text-white">
+          {loading === "new" ? "Processing…" : "Process new meetings"}
+        </span>
+        <span className="mt-1 block text-xs text-emerald-100/80">
+          Unprocessed recordings from the last 14 days · AI picks how many ideas
+          fit (1–12)
+        </span>
+      </button>
+
       <div className="grid gap-3 sm:grid-cols-3">
         <button
           type="button"
@@ -175,7 +228,7 @@ export default function ContentIdeasClient({
             {loading === "recent" ? "Generating…" : "From recent meetings"}
           </span>
           <span className="mt-1 block text-xs text-sky-100/80">
-            Last 7 days · 5 new ideas
+            Last 7 days · dynamic count
           </span>
         </button>
 
@@ -189,7 +242,7 @@ export default function ContentIdeasClient({
             {loading === "all" ? "Generating…" : "From all meetings"}
           </span>
           <span className="mt-1 block text-xs text-indigo-100/80">
-            Up to ~90 days · 5 new ideas
+            Up to ~90 days · dynamic count
           </span>
         </button>
 
@@ -203,7 +256,7 @@ export default function ContentIdeasClient({
             {loading === "selected" ? "Generating…" : "Pick meetings"}
           </span>
           <span className="mt-1 block text-xs text-fuchsia-100/80">
-            Choose specific calls · 5 new ideas
+            Choose specific calls · dynamic count
           </span>
         </button>
       </div>
@@ -315,7 +368,7 @@ export default function ContentIdeasClient({
                   }
                   className="rounded-lg bg-fuchsia-600 px-4 py-2 text-sm font-semibold text-white hover:bg-fuchsia-500 disabled:opacity-50"
                 >
-                  Generate 5 ideas
+                  Generate ideas
                 </button>
               </div>
             </div>

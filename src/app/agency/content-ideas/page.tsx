@@ -33,9 +33,9 @@ export default async function ContentIdeasPage() {
             Content ideas from Granola
           </h1>
           <p className="mt-2 max-w-2xl text-slate-400">
-            Pull marketing angles from your recorded meetings and append 5
-            ideas to the content sheet. Hooks use your swipe file templates,
-            tuned for health practice owners and chiros.
+            When Granola finishes a recording, we pick up new meetings automatically
+            and draft as many content ideas as the call warrants. Hooks use your full
+            swipe file, tuned for health practice owners and chiros.
           </p>
         </div>
 

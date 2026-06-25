@@ -222,7 +222,7 @@ export async function fetchMeetingContext(options: {
         ? "all recent accessible meetings"
         : "the selected meetings";
 
-  const query = `What marketing tactics, ad strategies, lead quality tips, systems, automations, or growth lessons were discussed in meetings from ${scopeLabel}? List 8-12 concrete, reusable insights. For each, note which meeting it came from. Skip small talk.`;
+  const query = `What marketing tactics, ad strategies, lead quality tips, systems, automations, or growth lessons were discussed in meetings from ${scopeLabel}? List every concrete, reusable insight (as many as exist — could be 1 or 10+). For each, note which meeting it came from. Skip small talk.`;
 
   let querySummary: string;
   try {
@@ -237,4 +237,46 @@ export async function fetchMeetingContext(options: {
   }
 
   return { meetings, querySummary };
+}
+
+/** Build Granola query context for a known meeting list (no re-listing). */
+export async function fetchMeetingContextForMeetings(
+  meetings: GranolaMeetingOption[]
+): Promise<{ meetings: GranolaMeetingOption[]; querySummary: string }> {
+  const accessToken = await getGranolaAccessToken();
+  if (!accessToken) {
+    throw new Error("Granola not connected");
+  }
+
+  let enriched = meetings;
+  const sparseNotes = meetings.filter((m) => !m.enhancedNotes.trim());
+  if (sparseNotes.length > 0) {
+    const detailMap = await fetchDetailedNotes(
+      accessToken,
+      sparseNotes.slice(0, 15).map((m) => m.id)
+    );
+    enriched = meetings.map((m) => ({
+      ...m,
+      enhancedNotes: m.enhancedNotes || detailMap.get(m.id) || "",
+    }));
+  }
+
+  const documentIds = enriched.map((m) => m.id);
+  const labels = enriched.map((m) => m.sourceLabel).join(", ");
+
+  const query = `What marketing tactics, ad strategies, lead quality tips, systems, automations, or growth lessons were discussed in these meetings: ${labels}? List every concrete, reusable insight (as many as exist — could be 1 or 10+). For each, note which meeting it came from. Skip small talk.`;
+
+  let querySummary: string;
+  try {
+    querySummary = await queryGranolaMeetings(
+      accessToken,
+      query,
+      documentIds
+    );
+  } catch (err) {
+    console.warn("[granola] query_granola_meetings failed, using notes fallback:", err);
+    querySummary = buildNotesFallback(enriched);
+  }
+
+  return { meetings: enriched, querySummary };
 }

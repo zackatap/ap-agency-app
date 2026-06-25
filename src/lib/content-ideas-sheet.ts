@@ -195,10 +195,19 @@ export function loadHookLibrary(): string {
   } catch {
     try {
       const text = readFileSync(full, "utf8");
-      // Fallback: first ~3500 chars covers swipe file only
       return text.slice(0, 3500);
     } catch {
       return "";
     }
+  }
+}
+
+/** Full swipe file + viral templates for dedicated hook generation. */
+export function loadFullHookLibrary(): string {
+  const full = join(process.cwd(), "content", "hook-library.md");
+  try {
+    return readFileSync(full, "utf8");
+  } catch {
+    return loadHookLibrary();
   }
 }

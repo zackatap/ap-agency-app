@@ -15,8 +15,8 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
     }
 
-    const scope = body.scope ?? "recent";
-    if (!["recent", "all", "selected"].includes(scope)) {
+    const scope = body.scope ?? "new";
+    if (!["recent", "all", "selected", "new"].includes(scope)) {
       return NextResponse.json({ error: "Invalid scope" }, { status: 400 });
     }
     if (scope === "selected" && (!body.meetingIds || body.meetingIds.length === 0)) {
@@ -29,8 +29,8 @@ export async function POST(req: Request) {
     const result = await generateContentIdeas({
       scope,
       meetingIds: body.meetingIds,
-      count: body.count ?? 5,
-      daysBack: body.daysBack ?? 7,
+      count: body.count,
+      daysBack: body.daysBack ?? (scope === "new" ? 14 : 7),
     });
 
     return NextResponse.json(result);

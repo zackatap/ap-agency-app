@@ -7,6 +7,11 @@ export const metadata: Metadata = {
 
 const LINKS = [
   {
+    href: "/agency/hooks",
+    title: "Hook Generator",
+    description: "Topic → hooks from the full library",
+  },
+  {
     href: "/agency/content-ideas",
     title: "Content Ideas",
     description: "Granola meetings → Google Sheet",

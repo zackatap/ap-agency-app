@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/cron/content-ideas",
-      "schedule": "0 14 * * 1,4"
+      "schedule": "0 */3 * * *"
     }
   ]
 }
