@@ -141,6 +141,7 @@ async function resolveMeetings(
 ): Promise<{ meetings: GranolaMeetingOption[]; skipped?: boolean; reason?: string }> {
   if (options.scope === "new") {
     const daysBack = options.daysBack ?? 14;
+    const batchSize = Number(process.env.GRANOLA_SYNC_BATCH_SIZE) || 5;
     const listed = await listGranolaMeetings({ daysBack });
     const unprocessed = await filterUnprocessedMeetings(listed);
     if (unprocessed.length === 0) {
@@ -150,7 +151,7 @@ async function resolveMeetings(
         reason: "No new meetings to process",
       };
     }
-    return { meetings: unprocessed };
+    return { meetings: unprocessed.slice(0, batchSize) };
   }
 
   const { meetings } = await fetchMeetingContext({
