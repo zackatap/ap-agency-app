@@ -17,6 +17,7 @@
     "@neondatabase/serverless": "^1.0.2",
     "googleapis": "^171.4.0",
     "granola-api": "^1.0.0",
+    "html-to-image": "^1.11.13",
     "jsonrepair": "^3.14.0",
     "leaflet": "^1.9.4",
     "next": "16.1.6",

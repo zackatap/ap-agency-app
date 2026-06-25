@@ -17,6 +17,11 @@ const LINKS = [
     description: "Granola meetings → Google Sheet",
   },
   {
+    href: "/agency/carousel",
+    title: "Carousel Generator",
+    description: "Transcript → editable 4:5 carousel slides",
+  },
+  {
     href: "/agency/presentation",
     title: "Client Roadmap Presentation",
     description: "Zoom-ready onboarding deck",
