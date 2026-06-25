@@ -3,7 +3,11 @@
  */
 
 import { loadFullHookLibrary } from "@/lib/content-ideas-sheet";
-import { generateIdeasJson } from "@/lib/content-ideas-llm";
+import {
+  generateIdeasJson,
+  HOOKS_RESPONSE_SCHEMA,
+} from "@/lib/content-ideas-llm";
+import { parseJsonArrayFromLlm } from "@/lib/llm-json";
 
 export type GenerateHooksOptions = {
   topic: string;
@@ -11,16 +15,7 @@ export type GenerateHooksOptions = {
 };
 
 function parseHooksJson(raw: string): string[] {
-  const trimmed = raw.trim();
-  const start = trimmed.indexOf("[");
-  const end = trimmed.lastIndexOf("]");
-  if (start < 0 || end <= start) {
-    throw new Error("Model did not return a JSON array");
-  }
-  const parsed = JSON.parse(trimmed.slice(start, end + 1)) as unknown;
-  if (!Array.isArray(parsed)) {
-    throw new Error("Expected JSON array of hooks");
-  }
+  const parsed = parseJsonArrayFromLlm(raw);
   return parsed
     .map((item) => String(item).trim())
     .filter(Boolean);
@@ -56,7 +51,10 @@ ${hookLibrary}
 Return ONLY a JSON array of ${count} strings:
 ["hook one", "hook two", ...]`;
 
-  const raw = await generateIdeasJson(prompt);
+  const raw = await generateIdeasJson(prompt, {
+    responseSchema: HOOKS_RESPONSE_SCHEMA,
+    maxOutputTokens: 4096,
+  });
   const hooks = parseHooksJson(raw);
 
   if (hooks.length === 0) {

@@ -17,6 +17,7 @@
     "@neondatabase/serverless": "^1.0.2",
     "googleapis": "^171.4.0",
     "granola-api": "^1.0.0",
+    "jsonrepair": "^3.14.0",
     "leaflet": "^1.9.4",
     "next": "16.1.6",
     "react": "19.2.3",

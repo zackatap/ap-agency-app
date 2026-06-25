@@ -3,7 +3,14 @@
  * Uses Gemini if GEMINI_API_KEY is set, otherwise Anthropic.
  */
 
+import { SchemaType, type ResponseSchema } from "@google/generative-ai";
+
 export type LlmProvider = "gemini" | "anthropic";
+
+export type GenerateJsonOptions = {
+  maxOutputTokens?: number;
+  responseSchema?: ResponseSchema;
+};
 
 export function resolveContentIdeasProvider(): LlmProvider {
   const explicit = process.env.CONTENT_IDEAS_LLM?.trim().toLowerCase();
@@ -17,12 +24,38 @@ export function resolveContentIdeasProvider(): LlmProvider {
   );
 }
 
-export async function generateIdeasJson(prompt: string): Promise<string> {
+export const CONTENT_IDEA_RESPONSE_SCHEMA: ResponseSchema = {
+  type: SchemaType.ARRAY,
+  items: {
+    type: SchemaType.OBJECT,
+    properties: {
+      title: { type: SchemaType.STRING },
+      type: { type: SchemaType.STRING },
+      source: { type: SchemaType.STRING },
+      status: { type: SchemaType.STRING },
+      hooks: {
+        type: SchemaType.ARRAY,
+        items: { type: SchemaType.STRING },
+      },
+    },
+    required: ["title", "type", "source", "status", "hooks"],
+  },
+};
+
+export const HOOKS_RESPONSE_SCHEMA: ResponseSchema = {
+  type: SchemaType.ARRAY,
+  items: { type: SchemaType.STRING },
+};
+
+export async function generateIdeasJson(
+  prompt: string,
+  options: GenerateJsonOptions = {}
+): Promise<string> {
   const provider = resolveContentIdeasProvider();
   if (provider === "gemini") {
-    return generateWithGemini(prompt);
+    return generateWithGemini(prompt, options);
   }
-  return generateWithAnthropic(prompt);
+  return generateWithAnthropic(prompt, options);
 }
 
 function sleep(ms: number): Promise<void> {
@@ -46,7 +79,10 @@ const GEMINI_MODEL_FALLBACKS = [
   "gemini-2.5-flash",
 ] as const;
 
-async function generateWithGemini(prompt: string): Promise<string> {
+async function generateWithGemini(
+  prompt: string,
+  options: GenerateJsonOptions
+): Promise<string> {
   const { GoogleGenerativeAI } = await import("@google/generative-ai");
   const apiKey = process.env.GEMINI_API_KEY?.trim();
   if (!apiKey) {
@@ -58,6 +94,10 @@ async function generateWithGemini(prompt: string): Promise<string> {
     ? [configured, ...GEMINI_MODEL_FALLBACKS.filter((m) => m !== configured)]
     : [...GEMINI_MODEL_FALLBACKS];
 
+  const maxOutputTokens =
+    options.maxOutputTokens ??
+    (Number(process.env.GEMINI_MAX_OUTPUT_TOKENS) || 8192);
+
   const genAI = new GoogleGenerativeAI(apiKey);
   let lastError: unknown;
 
@@ -66,8 +106,11 @@ async function generateWithGemini(prompt: string): Promise<string> {
       model: modelName,
       generationConfig: {
         temperature: 0.7,
-        maxOutputTokens: 2048,
+        maxOutputTokens,
         responseMimeType: "application/json",
+        ...(options.responseSchema
+          ? { responseSchema: options.responseSchema }
+          : {}),
       },
     });
 
@@ -102,7 +145,10 @@ async function generateWithGemini(prompt: string): Promise<string> {
   throw lastError ?? new Error("All Gemini models failed");
 }
 
-async function generateWithAnthropic(prompt: string): Promise<string> {
+async function generateWithAnthropic(
+  prompt: string,
+  options: GenerateJsonOptions
+): Promise<string> {
   const Anthropic = (await import("@anthropic-ai/sdk")).default;
   const apiKey = process.env.ANTHROPIC_API_KEY?.trim();
   if (!apiKey) {
@@ -111,10 +157,14 @@ async function generateWithAnthropic(prompt: string): Promise<string> {
 
   const model =
     process.env.ANTHROPIC_MODEL?.trim() || "claude-sonnet-4-20250514";
+  const maxTokens =
+    options.maxOutputTokens ??
+    (Number(process.env.ANTHROPIC_MAX_OUTPUT_TOKENS) || 8192);
+
   const client = new Anthropic({ apiKey });
   const response = await client.messages.create({
     model,
-    max_tokens: 2048,
+    max_tokens: maxTokens,
     messages: [{ role: "user", content: prompt }],
   });
 

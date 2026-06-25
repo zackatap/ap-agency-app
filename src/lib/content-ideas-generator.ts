@@ -18,7 +18,8 @@ import {
   loadFullHookLibrary,
   type ContentIdeaRow,
 } from "@/lib/content-ideas-sheet";
-import { generateIdeasJson } from "@/lib/content-ideas-llm";
+import { generateIdeasJson, CONTENT_IDEA_RESPONSE_SCHEMA } from "@/lib/content-ideas-llm";
+import { parseJsonArrayFromLlm } from "@/lib/llm-json";
 
 export type GenerateScope = "recent" | "all" | "selected" | "new";
 
@@ -49,16 +50,7 @@ function getMaxIdeas(): number {
 }
 
 function parseIdeasJson(raw: string): GeneratedIdea[] {
-  const trimmed = raw.trim();
-  const start = trimmed.indexOf("[");
-  const end = trimmed.lastIndexOf("]");
-  if (start < 0 || end <= start) {
-    throw new Error("Model did not return a JSON array");
-  }
-  const parsed = JSON.parse(trimmed.slice(start, end + 1)) as unknown;
-  if (!Array.isArray(parsed)) {
-    throw new Error("Expected JSON array of ideas");
-  }
+  const parsed = parseJsonArrayFromLlm(raw);
   return parsed.map((item) => {
     const row = item as Record<string, unknown>;
     const hooksRaw = row.hooks;
@@ -109,6 +101,7 @@ Rules:
 - Type: always "One-time".
 - Status: always "Saved".
 - Hooks: exactly 3 per idea. Use hook templates from the hook library — adapt them to the idea and avatar. Make them spoken-word ready.
+- JSON only: escape double quotes inside strings. No line breaks inside string values.
 - Do NOT duplicate or closely paraphrase existing titles.
 - Focus on: patient growth, Meta ads, lead quality, systems, automations, GHL, ROI, creative testing, practice owner pain points.
 
@@ -195,7 +188,10 @@ export async function generateContentIdeas(
     meetings,
   });
 
-  const raw = await generateIdeasJson(prompt);
+  const raw = await generateIdeasJson(prompt, {
+    responseSchema: CONTENT_IDEA_RESPONSE_SCHEMA,
+    maxOutputTokens: 8192,
+  });
   const ideas = parseIdeasJson(raw).filter(
     (idea) => idea.title && idea.source && idea.hooks.length >= 2
   );
