@@ -179,7 +179,7 @@ export default function ContentIdeasClient({
           >
             content ideas sheet
           </a>
-          . Auto-sync checks for new recordings every 3 hours.
+          . Auto-sync is off — run manually when you want new ideas.
           {pendingNew !== null && pendingNew > 0 && (
             <>
               {" "}

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { processNewGranolaMeetings } from "@/lib/content-ideas-generator";
 
+/** Disabled — content ideas are manual-only via /agency/content-ideas */
 export async function GET(req: Request) {
   const authHeader = req.headers.get("authorization");
   const secret = process.env.CRON_SECRET?.trim();
@@ -8,19 +8,9 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  try {
-    const result = await processNewGranolaMeetings();
-    return NextResponse.json({
-      ok: true,
-      skipped: result.skipped ?? false,
-      reason: result.reason,
-      appended: result.appended,
-      meetingCount: result.meetingCount,
-      titles: result.ideas.map((i) => i.title),
-    });
-  } catch (err) {
-    console.error("[cron/content-ideas]", err);
-    const message = err instanceof Error ? err.message : "Cron failed";
-    return NextResponse.json({ error: message }, { status: 500 });
-  }
+  return NextResponse.json({
+    ok: true,
+    disabled: true,
+    message: "Content ideas cron is disabled. Use /agency/content-ideas manually.",
+  });
 }
