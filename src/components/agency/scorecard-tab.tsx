@@ -365,6 +365,21 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
     });
   }, [view, sortKey, sortDir, flaggedOnly, attentionByKey]);
 
+  const attentionCounts = useMemo(() => {
+    if (!view) return null;
+    const counts = { total: 0, red: 0, orange: 0, yellow: 0 };
+    for (const c of view.campaigns) {
+      if (!c.included) continue;
+      const attn = attentionByKey.get(c.campaignKey);
+      if (!attn || typeof attn.urgency !== "number") continue;
+      counts.total += 1;
+      if (attn.urgency === 0) counts.red += 1;
+      else if (attn.urgency === 1) counts.orange += 1;
+      else if (attn.urgency === 2) counts.yellow += 1;
+    }
+    return counts;
+  }, [view, attentionByKey]);
+
   // Campaigns the roster expects but that couldn't be read this snapshot
   // (almost always: GHL app not installed for that location). They produce no
   // data, so the scored table hides them — but a silently-missing client is
@@ -524,6 +539,31 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
                 Attention only
               </button>
             </div>
+            {flaggedOnly && attentionCounts && (
+              <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                <span className="font-medium text-slate-200">
+                  {attentionCounts.total} flagged
+                </span>
+                {([0, 1, 2] as const).map((urgency) => {
+                  const meta = URGENCY_META[urgency];
+                  const count =
+                    urgency === 0
+                      ? attentionCounts.red
+                      : urgency === 1
+                        ? attentionCounts.orange
+                        : attentionCounts.yellow;
+                  return (
+                    <span
+                      key={urgency}
+                      className={`inline-flex items-center gap-1 ${meta.text}`}
+                    >
+                      <span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} />
+                      {count} {meta.label}
+                    </span>
+                  );
+                })}
+              </div>
+            )}
           </div>
         </div>
         <div className="text-right text-xs text-slate-400">
