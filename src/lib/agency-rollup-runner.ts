@@ -529,7 +529,20 @@ async function processLocation(args: {
     }
 
     const pipeline = resolution.pipeline;
-    const attributionMode = settings?.attributionMode ?? "lastUpdated";
+    // Agency rollup always dates opportunities by when they were CREATED (the
+    // day the lead came in), not by last activity. This is deliberate and
+    // standardized across every client:
+    //   - "Leads in the last N days" means genuinely new leads, so a client
+    //     who stopped getting leads can't look alive just because the front
+    //     desk moved an old card today (which "lastUpdated" would re-date into
+    //     the current window and silently hide the dead account).
+    //   - CPL = spend / leads now shares a single date basis (Meta spend is
+    //     already dated by day), so the CPL-trend attention flags are trustworthy.
+    // Trade-off: downstream stage counts (showed/closed) become cohort-dated —
+    // "of the leads that came in this window, how many have closed" — so recent
+    // short windows show fewer closes until those cohorts mature. That's the
+    // correct read for lead-flow accuracy, which the attention system needs.
+    const attributionMode = "created" as const;
     const customMappings = settings?.stageMappings?.[pipeline.id];
 
     // Cache key includes the tag filter: two campaigns sharing a pipeline but
@@ -666,7 +679,12 @@ function buildDayRows(args: {
   const activeDays = new Set<string>();
   for (const d of daysWithMetrics) activeDays.add(d.date);
   for (const [day, insight] of Object.entries(fbInsightsByDay)) {
-    if (insight.spend > 0 || insight.impressions > 0 || insight.linkClicks > 0) {
+    if (
+      insight.spend > 0 ||
+      insight.impressions > 0 ||
+      insight.linkClicks > 0 ||
+      insight.metaLeads > 0
+    ) {
       activeDays.add(day);
     }
   }
@@ -710,6 +728,7 @@ function buildDayRows(args: {
       impressions: insight?.impressions ?? 0,
       clicks: insight?.clicks ?? 0,
       linkClicks: insight?.linkClicks ?? 0,
+      metaLeads: insight?.metaLeads ?? 0,
     });
   }
   return rows;
@@ -794,11 +813,13 @@ function addInsight(
     impressions: 0,
     clicks: 0,
     linkClicks: 0,
+    metaLeads: 0,
   });
   bucket.spend += src.spend;
   bucket.impressions += src.impressions;
   bucket.clicks += src.clicks;
   bucket.linkClicks += src.linkClicks;
+  bucket.metaLeads += src.metaLeads;
 }
 
 /**
@@ -872,6 +893,14 @@ async function resolveCampaignDailyInsights(args: {
         endDate
       );
       if (insightErr) continue;
+      // Skip paused / inactive campaigns with no spend this window. Meta can
+      // still attribute stray conversions to them, which inflates lead totals
+      // while spend correctly stays on the active campaign only.
+      const windowSpend = Object.values(insightsByDate).reduce(
+        (sum, d) => sum + d.spend,
+        0
+      );
+      if (windowSpend <= 0) continue;
       for (const [date, insight] of Object.entries(insightsByDate)) {
         addInsight(aggregated, date, insight);
       }

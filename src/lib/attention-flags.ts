@@ -8,18 +8,16 @@
  * its value: SWITCH(MID(code, 3, 1), "R",0, "O",1, "Y",2).
  *
  * Number guards matter: the sheet bails to "-" (no flag) when the 14d/7d/3d CPL
- * deltas aren't numbers. In the sheet CPL = spend/leads, so it's a numeric $0
- * (not blank) when spend is $0 but leads exist — which is why the feed builds
- * these metrics with a sheet-faithful CPL (see `sheetCpl` in attention-feed).
- * Otherwise a paused campaign's null CPL would short-circuit the guards and the
- * "$0 ad spend in 3 days" (S_O4) flag could never fire.
+ * deltas aren't numbers. CPL = spend / Meta-attributed leads (Ads Manager).
  */
 
 export type AttentionCode =
+  | "S_R5"
   | "S_R4"
   | "S_R3"
   | "S_R2"
   | "S_R1"
+  | "S_O5"
   | "S_O4"
   | "S_O3"
   | "S_O2"
@@ -29,12 +27,18 @@ export type AttentionCode =
   | "S_Y5"
   | "S_Y1";
 
-/** AD_VLOOKUP: code → human reason sentence (verbatim from the sheet). */
+/**
+ * Code → human reason sentence. S_R1..S_Y5 are verbatim from the original
+ * sheet. S_R5 / S_O5 are new lead-leak flags: Meta reports leads the CRM
+ * doesn't have, meaning paid leads aren't reaching the client to be worked.
+ */
 export const ATTENTION_REASONS: Record<AttentionCode, string> = {
+  S_R5: "Meta shows leads but none reached the CRM (paid leads may be leaking).",
   S_R1: "No Leads in 7 days.",
   S_R2: "No Leads in 3 days + CPL risen $20+ in last 7 days",
   S_R3: "No Leads in 3 days + CPL risen $35+ in last 14 days",
   S_R4: "CPL > $80 in last 7 days",
+  S_O5: "Meta leads far exceed CRM leads (some paid leads aren't reaching the CRM).",
   S_O1: "No Leads in 3 days + CPL risen $10+ in last 7 days",
   S_O2: "CPL risen $35+ in last 7 days.",
   S_O3: "CPL is over $65 and is not Neuropathy",
@@ -49,8 +53,11 @@ export interface AttentionMetrics {
   businessName: string | null;
   /** Meta campaign name — the Neuropathy exclusion checks this. */
   campaignName: string | null;
-  leads3d: number;
-  leads7d: number;
+  metaLeads3d: number;
+  /** Meta-attributed leads over the last 7 days (Ads Manager source of truth). */
+  metaLeads7d: number;
+  /** GHL pipeline leads over the last 7 days — used only for CRM-vs-Meta leak flags. */
+  crmLeads7d: number;
   cpl7d: number | null;
   cpl30d: number | null;
   cpl30dPrev: number | null;
@@ -101,15 +108,28 @@ export function computeAttentionFlag(m: AttentionMetrics): AttentionFlag | null 
 
   let code: AttentionCode | null = null;
   // Red (most urgent first).
-  if (isNum(m.cpl7d) && m.cpl7d > 80) code = "S_R4";
-  else if (m.leads3d === 0 && isNum(d14) && d14 > 35) code = "S_R3";
-  else if (m.leads3d === 0 && isNum(d7) && d7 > 20) code = "S_R2";
-  else if (m.leads7d === 0) code = "S_R1";
+  // Lead leak: Meta is driving leads but none are landing in the CRM. This is
+  // checked before "No leads in 7 days" (S_R1) because it's the *reason* the
+  // CRM looks empty and points at a broken sync, not a dead account.
+  if (m.crmLeads7d === 0 && m.metaLeads7d >= 3) code = "S_R5";
+  else if (isNum(m.cpl7d) && m.cpl7d > 80) code = "S_R4";
+  else if (m.metaLeads3d === 0 && isNum(d14) && d14 > 35) code = "S_R3";
+  else if (m.metaLeads3d === 0 && isNum(d7) && d7 > 20) code = "S_R2";
+  else if (m.metaLeads7d === 0) code = "S_R1";
   // Orange.
   else if (m.adSpend3d === 0) code = "S_O4";
   else if (isNum(m.cpl30d) && m.cpl30d > 65 && !neuropathy) code = "S_O3";
   else if (isNum(d7) && d7 > 35) code = "S_O2";
-  else if (m.leads3d === 0 && isNum(d7) && d7 > 10) code = "S_O1";
+  else if (m.metaLeads3d === 0 && isNum(d7) && d7 > 10) code = "S_O1";
+  // Partial lead leak: Meta at least doubles the CRM and the gap is real
+  // (>= 3 leads). Both sides have leads, so it's a partial sync/attribution
+  // gap rather than a full outage — orange, not red.
+  else if (
+    m.crmLeads7d > 0 &&
+    m.metaLeads7d >= m.crmLeads7d * 2 &&
+    m.metaLeads7d - m.crmLeads7d >= 3
+  )
+    code = "S_O5";
   // Yellow.
   else {
     const pctUp =
@@ -119,7 +139,7 @@ export function computeAttentionFlag(m: AttentionMetrics): AttentionFlag | null 
     if (pctUp > 0.2) code = "S_Y3";
     else if (isNum(d3) && d3 > 20) code = "S_Y2";
     else if (m.adSpend30d > 2000) code = "S_Y5";
-    else if (m.leads3d === 0) code = "S_Y1";
+    else if (m.metaLeads3d === 0) code = "S_Y1";
     else return null;
   }
 

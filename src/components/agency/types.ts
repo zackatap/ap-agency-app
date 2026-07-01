@@ -42,6 +42,8 @@ export interface ClientMonthTotals {
 export interface ClientCampaignMonth {
   monthKey: string;
   leads: number;
+  /** Meta-attributed leads (Meta's own count) for this month. */
+  metaLeads: number;
   totalAppts: number;
   showed: number;
   /**
@@ -70,6 +72,8 @@ export interface ClientCampaignMonth {
 
 export interface ClientCampaignWindowTotals {
   leads: number;
+  /** Meta-attributed leads (Meta's own count) over the window; not rolled up. */
+  metaLeads: number;
   totalAppts: number;
   showed: number;
   noShow: number;

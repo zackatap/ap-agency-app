@@ -145,6 +145,12 @@ export interface AgencyCampaignDay {
   impressions: number;
   clicks: number;
   linkClicks: number;
+  /**
+   * Leads Meta attributed to this campaign's ads on this day (Meta's own
+   * conversion count). Stored alongside GHL `leads` so the scorecard can flag
+   * when the two sources disagree. Null/0 on snapshots predating this column.
+   */
+  metaLeads: number;
 }
 
 /**
@@ -316,6 +322,7 @@ async function ensureSchema(sql: Sql): Promise<void> {
         impressions BIGINT NOT NULL DEFAULT 0,
         clicks BIGINT NOT NULL DEFAULT 0,
         link_clicks BIGINT NOT NULL DEFAULT 0,
+        meta_leads BIGINT NOT NULL DEFAULT 0,
         PRIMARY KEY (snapshot_id, campaign_key, date)
       )
     `;
@@ -331,7 +338,8 @@ async function ensureSchema(sql: Sql): Promise<void> {
       ALTER TABLE agency_rollup_campaign_days
         ADD COLUMN IF NOT EXISTS impressions BIGINT NOT NULL DEFAULT 0,
         ADD COLUMN IF NOT EXISTS clicks BIGINT NOT NULL DEFAULT 0,
-        ADD COLUMN IF NOT EXISTS link_clicks BIGINT NOT NULL DEFAULT 0
+        ADD COLUMN IF NOT EXISTS link_clicks BIGINT NOT NULL DEFAULT 0,
+        ADD COLUMN IF NOT EXISTS meta_leads BIGINT NOT NULL DEFAULT 0
     `;
   } catch (err) {
     console.warn("[agency-rollup-store] ADD COLUMN meta metrics failed:", err);
@@ -793,12 +801,13 @@ export async function insertCampaignDays(
     const impressions = chunk.map((r) => r.impressions);
     const clicks = chunk.map((r) => r.clicks);
     const linkClicks = chunk.map((r) => r.linkClicks);
+    const metaLeads = chunk.map((r) => r.metaLeads);
     await sql`
       INSERT INTO agency_rollup_campaign_days (
         snapshot_id, campaign_key, location_id, date,
         leads, total_appts, showed, no_show, closed,
         total_value, success_value, ad_spend,
-        impressions, clicks, link_clicks
+        impressions, clicks, link_clicks, meta_leads
       )
       SELECT * FROM UNNEST(
         ${snapshotIds}::bigint[],
@@ -815,7 +824,8 @@ export async function insertCampaignDays(
         ${adSpend}::numeric[],
         ${impressions}::bigint[],
         ${clicks}::bigint[],
-        ${linkClicks}::bigint[]
+        ${linkClicks}::bigint[],
+        ${metaLeads}::bigint[]
       )
       ON CONFLICT (snapshot_id, campaign_key, date) DO UPDATE SET
         leads = EXCLUDED.leads,
@@ -828,7 +838,8 @@ export async function insertCampaignDays(
         ad_spend = EXCLUDED.ad_spend,
         impressions = EXCLUDED.impressions,
         clicks = EXCLUDED.clicks,
-        link_clicks = EXCLUDED.link_clicks
+        link_clicks = EXCLUDED.link_clicks,
+        meta_leads = EXCLUDED.meta_leads
     `;
   }
 }
@@ -850,7 +861,7 @@ export async function listSnapshotCampaignDays(
         SELECT snapshot_id, campaign_key, location_id, date,
                leads, total_appts, showed, no_show, closed,
                total_value, success_value, ad_spend,
-               impressions, clicks, link_clicks
+               impressions, clicks, link_clicks, meta_leads
         FROM agency_rollup_campaign_days
         WHERE snapshot_id = ${snapshotId}
           AND date >= ${range.startDate}::date
@@ -861,7 +872,7 @@ export async function listSnapshotCampaignDays(
         SELECT snapshot_id, campaign_key, location_id, date,
                leads, total_appts, showed, no_show, closed,
                total_value, success_value, ad_spend,
-               impressions, clicks, link_clicks
+               impressions, clicks, link_clicks, meta_leads
         FROM agency_rollup_campaign_days
         WHERE snapshot_id = ${snapshotId}
         ORDER BY campaign_key, date
@@ -887,6 +898,7 @@ export async function listSnapshotCampaignDays(
       impressions: Number(r.impressions ?? 0),
       clicks: Number(r.clicks ?? 0),
       linkClicks: Number(r.link_clicks ?? 0),
+      metaLeads: Number(r.meta_leads ?? 0),
     };
   });
 }

@@ -47,7 +47,8 @@ const FEED_METRICS: Array<{
   out: string;
 }> = [
   { key: "adSpend", out: "ad_spend" },
-  { key: "leads", out: "leads" },
+  { key: "metaLeads", out: "leads" },
+  { key: "leads", out: "crm_leads" },
   { key: "cpl", out: "cpl" },
   { key: "linkClicks", out: "link_clicks" },
   { key: "cplc", out: "cplc" },
@@ -66,7 +67,9 @@ function round(value: number, decimals: number): number {
 
 /** Counts stay whole; money/rate metrics keep 2 decimals. */
 function decimalsFor(out: string): number {
-  return out === "leads" || out === "link_clicks" ? 0 : 2;
+  return out === "leads" || out === "crm_leads" || out === "link_clicks"
+    ? 0
+    : 2;
 }
 
 /**
@@ -79,10 +82,11 @@ function decimalsFor(out: string): number {
  * and the "$0 ad spend in 3 days" (S_O4) flag can never fire for fully-paused
  * campaigns. The sheet's CPL was numeric here, so this matches it.
  */
+/** CPL = spend / Meta-attributed leads (matches Ads Manager + scorecard). */
 function sheetCpl(totals: CampaignWindowTotals | undefined): number | null {
   if (!totals) return null;
   const spend = totals.adSpend;
-  const leads = totals.leads;
+  const leads = totals.metaLeads;
   if (typeof spend !== "number" || typeof leads !== "number" || leads <= 0) {
     return null;
   }
@@ -185,8 +189,9 @@ export async function buildAttentionFeed(opts?: {
     const metrics: AttentionMetrics = {
       businessName: base.businessName,
       campaignName,
-      leads3d: s3?.totals.leads ?? 0,
-      leads7d: s7?.totals.leads ?? 0,
+      metaLeads3d: s3?.totals.metaLeads ?? 0,
+      metaLeads7d: s7?.totals.metaLeads ?? 0,
+      crmLeads7d: s7?.totals.leads ?? 0,
       cpl7d: sheetCpl(s7?.totals),
       cpl30d: sheetCpl(s30?.totals),
       cpl30dPrev: sheetCpl(s30?.priorTotals),

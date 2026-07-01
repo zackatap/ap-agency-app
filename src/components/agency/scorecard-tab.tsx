@@ -27,15 +27,27 @@ const WINDOWS = [
 
 type WindowId = (typeof WINDOWS)[number]["id"] | "custom";
 
-/** The six KPIs, in the order the agency reads them. */
+/** The KPIs, in the order the agency reads them. Leads + CPL use Meta. */
 const SCORECARD_METRICS: Array<{ key: MetricKey; label: string }> = [
   { key: "adSpend", label: "Ad spend" },
-  { key: "leads", label: "Leads" },
+  { key: "metaLeads", label: "Leads" },
   { key: "cpl", label: "CPL" },
   { key: "linkClicks", label: "Link clicks" },
   { key: "cplc", label: "CPLC" },
   { key: "ctr", label: "CTR" },
 ];
+
+/** Always show CRM vs Meta when either side has a count this window. */
+function leadSourceComparison(
+  totals: ClientCampaignWindowTotals
+): { crm: number; meta: number; direction: "meta_high" | "crm_high" | "match" } | null {
+  const crm = typeof totals.leads === "number" ? totals.leads : 0;
+  const meta = typeof totals.metaLeads === "number" ? totals.metaLeads : 0;
+  if (crm === 0 && meta === 0) return null;
+  if (meta > crm) return { crm, meta, direction: "meta_high" };
+  if (crm > meta) return { crm, meta, direction: "crm_high" };
+  return { crm, meta, direction: "match" };
+}
 
 function metricValue(
   totals: ClientCampaignWindowTotals,
@@ -51,6 +63,7 @@ function formatValue(key: MetricKey, value: number | null): string {
     case "adSpend":
       return formatMoney(value);
     case "leads":
+    case "metaLeads":
     case "linkClicks":
       return formatCount(value);
     case "cpl":
@@ -97,6 +110,7 @@ function computeDelta(
       body = formatMoney(magnitude);
       break;
     case "leads":
+    case "metaLeads":
     case "linkClicks":
       body = formatCount(magnitude);
       break;
@@ -370,15 +384,13 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
   }, []);
 
   const toggleSort = useCallback((key: MetricKey | "client" | "urgency") => {
-    setSortKey((prevKey) => {
-      if (prevKey === key) {
-        setSortDir((d) => (d === "desc" ? "asc" : "desc"));
-        return prevKey;
-      }
+    if (sortKey === key) {
+      setSortDir((d) => (d === "desc" ? "asc" : "desc"));
+    } else {
+      setSortKey(key);
       setSortDir("desc");
-      return key;
-    });
-  }, []);
+    }
+  }, [sortKey]);
 
   return (
     <div className="space-y-5">
@@ -672,6 +684,31 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
                             <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
                             Meta not connected · Connect ↗
                           </a>
+                        );
+                      })()}
+                      {(() => {
+                        const cmp = leadSourceComparison(c.totals);
+                        if (!cmp) return null;
+                        const title =
+                          cmp.direction === "meta_high"
+                            ? `Meta counted ${cmp.meta} paid leads; ${cmp.crm} reached the CRM. Check lead-form sync, pipeline stage mapping, and tag filter.`
+                            : cmp.direction === "crm_high"
+                              ? `CRM has ${cmp.crm} leads; Meta attributed ${cmp.meta}. Extra CRM leads are usually organic/referral or missing pixel/CAPI tagging.`
+                              : `CRM and Meta agree: ${cmp.crm} leads this window.`;
+                        const dotClass =
+                          cmp.direction === "meta_high"
+                            ? "bg-amber-400"
+                            : cmp.direction === "crm_high"
+                              ? "bg-slate-400"
+                              : "bg-emerald-400";
+                        return (
+                          <span
+                            title={title}
+                            className="mt-1 inline-flex items-center gap-1 rounded-full bg-slate-500/15 px-2 py-0.5 text-[11px] font-medium text-slate-300 ring-1 ring-slate-400/30"
+                          >
+                            <span className={`h-1.5 w-1.5 rounded-full ${dotClass}`} />
+                            Leads: CRM {cmp.crm} · Meta {cmp.meta}
+                          </span>
                         );
                       })()}
                     </td>

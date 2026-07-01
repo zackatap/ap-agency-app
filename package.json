@@ -14,18 +14,21 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.1",
     "@google/generative-ai": "^0.24.1",
+    "@modelcontextprotocol/sdk": "^1.26.0",
     "@neondatabase/serverless": "^1.0.2",
     "googleapis": "^171.4.0",
     "granola-api": "^1.0.0",
     "html-to-image": "^1.11.13",
     "jsonrepair": "^3.14.0",
     "leaflet": "^1.9.4",
+    "mcp-handler": "^1.1.0",
     "next": "16.1.6",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-leaflet": "^5.0.0",
     "recharts": "^3.8.1",
-    "sharp": "^0.34.5"
+    "sharp": "^0.34.5",
+    "zod": "^3.25.76"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

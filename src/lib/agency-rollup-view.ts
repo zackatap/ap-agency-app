@@ -43,6 +43,7 @@ import type { CampaignStatus } from "@/lib/agency-clients";
 
 export type MetricKey =
   | "leads"
+  | "metaLeads"
   | "totalAppts"
   | "showed"
   | "closed"
@@ -96,6 +97,8 @@ export interface MonthTotals {
 export interface CampaignMonthly {
   monthKey: string;
   leads: number;
+  /** Meta-attributed leads (Meta's own count) for this month. */
+  metaLeads: number;
   totalAppts: number;
   showed: number;
   noShow: number;
@@ -119,6 +122,12 @@ export interface CampaignMonthly {
 
 export interface CampaignWindowTotals {
   leads: number;
+  /**
+   * Meta-attributed leads (Meta's own conversion count) over the window. Not
+   * rolled up — this is the raw Meta number so it can be reconciled against the
+   * GHL-sourced `leads` above. `null` semantics aren't needed; 0 means none.
+   */
+  metaLeads: number;
   totalAppts: number;
   showed: number;
   noShow: number;
@@ -207,6 +216,7 @@ function average(values: number[]): number | null {
 
 function emptyAccumulator(): {
   leads: number;
+  metaLeads: number;
   totalAppts: number;
   showed: number;
   noShow: number;
@@ -220,6 +230,7 @@ function emptyAccumulator(): {
 } {
   return {
     leads: 0,
+    metaLeads: 0,
     totalAppts: 0,
     showed: 0,
     noShow: 0,
@@ -249,6 +260,8 @@ function disjointToOnTotalsCounts(acc: CountAccumulator): CountAccumulator {
   const cl = acc.closed;
   return {
     leads: l + rc + s + n + cl,
+    // Meta leads are a raw source count, not a funnel stage — never rolled up.
+    metaLeads: acc.metaLeads,
     totalAppts: rc + s + n + cl,
     showed: s + cl,
     noShow: n,
@@ -275,7 +288,10 @@ function deriveRatesFromDisjointCounts(base: CountAccumulator): CampaignWindowTo
     bookingRate: leadPool > 0 ? rateOrNull(apptPool, leadPool) : null,
     showRate: apptPool > 0 ? rateOrNull(base.showed + base.closed, apptPool) : null,
     closeRate: rateOrNull(base.closed, showPool),
-    cpl: base.adSpend > 0 && base.leads > 0 ? moneyOrNull(base.adSpend, base.leads) : null,
+    cpl:
+      base.adSpend > 0 && base.metaLeads > 0
+        ? moneyOrNull(base.adSpend, base.metaLeads)
+        : null,
     cps: base.adSpend > 0 && base.showed > 0 ? moneyOrNull(base.adSpend, base.showed) : null,
     cpClose:
       base.adSpend > 0 && base.closed > 0
@@ -306,7 +322,10 @@ function deriveRatesFromRollupCounts(base: CountAccumulator): CampaignWindowTota
     bookingRate: leadsR > 0 ? rateOrNull(reqPool, leadsR) : null,
     showRate: reqPool > 0 ? rateOrNull(showedR, reqPool) : null,
     closeRate: showedR > 0 ? rateOrNull(base.closed, showedR) : null,
-    cpl: base.adSpend > 0 && leadsR > 0 ? moneyOrNull(base.adSpend, leadsR) : null,
+    cpl:
+      base.adSpend > 0 && base.metaLeads > 0
+        ? moneyOrNull(base.adSpend, base.metaLeads)
+        : null,
     cps: base.adSpend > 0 && showedR > 0 ? moneyOrNull(base.adSpend, showedR) : null,
     cpClose:
       base.adSpend > 0 && base.closed > 0
@@ -335,6 +354,7 @@ function accumulateDay(
   row: AgencyCampaignDay
 ): void {
   acc.leads += row.leads;
+  acc.metaLeads += row.metaLeads;
   acc.totalAppts += row.totalAppts;
   acc.showed += row.showed;
   acc.noShow += row.noShow;
@@ -695,7 +715,10 @@ export async function buildAgencyRollupView(params?: {
           : null,
       closeRateSimple: average(bucket.closeRates),
       closeRateWeighted: rateOrNull(s.closed, weightedShowPool),
-      cpl: s.adSpend > 0 && s.leads > 0 ? moneyOrNull(s.adSpend, s.leads) : null,
+      cpl:
+        s.adSpend > 0 && s.metaLeads > 0
+          ? moneyOrNull(s.adSpend, s.metaLeads)
+          : null,
       cps:
         s.adSpend > 0 && s.showed > 0 ? moneyOrNull(s.adSpend, s.showed) : null,
       cpClose:
@@ -723,6 +746,7 @@ export const METRIC_META: Record<
   }
 > = {
   leads: { label: "Leads", kind: "count", higherIsBetter: true },
+  metaLeads: { label: "Meta leads", kind: "count", higherIsBetter: true },
   totalAppts: { label: "Appointments", kind: "count", higherIsBetter: true },
   showed: { label: "Showed", kind: "count", higherIsBetter: true },
   closed: { label: "Closed", kind: "count", higherIsBetter: true },
@@ -733,7 +757,7 @@ export const METRIC_META: Record<
   bookingRate: { label: "Booking rate", kind: "rate", higherIsBetter: true },
   showRate: { label: "Show rate", kind: "rate", higherIsBetter: true },
   closeRate: { label: "Close rate", kind: "rate", higherIsBetter: true },
-  cpl: { label: "Cost / Lead", kind: "money", higherIsBetter: false },
+  cpl: { label: "Cost / Lead (Meta)", kind: "money", higherIsBetter: false },
   cps: { label: "Cost / Show", kind: "money", higherIsBetter: false },
   cpClose: { label: "Cost / Close", kind: "money", higherIsBetter: false },
   cplc: { label: "Cost / Link Click", kind: "money", higherIsBetter: false },
@@ -748,6 +772,8 @@ export function getCampaignMetricValue(
   switch (metric) {
     case "leads":
       return monthly.leads;
+    case "metaLeads":
+      return monthly.metaLeads;
     case "totalAppts":
       return monthly.totalAppts;
     case "showed":
@@ -792,6 +818,8 @@ export function getCampaignTotalsMetricValue(
   switch (metric) {
     case "leads":
       return totals.leads;
+    case "metaLeads":
+      return totals.metaLeads;
     case "totalAppts":
       return totals.totalAppts;
     case "showed":

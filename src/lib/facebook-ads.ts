@@ -226,6 +226,11 @@ export interface DailyInsight {
   impressions: number;
   clicks: number;
   linkClicks: number;
+  /**
+   * Leads Meta attributed on this day — matched to Ads Manager's Results column
+   * (Instant Form / lead-gen objective), not the broad `lead` action rollup.
+   */
+  metaLeads: number;
 }
 
 /**
@@ -251,7 +256,7 @@ export async function fetchDailyInsights(
   }
 
   const params = new URLSearchParams({
-    fields: "spend,impressions,clicks,inline_link_clicks",
+    fields: "spend,impressions,clicks,inline_link_clicks,actions,results",
     access_token: token,
     time_range: JSON.stringify({ since, until }),
     time_increment: "1", // daily
@@ -260,16 +265,19 @@ export async function fetchDailyInsights(
   let url: string | null = `${META_GRAPH}/${META_API_VERSION}/${graphId}/insights?${params}`;
   const insightsByDate: Record<string, DailyInsight> = {};
 
-  const add = (day: string, key: keyof DailyInsight, raw: unknown) => {
-    const val = parseFloat(String(raw ?? ""));
-    if (Number.isNaN(val)) return;
-    const bucket = (insightsByDate[day] ??= {
+  const bucketFor = (day: string): DailyInsight =>
+    (insightsByDate[day] ??= {
       spend: 0,
       impressions: 0,
       clicks: 0,
       linkClicks: 0,
+      metaLeads: 0,
     });
-    bucket[key] += val;
+
+  const add = (day: string, key: keyof DailyInsight, raw: unknown) => {
+    const val = parseFloat(String(raw ?? ""));
+    if (Number.isNaN(val)) return;
+    bucketFor(day)[key] += val;
   };
 
   try {
@@ -283,6 +291,8 @@ export async function fetchDailyInsights(
           impressions?: string;
           clicks?: string;
           inline_link_clicks?: string;
+          actions?: MetaAction[];
+          results?: MetaResult[];
         }>;
         paging?: { next?: string };
         error?: { message?: string };
@@ -301,6 +311,8 @@ export async function fetchDailyInsights(
         add(day, "impressions", row.impressions);
         add(day, "clicks", row.clicks);
         add(day, "linkClicks", row.inline_link_clicks);
+        const metaLeads = parseMetaLeads(row.results, row.actions);
+        if (metaLeads) bucketFor(day).metaLeads += metaLeads;
       }
       url = json.paging?.next ?? null;
     }
@@ -339,6 +351,11 @@ type MetaAction = {
   value?: string;
 };
 
+type MetaResult = {
+  indicator?: string;
+  values?: Array<{ value?: string }>;
+};
+
 function parseNumber(raw: unknown): number {
   const n = Number.parseFloat(String(raw ?? ""));
   return Number.isFinite(n) ? n : 0;
@@ -349,13 +366,71 @@ function parseNullableNumber(raw: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-function parseLeadActions(raw: unknown): number {
+/** Action types in priority order — matches Ads Manager "Leads (Form)" / Results. */
+const LEAD_ACTION_PRIORITY = [
+  "onsite_conversion.lead_grouped",
+  "leadgen.other",
+  "leadgen_grouped",
+  "offsite_conversion.fb_pixel_lead",
+  "lead",
+] as const;
+
+function actionMaxForType(actions: MetaAction[], actionType: string): number {
+  const wanted = actionType.toLowerCase();
+  let best = 0;
+  for (const action of actions) {
+    if (String(action?.action_type ?? "").toLowerCase() !== wanted) continue;
+    best = Math.max(best, parseNumber(action?.value));
+  }
+  return best;
+}
+
+/** Pick the first lead action type present — never max across overlapping types. */
+function leadsFromActions(actions: MetaAction[]): number {
+  for (const preferred of LEAD_ACTION_PRIORITY) {
+    const count = actionMaxForType(actions, preferred);
+    if (count > 0) return count;
+  }
+  return 0;
+}
+
+/** Ads Manager Results column — match specific lead indicators in priority order. */
+const LEAD_RESULT_PRIORITY = [
+  "actions:onsite_conversion.lead_grouped",
+  "actions:leadgen.other",
+  "actions:leadgen_grouped",
+  "actions:offsite_conversion.fb_pixel_lead",
+  "actions:lead",
+] as const;
+
+function parseResultLeads(raw: unknown): number {
   if (!Array.isArray(raw)) return 0;
-  return raw.reduce((sum, action: MetaAction) => {
-    const type = String(action?.action_type ?? "").toLowerCase();
-    if (!type.includes("lead")) return sum;
-    return sum + parseNumber(action?.value);
-  }, 0);
+  const rows = raw as MetaResult[];
+  for (const pref of LEAD_RESULT_PRIORITY) {
+    for (const result of rows) {
+      if (String(result?.indicator ?? "").toLowerCase() !== pref) continue;
+      let best = 0;
+      for (const entry of result?.values ?? []) {
+        best = Math.max(best, parseNumber(entry?.value));
+      }
+      if (best > 0) return best;
+    }
+  }
+  return 0;
+}
+
+/**
+ * Count Meta leads the way Ads Manager's "Leads (Form)" / Results column does.
+ *
+ * Meta emits overlapping action types for the same lead (`lead` is a superset of
+ * `onsite_conversion.lead_grouped`). Pick the most specific type first — do NOT
+ * take the max across types or the broad `lead` count wins (e.g. 55 vs 19).
+ */
+function parseMetaLeads(results: unknown, actions: unknown): number {
+  const fromResults = parseResultLeads(results);
+  if (fromResults > 0) return fromResults;
+  if (!Array.isArray(actions)) return 0;
+  return leadsFromActions(actions as MetaAction[]);
 }
 
 function mergeAdInsight(
@@ -402,7 +477,7 @@ export async function fetchAdInsights(
 
   const params = new URLSearchParams({
     fields:
-      "ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,spend,impressions,reach,frequency,clicks,inline_link_clicks,ctr,cpc,cpm,actions",
+      "ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,spend,impressions,reach,frequency,clicks,inline_link_clicks,ctr,cpc,cpm,actions,results",
     level: "ad",
     time_range: JSON.stringify({ since, until }),
     access_token: token,
@@ -458,7 +533,7 @@ export async function fetchAdInsights(
           ctr: parseNullableNumber(row.ctr),
           cpc: parseNullableNumber(row.cpc),
           cpm: parseNullableNumber(row.cpm),
-          leads: parseLeadActions(row.actions),
+          leads: parseMetaLeads(row.results, row.actions),
         };
         byAdId.set(adId, mergeAdInsight(byAdId.get(adId), next));
       }

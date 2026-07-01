@@ -165,6 +165,7 @@ export function aggregateCampaigns(
   const monthKeys = campaigns[0].months.map((m) => m.monthKey);
   const months: ClientCampaignMonth[] = monthKeys.map((mk) => {
     let leads = 0,
+      metaLeads = 0,
       totalAppts = 0,
       showed = 0,
       noShow = 0,
@@ -179,6 +180,7 @@ export function aggregateCampaigns(
       const m = c.months.find((mm) => mm.monthKey === mk);
       if (!m) continue;
       leads += m.leads;
+      metaLeads += m.metaLeads;
       totalAppts += m.totalAppts;
       showed += m.showed;
       noShow += m.noShow;
@@ -202,7 +204,8 @@ export function aggregateCampaigns(
       adSpend,
       impressions,
       clicks,
-      linkClicks
+      linkClicks,
+      metaLeads
     );
   });
   const total = sumMonthRows(months);
@@ -221,7 +224,8 @@ function buildMonthRow(
   adSpend: number,
   impressions = 0,
   clicks = 0,
-  linkClicks = 0
+  linkClicks = 0,
+  metaLeads = 0
 ): ClientCampaignMonth {
   // No-shows count as booked (they made it past "lead") but do NOT count
   // toward the show-rate numerator. Mirrors applyRollup in funnel-metrics.ts.
@@ -239,6 +243,7 @@ function buildMonthRow(
   return {
     monthKey,
     leads,
+    metaLeads,
     totalAppts,
     showed,
     noShow,
@@ -276,6 +281,7 @@ function sumMonthRows(
   const totals = months.reduce(
     (acc, m) => {
       acc.leads += m.leads;
+      acc.metaLeads += m.metaLeads;
       acc.totalAppts += m.totalAppts;
       acc.showed += m.showed;
       acc.noShow += m.noShow;
@@ -290,6 +296,7 @@ function sumMonthRows(
     },
     {
       leads: 0,
+      metaLeads: 0,
       totalAppts: 0,
       showed: 0,
       noShow: 0,
@@ -314,7 +321,8 @@ function sumMonthRows(
     totals.adSpend,
     totals.impressions,
     totals.clicks,
-    totals.linkClicks
+    totals.linkClicks,
+    totals.metaLeads
   );
   // strip monthKey
   const { monthKey: _mk, ...rest } = row;
@@ -325,6 +333,7 @@ function sumMonthRows(
 function emptyTotals(): Omit<ClientCampaignMonth, "monthKey"> {
   return {
     leads: 0,
+    metaLeads: 0,
     totalAppts: 0,
     showed: 0,
     noShow: 0,
