@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { formatDateTime, formatRelative } from "./format";
 import type { ClientAgencySnapshot } from "./types";
 
@@ -8,6 +8,66 @@ interface Props {
   latest: ClientAgencySnapshot | null;
   completeFinishedAt: string | null;
   onRefreshFinished?: () => void;
+}
+
+function SplitButtonMenu({
+  disabled,
+  menuClassName,
+  triggerClassName,
+  dividerClassName,
+  children,
+  menu,
+}: {
+  disabled?: boolean;
+  menuClassName?: string;
+  triggerClassName: string;
+  dividerClassName: string;
+  children: ReactNode;
+  menu: ReactNode;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: MouseEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
+
+  return (
+    <div ref={rootRef} className={`relative flex items-stretch rounded-lg ${menuClassName ?? ""}`}>
+      {children}
+      <button
+        type="button"
+        aria-label="More options"
+        aria-expanded={open}
+        disabled={disabled}
+        onClick={() => setOpen((prev) => !prev)}
+        className={`flex items-center rounded-r-lg px-2 text-sm disabled:cursor-not-allowed disabled:opacity-60 ${dividerClassName} ${triggerClassName}`}
+      >
+        ▾
+      </button>
+      {open && (
+        <div
+          role="menu"
+          onClick={() => setOpen(false)}
+          className="absolute right-0 top-full z-50 mt-1 min-w-[12rem] rounded-md border border-white/10 bg-slate-900 p-1 text-sm shadow-xl"
+        >
+          {menu}
+        </div>
+      )}
+    </div>
+  );
 }
 
 /**
@@ -145,12 +205,34 @@ export function RefreshControls({
           </div>
           <div>{formatDateTime(completeFinishedAt)}</div>
         </div>
-        <div className="flex items-stretch overflow-hidden rounded-lg bg-indigo-600">
+        <SplitButtonMenu
+          disabled={submitting || isRunning}
+          menuClassName="bg-indigo-600"
+          triggerClassName="text-white hover:bg-indigo-500"
+          dividerClassName="border-l border-indigo-500/50"
+          menu={
+            <>
+              {[5, 10, 25].map((n) => (
+                <button
+                  key={n}
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    void handleRefresh(n);
+                  }}
+                  className="block w-full rounded px-3 py-2 text-left text-slate-200 hover:bg-white/5"
+                >
+                  Test run · first {n} clients
+                </button>
+              ))}
+            </>
+          }
+        >
           <button
             type="button"
             onClick={() => handleRefresh()}
             disabled={submitting || isRunning}
-            className="px-4 py-2 text-sm font-medium text-white transition-colors enabled:hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
+            className="rounded-l-lg px-4 py-2 text-sm font-medium text-white transition-colors enabled:hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {isRunning
               ? "Refreshing…"
@@ -158,50 +240,18 @@ export function RefreshControls({
                 ? "Starting…"
                 : "Refresh data"}
           </button>
-          <details className="relative">
-            <summary
-              className={`flex h-full cursor-pointer items-center border-l border-indigo-500/50 px-2 text-sm text-white hover:bg-indigo-500 ${
-                submitting || isRunning ? "pointer-events-none opacity-60" : ""
-              }`}
-            >
-              ▾
-            </summary>
-            <div className="absolute right-0 z-20 mt-1 w-48 rounded-md border border-white/10 bg-slate-900 p-1 text-sm shadow-xl">
-              {[5, 10, 25].map((n) => (
-                <button
-                  key={n}
-                  type="button"
-                  onClick={() => handleRefresh(n)}
-                  className="block w-full rounded px-3 py-2 text-left text-slate-200 hover:bg-white/5"
-                >
-                  Test run · first {n} clients
-                </button>
-              ))}
-            </div>
-          </details>
-        </div>
+        </SplitButtonMenu>
         {zapierAvailable && (
-          <div className="flex items-stretch overflow-hidden rounded-lg border border-white/15 bg-slate-900/60">
-            <button
-              type="button"
-              onClick={() => void handleRunAttentionWorkflow("flagged")}
-              disabled={zapierSubmitting || isRunning}
-              title="Runs the Zapier workflow for all flagged campaigns (red, orange, yellow). Refresh data first if numbers are stale."
-              className="px-4 py-2 text-sm font-medium text-slate-200 transition-colors enabled:hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {zapierSubmitting ? "Starting…" : "Run attention workflow"}
-            </button>
-            <details className="relative">
-              <summary
-                className={`flex h-full cursor-pointer items-center border-l border-white/10 px-2 text-sm text-slate-300 hover:bg-slate-800 ${
-                  zapierSubmitting || isRunning ? "pointer-events-none opacity-60" : ""
-                }`}
-              >
-                ▾
-              </summary>
-              <div className="absolute right-0 z-20 mt-1 w-56 rounded-md border border-white/10 bg-slate-900 p-1 text-sm shadow-xl">
+          <SplitButtonMenu
+            disabled={zapierSubmitting || isRunning}
+            menuClassName="border border-white/15 bg-slate-900/60"
+            triggerClassName="text-slate-300 hover:bg-slate-800"
+            dividerClassName="border-l border-white/10"
+            menu={
+              <>
                 <button
                   type="button"
+                  role="menuitem"
                   onClick={() => void handleRunAttentionWorkflow("flagged")}
                   className="block w-full rounded px-3 py-2 text-left text-slate-200 hover:bg-white/5"
                 >
@@ -209,14 +259,25 @@ export function RefreshControls({
                 </button>
                 <button
                   type="button"
+                  role="menuitem"
                   onClick={() => void handleRunAttentionWorkflow("red")}
                   className="block w-full rounded px-3 py-2 text-left text-slate-200 hover:bg-white/5"
                 >
                   Red only · most urgent
                 </button>
-              </div>
-            </details>
-          </div>
+              </>
+            }
+          >
+            <button
+              type="button"
+              onClick={() => void handleRunAttentionWorkflow("flagged")}
+              disabled={zapierSubmitting || isRunning}
+              title="Runs the Zapier workflow for all flagged campaigns (red, orange, yellow). Refresh data first if numbers are stale."
+              className="rounded-l-lg px-4 py-2 text-sm font-medium text-slate-200 transition-colors enabled:hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {zapierSubmitting ? "Starting…" : "Run attention workflow"}
+            </button>
+          </SplitButtonMenu>
         )}
       </div>
       {isRunning && (
