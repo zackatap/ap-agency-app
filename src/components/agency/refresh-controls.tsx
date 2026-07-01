@@ -22,12 +22,30 @@ export function RefreshControls({
 }: Props) {
   const [current, setCurrent] = useState<ClientAgencySnapshot | null>(latest);
   const [submitting, setSubmitting] = useState(false);
+  const [zapierSubmitting, setZapierSubmitting] = useState(false);
+  const [zapierAvailable, setZapierAvailable] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [zapierMessage, setZapierMessage] = useState<string | null>(null);
   const previousStatus = useRef(latest?.status);
 
   useEffect(() => {
     setCurrent(latest);
   }, [latest]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/integrations/attention/trigger", { cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((body: { available?: boolean } | null) => {
+        if (!cancelled) setZapierAvailable(Boolean(body?.available));
+      })
+      .catch(() => {
+        if (!cancelled) setZapierAvailable(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     if (!current || current.status !== "running") return;
@@ -84,6 +102,31 @@ export function RefreshControls({
     }
   }
 
+  async function handleRunAttentionWorkflow(scope: "flagged" | "red") {
+    setZapierSubmitting(true);
+    setZapierMessage(null);
+    setError(null);
+    try {
+      const res = await fetch(
+        `/api/integrations/attention/trigger?scope=${scope}`,
+        { method: "POST" }
+      );
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(body.error ?? "Failed to trigger Zapier");
+      }
+      setZapierMessage(
+        scope === "red"
+          ? "Red-only attention workflow started in Zapier."
+          : "All-flagged attention workflow started in Zapier."
+      );
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Zapier trigger failed");
+    } finally {
+      setZapierSubmitting(false);
+    }
+  }
+
   const isRunning = current?.status === "running";
   const progressPct =
     current && current.progressTotal > 0
@@ -137,6 +180,44 @@ export function RefreshControls({
             </div>
           </details>
         </div>
+        {zapierAvailable && (
+          <div className="flex items-stretch overflow-hidden rounded-lg border border-white/15 bg-slate-900/60">
+            <button
+              type="button"
+              onClick={() => void handleRunAttentionWorkflow("flagged")}
+              disabled={zapierSubmitting || isRunning}
+              title="Runs the Zapier workflow for all flagged campaigns (red, orange, yellow). Refresh data first if numbers are stale."
+              className="px-4 py-2 text-sm font-medium text-slate-200 transition-colors enabled:hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {zapierSubmitting ? "Starting…" : "Run attention workflow"}
+            </button>
+            <details className="relative">
+              <summary
+                className={`flex h-full cursor-pointer items-center border-l border-white/10 px-2 text-sm text-slate-300 hover:bg-slate-800 ${
+                  zapierSubmitting || isRunning ? "pointer-events-none opacity-60" : ""
+                }`}
+              >
+                ▾
+              </summary>
+              <div className="absolute right-0 z-20 mt-1 w-56 rounded-md border border-white/10 bg-slate-900 p-1 text-sm shadow-xl">
+                <button
+                  type="button"
+                  onClick={() => void handleRunAttentionWorkflow("flagged")}
+                  className="block w-full rounded px-3 py-2 text-left text-slate-200 hover:bg-white/5"
+                >
+                  All flagged · red, orange, yellow
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void handleRunAttentionWorkflow("red")}
+                  className="block w-full rounded px-3 py-2 text-left text-slate-200 hover:bg-white/5"
+                >
+                  Red only · most urgent
+                </button>
+              </div>
+            </details>
+          </div>
+        )}
       </div>
       {isRunning && (
         <div className="w-72 space-y-1">
@@ -150,6 +231,11 @@ export function RefreshControls({
             {current?.progressLabel ?? "Running…"} · {current?.progressCurrent}/
             {current?.progressTotal}
           </div>
+        </div>
+      )}
+      {zapierMessage && (
+        <div className="text-xs text-emerald-300" role="status">
+          {zapierMessage}
         </div>
       )}
       {error && (

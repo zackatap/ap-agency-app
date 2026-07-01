@@ -118,10 +118,13 @@ export interface AttentionFeedResult {
  * @param flaggedOnly When true, returns only campaigns that have an attention
  *   flag (matching the sheet's `CI <> '-'` filter), excludes client names with
  *   `*`, and sorts by urgency then name. This is the Attention Dashboard view.
+ * @param urgency When set (e.g. 0 for red), only flagged rows at that urgency
+ *   level are returned. Ignored when flaggedOnly is false.
  */
 export async function buildAttentionFeed(opts?: {
   windows?: number[];
   flaggedOnly?: boolean;
+  urgency?: number;
   /** Viewer tz so windows align with the KPI table's refresh-date anchor. */
   tz?: string;
 }): Promise<AttentionFeedResult> {
@@ -255,8 +258,11 @@ export async function buildAttentionFeed(opts?: {
     finalRows = rows
       .filter((r) => r.flagged === true)
       // Sheet's `NOT B LIKE '%*%'`: drop paused/internal names marked with "*".
-      .filter((r) => !String(r.client_name ?? "").includes("*"))
-      .sort((a, b) => {
+      .filter((r) => !String(r.client_name ?? "").includes("*"));
+    if (typeof opts.urgency === "number") {
+      finalRows = finalRows.filter((r) => r.urgency === opts.urgency);
+    }
+    finalRows = finalRows.sort((a, b) => {
         const ua = (a.urgency as number | null) ?? 99;
         const ub = (b.urgency as number | null) ?? 99;
         if (ua !== ub) return ua - ub;

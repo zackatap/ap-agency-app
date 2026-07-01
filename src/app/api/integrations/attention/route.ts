@@ -16,6 +16,7 @@ export const dynamic = "force-dynamic";
  *
  * Auth: `Authorization: Bearer <ATTENTION_API_KEY>` or `?token=<key>`.
  * `?flagged=0` returns every campaign instead of only the flagged ones.
+ * `?urgency=0` returns only red flags (still requires flagged; use with flagged=1).
  */
 export async function GET(req: Request) {
   const secret = process.env.ATTENTION_API_KEY?.trim();
@@ -37,9 +38,15 @@ export async function GET(req: Request) {
   // Defaults to the flagged-only Attention Dashboard view; ?flagged=0 opts out.
   const flaggedParam = url.searchParams.get("flagged");
   const flaggedOnly = !(flaggedParam === "0" || flaggedParam === "false");
+  const urgencyRaw = url.searchParams.get("urgency");
+  const urgency =
+    urgencyRaw != null && urgencyRaw !== "" ? Number.parseInt(urgencyRaw, 10) : undefined;
 
   try {
-    const feed = await buildAttentionFeed({ flaggedOnly });
+    const feed = await buildAttentionFeed({
+      flaggedOnly,
+      urgency: Number.isFinite(urgency) ? urgency : undefined,
+    });
     const items = feed.rows.map((r) => ({
       reason: r.reason ?? "",
       client: r.client_name ?? "",
