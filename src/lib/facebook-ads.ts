@@ -256,10 +256,17 @@ export async function fetchDailyInsights(
   }
 
   const params = new URLSearchParams({
-    fields: "spend,impressions,clicks,inline_link_clicks,actions,results,conversions",
+    fields: "spend,impressions,clicks,inline_link_clicks,actions,results",
     access_token: token,
     time_range: JSON.stringify({ since, until }),
     time_increment: "1", // daily
+    // Break down by ad set. The `results` field (Ads Manager's Results column)
+    // only populates at the ad-set level — at campaign / account level Meta
+    // can't pick one indicator across mixed optimization goals and returns it
+    // empty, which forced the old buggy guess-the-custom-event fallback. Rows
+    // are re-bucketed by day below, so spend / leads still sum to the campaign
+    // total.
+    level: "adset",
   });
 
   let url: string | null = `${META_GRAPH}/${META_API_VERSION}/${graphId}/insights?${params}`;
@@ -293,7 +300,6 @@ export async function fetchDailyInsights(
           inline_link_clicks?: string;
           actions?: MetaAction[];
           results?: MetaResult[];
-          conversions?: MetaAction[];
         }>;
         paging?: { next?: string };
         error?: { message?: string };
@@ -312,7 +318,7 @@ export async function fetchDailyInsights(
         add(day, "impressions", row.impressions);
         add(day, "clicks", row.clicks);
         add(day, "linkClicks", row.inline_link_clicks);
-        const metaLeads = parseMetaLeads(row.results, row.actions, row.conversions);
+        const metaLeads = parseMetaLeads(row.results, row.actions);
         if (metaLeads) bucketFor(day).metaLeads += metaLeads;
       }
       url = json.paging?.next ?? null;
@@ -405,73 +411,68 @@ const LEAD_RESULT_PRIORITY = [
   "actions:lead",
 ] as const;
 
-function parseResultLeads(raw: unknown): number {
-  if (!Array.isArray(raw)) return 0;
-  const rows = raw as MetaResult[];
-  for (const pref of LEAD_RESULT_PRIORITY) {
-    for (const result of rows) {
-      if (String(result?.indicator ?? "").toLowerCase() !== pref) continue;
-      let best = 0;
-      for (const entry of result?.values ?? []) {
-        best = Math.max(best, parseNumber(entry?.value));
-      }
-      if (best > 0) return best;
-    }
-  }
-  return 0;
-}
-
-/**
- * LP Lead Conversion campaigns optimize for custom pixel events, not standard
- * `lead` actions. Meta puts those in the `conversions` array, often with several
- * overlapping custom event names for the same count — take the max, never sum.
- */
-function parseConversionLeads(raw: unknown): number {
-  if (!Array.isArray(raw)) return 0;
+function valueForResultIndicator(rows: MetaResult[], indicator: string): number {
   let best = 0;
-  for (const row of raw as MetaAction[]) {
-    const type = String(row?.action_type ?? "").toLowerCase();
-    if (
-      !type.startsWith("offsite_conversion.fb_pixel_custom") &&
-      !type.startsWith("offsite_conversion.custom")
-    ) {
-      continue;
+  for (const result of rows) {
+    if (String(result?.indicator ?? "").toLowerCase() !== indicator) continue;
+    for (const entry of result?.values ?? []) {
+      best = Math.max(best, parseNumber(entry?.value));
     }
-    best = Math.max(best, parseNumber(row?.value));
   }
   return best;
 }
 
-/** Same custom conversion events sometimes appear in `actions` instead of `conversions`. */
-function parseCustomConversionActions(actions: MetaAction[]): number {
-  return parseConversionLeads(actions);
+/**
+ * Read leads straight from Ads Manager's Results column (the `results` field).
+ *
+ * At the ad-set level Meta reports exactly one result indicator per ad set —
+ * whatever the ad set optimizes for. Trust it. For standard lead objectives
+ * that's a `..._lead` indicator; LP conversion campaigns report a named custom
+ * conversion (e.g. `actions:offsite_conversion.custom.<id>` = "Casper Sport -
+ * Decomp Targeting"). Both are the correct lead count, so we accept lead
+ * indicators first, then any custom-conversion indicator. Non-lead goals
+ * (link clicks, landing page views, engagement) are ignored.
+ */
+function parseResultLeads(raw: unknown): number {
+  if (!Array.isArray(raw)) return 0;
+  const rows = raw as MetaResult[];
+
+  for (const pref of LEAD_RESULT_PRIORITY) {
+    const value = valueForResultIndicator(rows, pref);
+    if (value > 0) return value;
+  }
+
+  // Custom-conversion goal: the indicator is the campaign's own optimization
+  // event, so it's the real lead count even though the id is arbitrary.
+  let best = 0;
+  for (const result of rows) {
+    const indicator = String(result?.indicator ?? "").toLowerCase();
+    if (!indicator.includes("custom")) continue;
+    for (const entry of result?.values ?? []) {
+      best = Math.max(best, parseNumber(entry?.value));
+    }
+  }
+  return best;
 }
 
 /**
  * Count Meta leads the way Ads Manager's Results column does.
  *
- * Meta emits overlapping action types for the same lead (`lead` is a superset of
- * `onsite_conversion.lead_grouped`). Pick the most specific type first — do NOT
- * take the max across types or the broad `lead` count wins (e.g. 55 vs 19).
- *
- * LP conversion campaigns report via custom pixel events in `conversions` when
- * standard lead actions are absent.
+ * The `results` field IS that column, so it's authoritative — it already covers
+ * both standard lead objectives and LP custom-conversion goals (see
+ * {@link parseResultLeads}). When Meta doesn't provide a results breakdown
+ * (older data, or a non-ad-set fetch) we fall back to standard lead *actions*
+ * only, in priority order. We deliberately do NOT guess at custom-conversion
+ * `actions` / `conversions` here: those arrays carry shared agency pixel events
+ * (e.g. a template "book a call" custom conversion firing 500+ times across
+ * every client) that have nothing to do with this campaign's leads and wildly
+ * inflate the count. If it's a real lead, it shows up in `results`.
  */
-function parseMetaLeads(
-  results: unknown,
-  actions: unknown,
-  conversions?: unknown
-): number {
+function parseMetaLeads(results: unknown, actions: unknown): number {
   const fromResults = parseResultLeads(results);
   if (fromResults > 0) return fromResults;
   if (Array.isArray(actions)) {
-    const fromActions = leadsFromActions(actions as MetaAction[]);
-    if (fromActions > 0) return fromActions;
-  }
-  const fromConversions = parseConversionLeads(conversions);
-  if (fromConversions > 0) return fromConversions;
-  if (Array.isArray(actions)) {
-    return parseCustomConversionActions(actions as MetaAction[]);
+    return leadsFromActions(actions as MetaAction[]);
   }
   return 0;
 }
@@ -520,7 +521,7 @@ export async function fetchAdInsights(
 
   const params = new URLSearchParams({
     fields:
-      "ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,spend,impressions,reach,frequency,clicks,inline_link_clicks,ctr,cpc,cpm,actions,results,conversions",
+      "ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,spend,impressions,reach,frequency,clicks,inline_link_clicks,ctr,cpc,cpm,actions,results",
     level: "ad",
     time_range: JSON.stringify({ since, until }),
     access_token: token,
@@ -576,7 +577,7 @@ export async function fetchAdInsights(
           ctr: parseNullableNumber(row.ctr),
           cpc: parseNullableNumber(row.cpc),
           cpm: parseNullableNumber(row.cpm),
-          leads: parseMetaLeads(row.results, row.actions, row.conversions),
+          leads: parseMetaLeads(row.results, row.actions),
         };
         byAdId.set(adId, mergeAdInsight(byAdId.get(adId), next));
       }
