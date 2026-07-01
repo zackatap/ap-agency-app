@@ -256,7 +256,7 @@ export async function fetchDailyInsights(
   }
 
   const params = new URLSearchParams({
-    fields: "spend,impressions,clicks,inline_link_clicks,actions,results",
+    fields: "spend,impressions,clicks,inline_link_clicks,actions,results,conversions",
     access_token: token,
     time_range: JSON.stringify({ since, until }),
     time_increment: "1", // daily
@@ -293,6 +293,7 @@ export async function fetchDailyInsights(
           inline_link_clicks?: string;
           actions?: MetaAction[];
           results?: MetaResult[];
+          conversions?: MetaAction[];
         }>;
         paging?: { next?: string };
         error?: { message?: string };
@@ -311,7 +312,7 @@ export async function fetchDailyInsights(
         add(day, "impressions", row.impressions);
         add(day, "clicks", row.clicks);
         add(day, "linkClicks", row.inline_link_clicks);
-        const metaLeads = parseMetaLeads(row.results, row.actions);
+        const metaLeads = parseMetaLeads(row.results, row.actions, row.conversions);
         if (metaLeads) bucketFor(day).metaLeads += metaLeads;
       }
       url = json.paging?.next ?? null;
@@ -371,6 +372,7 @@ const LEAD_ACTION_PRIORITY = [
   "onsite_conversion.lead_grouped",
   "leadgen.other",
   "leadgen_grouped",
+  "onsite_web_lead",
   "offsite_conversion.fb_pixel_lead",
   "lead",
 ] as const;
@@ -420,17 +422,58 @@ function parseResultLeads(raw: unknown): number {
 }
 
 /**
- * Count Meta leads the way Ads Manager's "Leads (Form)" / Results column does.
+ * LP Lead Conversion campaigns optimize for custom pixel events, not standard
+ * `lead` actions. Meta puts those in the `conversions` array, often with several
+ * overlapping custom event names for the same count — take the max, never sum.
+ */
+function parseConversionLeads(raw: unknown): number {
+  if (!Array.isArray(raw)) return 0;
+  let best = 0;
+  for (const row of raw as MetaAction[]) {
+    const type = String(row?.action_type ?? "").toLowerCase();
+    if (
+      !type.startsWith("offsite_conversion.fb_pixel_custom") &&
+      !type.startsWith("offsite_conversion.custom")
+    ) {
+      continue;
+    }
+    best = Math.max(best, parseNumber(row?.value));
+  }
+  return best;
+}
+
+/** Same custom conversion events sometimes appear in `actions` instead of `conversions`. */
+function parseCustomConversionActions(actions: MetaAction[]): number {
+  return parseConversionLeads(actions);
+}
+
+/**
+ * Count Meta leads the way Ads Manager's Results column does.
  *
  * Meta emits overlapping action types for the same lead (`lead` is a superset of
  * `onsite_conversion.lead_grouped`). Pick the most specific type first — do NOT
  * take the max across types or the broad `lead` count wins (e.g. 55 vs 19).
+ *
+ * LP conversion campaigns report via custom pixel events in `conversions` when
+ * standard lead actions are absent.
  */
-function parseMetaLeads(results: unknown, actions: unknown): number {
+function parseMetaLeads(
+  results: unknown,
+  actions: unknown,
+  conversions?: unknown
+): number {
   const fromResults = parseResultLeads(results);
   if (fromResults > 0) return fromResults;
-  if (!Array.isArray(actions)) return 0;
-  return leadsFromActions(actions as MetaAction[]);
+  if (Array.isArray(actions)) {
+    const fromActions = leadsFromActions(actions as MetaAction[]);
+    if (fromActions > 0) return fromActions;
+  }
+  const fromConversions = parseConversionLeads(conversions);
+  if (fromConversions > 0) return fromConversions;
+  if (Array.isArray(actions)) {
+    return parseCustomConversionActions(actions as MetaAction[]);
+  }
+  return 0;
 }
 
 function mergeAdInsight(
@@ -477,7 +520,7 @@ export async function fetchAdInsights(
 
   const params = new URLSearchParams({
     fields:
-      "ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,spend,impressions,reach,frequency,clicks,inline_link_clicks,ctr,cpc,cpm,actions,results",
+      "ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,spend,impressions,reach,frequency,clicks,inline_link_clicks,ctr,cpc,cpm,actions,results,conversions",
     level: "ad",
     time_range: JSON.stringify({ since, until }),
     access_token: token,
@@ -533,7 +576,7 @@ export async function fetchAdInsights(
           ctr: parseNullableNumber(row.ctr),
           cpc: parseNullableNumber(row.cpc),
           cpm: parseNullableNumber(row.cpm),
-          leads: parseMetaLeads(row.results, row.actions),
+          leads: parseMetaLeads(row.results, row.actions, row.conversions),
         };
         byAdId.set(adId, mergeAdInsight(byAdId.get(adId), next));
       }
