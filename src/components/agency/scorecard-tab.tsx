@@ -40,13 +40,23 @@ const SCORECARD_METRICS: Array<{ key: MetricKey; label: string }> = [
 /** Always show CRM vs Meta when either side has a count this window. */
 function leadSourceComparison(
   totals: ClientCampaignWindowTotals
-): { crm: number; meta: number; direction: "meta_high" | "crm_high" | "match" } | null {
+): {
+  crm: number;
+  meta: number;
+  direction: "meta_high" | "crm_high" | "match";
+  largeGap: boolean;
+} | null {
   const crm = typeof totals.leads === "number" ? totals.leads : 0;
   const meta = typeof totals.metaLeads === "number" ? totals.metaLeads : 0;
   if (crm === 0 && meta === 0) return null;
-  if (meta > crm) return { crm, meta, direction: "meta_high" };
-  if (crm > meta) return { crm, meta, direction: "crm_high" };
-  return { crm, meta, direction: "match" };
+  const direction =
+    meta > crm ? "meta_high" : crm > meta ? "crm_high" : "match";
+  const diff = Math.abs(crm - meta);
+  const base = Math.min(crm, meta);
+  // e.g. 10 vs 15 → 5/10 = 50%. One side at 0 with the other > 0 always flags.
+  const largeGap =
+    direction !== "match" && (base === 0 || diff / base >= 0.5);
+  return { crm, meta, direction, largeGap };
 }
 
 function metricValue(
@@ -695,8 +705,9 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
                             : cmp.direction === "crm_high"
                               ? `CRM has ${cmp.crm} leads; Meta attributed ${cmp.meta}. Extra CRM leads are usually organic/referral or missing pixel/CAPI tagging.`
                               : `CRM and Meta agree: ${cmp.crm} leads this window.`;
-                        const dotClass =
-                          cmp.direction === "meta_high"
+                        const dotClass = cmp.largeGap
+                          ? "bg-red-400"
+                          : cmp.direction === "meta_high"
                             ? "bg-amber-400"
                             : cmp.direction === "crm_high"
                               ? "bg-slate-400"
@@ -704,7 +715,11 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
                         return (
                           <span
                             title={title}
-                            className="mt-1 inline-flex items-center gap-1 rounded-full bg-slate-500/15 px-2 py-0.5 text-[11px] font-medium text-slate-300 ring-1 ring-slate-400/30"
+                            className={`mt-1 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ${
+                              cmp.largeGap
+                                ? "bg-red-500/10 text-red-200 ring-red-400/60"
+                                : "bg-slate-500/15 text-slate-300 ring-slate-400/30"
+                            }`}
                           >
                             <span className={`h-1.5 w-1.5 rounded-full ${dotClass}`} />
                             Leads: CRM {cmp.crm} · Meta {cmp.meta}
