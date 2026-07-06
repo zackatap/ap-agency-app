@@ -1,6 +1,13 @@
 "use client";
 
-import { Fragment, useCallback, useEffect, useMemo, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import type {
   ClientCampaignWindowTotals,
   ClientCampaignSummary,
@@ -270,6 +277,8 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
   const [attentionByKey, setAttentionByKey] = useState<Map<string, AttentionInfo>>(
     new Map()
   );
+  // Campaigns whose per-account Meta retry is in flight.
+  const [retryingKeys, setRetryingKeys] = useState<Set<string>>(new Set());
 
   const load = useCallback(
     async (preset: WindowId, from?: string, to?: string) => {
@@ -345,6 +354,40 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
     }
     void load(windowId);
   }, [load, windowId, reloadKey, appliedCustom]);
+
+  const retryCampaign = useCallback(
+    async (campaignKey: string) => {
+      setRetryingKeys((prev) => new Set(prev).add(campaignKey));
+      try {
+        const res = await fetch(
+          `/api/agency/rollup/refresh-campaign?campaignKey=${encodeURIComponent(
+            campaignKey
+          )}`,
+          { method: "POST" }
+        );
+        if (!res.ok) {
+          const body = await res.json().catch(() => ({}));
+          setError(body.error ?? "Retry failed");
+          return;
+        }
+        // Pull the fresh slice back into the table.
+        if (windowId === "custom" && appliedCustom) {
+          await load("custom", appliedCustom.from, appliedCustom.to);
+        } else {
+          await load(windowId);
+        }
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Retry failed");
+      } finally {
+        setRetryingKeys((prev) => {
+          const next = new Set(prev);
+          next.delete(campaignKey);
+          return next;
+        });
+      }
+    },
+    [load, windowId, appliedCustom]
+  );
 
   const applyCustomRange = useCallback(() => {
     if (!customFrom || !customTo) return;
@@ -759,12 +802,28 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
                         const noSpend = spend == null || spend === 0;
                         if (!c.metaError || !noSpend) return null;
 
-                        // Temporary failures (throttling or a Meta/network
-                        // hiccup) clear themselves and are auto-retried —
-                        // "Connect" won't fix them, so don't send anyone chasing
-                        // Business settings. Show a neutral, self-explaining
-                        // badge instead of the amber "not connected" alarm.
                         const kind = metaErrorKind(c.metaError);
+                        const retrying = retryingKeys.has(c.campaignKey);
+
+                        // Re-pull just this account into the current snapshot —
+                        // one Meta call, not a full-agency refresh.
+                        const retryButton = (
+                          <button
+                            type="button"
+                            onClick={() => void retryCampaign(c.campaignKey)}
+                            disabled={retrying}
+                            title="Re-pull just this account's Meta data into the current snapshot. Doesn't re-run the whole agency, so it won't burn API quota."
+                            className="inline-flex items-center gap-1 rounded-full bg-white/5 px-2 py-0.5 text-[11px] font-medium text-slate-300 ring-1 ring-white/10 transition-colors hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            {retrying ? "Retrying…" : "Retry ↻"}
+                          </button>
+                        );
+
+                        // Temporary failures (throttling or a Meta/network
+                        // hiccup) clear themselves — "Connect" won't fix them,
+                        // so show a neutral, self-explaining badge instead of
+                        // the amber "not connected" alarm.
+                        let badge: ReactNode = null;
                         if (kind === "rate-limit" || kind === "transient") {
                           const isRate = kind === "rate-limit";
                           const label = isRate
@@ -773,10 +832,10 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
                           const title = isRate
                             ? `Meta throttled this ad account — ${c.metaError}. App-level rate limit, not a disconnect. It clears on its own (usually within the hour) and the numbers backfill on the next refresh.`
                             : `Meta couldn't be reached for this ad account — ${c.metaError}. A transient Meta/API hiccup, not a disconnect. It's retried automatically and backfills on the next refresh.`;
-                          return (
+                          badge = (
                             <span
                               title={title}
-                              className={`mt-1 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ${
+                              className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ${
                                 isRate
                                   ? "bg-sky-500/15 text-sky-200 ring-sky-500/30"
                                   : "bg-slate-500/15 text-slate-300 ring-slate-400/30"
@@ -790,22 +849,28 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
                               {label}
                             </span>
                           );
+                        } else if (c.metaConnectUrl) {
+                          // Genuine "app not assigned" — keep the connect link.
+                          badge = (
+                            <a
+                              href={c.metaConnectUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              title={`Meta API can't read this ad account — ${c.metaError}. Click to assign the app in Business settings.`}
+                              className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-200 ring-1 ring-amber-500/30 transition-colors hover:bg-amber-500/25"
+                            >
+                              <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+                              Meta not connected · Connect ↗
+                            </a>
+                          );
                         }
 
-                        // Genuine "app not assigned to this ad account" — keep
-                        // the actionable connect deep link.
-                        if (!c.metaConnectUrl) return null;
+                        if (!badge) return null;
                         return (
-                          <a
-                            href={c.metaConnectUrl}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            title={`Meta API can't read this ad account — ${c.metaError}. Click to assign the app in Business settings.`}
-                            className="mt-1 inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-200 ring-1 ring-amber-500/30 transition-colors hover:bg-amber-500/25"
-                          >
-                            <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
-                            Meta not connected · Connect ↗
-                          </a>
+                          <div className="mt-1 flex flex-wrap items-center gap-1">
+                            {badge}
+                            {retryButton}
+                          </div>
                         );
                       })()}
                       {(() => {

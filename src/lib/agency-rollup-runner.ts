@@ -59,6 +59,7 @@ import {
   upsertCampaigns,
   upsertCampaignRuns,
   getRunningSnapshot,
+  getLatestCompleteSnapshot,
   expireStaleRunningSnapshots,
   type AgencyCampaignDay,
   type AgencySnapshot,
@@ -285,6 +286,81 @@ export async function startRollupRefresh(
   }
 
   return { status: "started", snapshotId: snapshot.id };
+}
+
+/**
+ * Re-run a SINGLE campaign into the latest complete snapshot, in place. Used by
+ * the per-account "Retry" button so a Meta timeout / transient error on one ad
+ * account can be re-pulled without re-running the whole agency (which burns Meta
+ * quota). Reuses {@link processLocation} scoped to one campaign; the day-row and
+ * run upserts (ON CONFLICT DO UPDATE) overwrite that campaign's slice of the
+ * current snapshot and clear its stored metaError on success.
+ */
+export async function refreshCampaignInLatestSnapshot(
+  campaignKey: string
+): Promise<{ status: "ok" | "error"; message?: string }> {
+  const snapshot = await getLatestCompleteSnapshot();
+  if (!snapshot) {
+    return {
+      status: "error",
+      message: "No completed snapshot yet — run a full refresh first.",
+    };
+  }
+
+  const { campaigns, error: sheetError } = await listActiveCampaigns();
+  const campaign = campaigns.find((c) => c.campaignKey === campaignKey);
+  if (!campaign) {
+    return {
+      status: "error",
+      message: sheetError
+        ? `Couldn't load the client roster: ${sheetError}`
+        : "Campaign not found in the current roster.",
+    };
+  }
+
+  const months = snapshot.monthsCovered || DEFAULT_MONTHS;
+  const sortedRanges = getMonthsBack(months)
+    .slice()
+    .sort((a, b) => a.startDate.localeCompare(b.startDate));
+  const windowRange = {
+    startDate: sortedRanges[0]?.startDate ?? "",
+    endDate: sortedRanges[sortedRanges.length - 1]?.endDate ?? "",
+  };
+
+  const fbCampaignCache = new Map<
+    string,
+    Promise<{ campaigns: FacebookCampaign[]; error?: string }>
+  >();
+  const getFbCampaigns = (adAccountId: string) => {
+    let promise = fbCampaignCache.get(adAccountId);
+    if (!promise) {
+      promise = fetchCampaigns(adAccountId);
+      fbCampaignCache.set(adAccountId, promise);
+    }
+    return promise;
+  };
+
+  setMetaRetryDeadline(Date.now() + META_RETRY_BUDGET_MS);
+  try {
+    await processLocation({
+      snapshotId: snapshot.id,
+      locationId: campaign.locationId,
+      campaignsAtLocation: [campaign],
+      windowRange,
+      getFbCampaigns,
+      onCampaignResult: () => {},
+      pushError: () => {},
+    });
+  } catch (err) {
+    return {
+      status: "error",
+      message: err instanceof Error ? err.message : "Retry failed",
+    };
+  } finally {
+    setMetaRetryDeadline(null);
+  }
+
+  return { status: "ok" };
 }
 
 async function executeRollup(
