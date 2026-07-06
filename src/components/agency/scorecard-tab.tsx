@@ -38,21 +38,40 @@ const SCORECARD_METRICS: Array<{ key: MetricKey; label: string }> = [
 ];
 
 /**
- * Does this Meta error read like throttling (temporary) rather than a real
- * "app not assigned to the ad account" disconnect (needs action)? Mirrors the
- * server-side `isMetaRateLimitError`, kept local so this client component
- * doesn't pull the Graph fetch module into the browser bundle.
+ * Classify a persisted Meta error message so the UI can react appropriately:
+ *   rate-limit → we're throttled (temporary, self-clears)
+ *   transient  → a Meta/network hiccup (temporary, auto-retried)
+ *   disconnect → a real "app not assigned / no permission" (needs action)
+ * Mirrors the server-side `isMetaRateLimitError` / `isMetaTransientError`,
+ * kept local so this client component doesn't pull the Graph fetch module
+ * (and its token access) into the browser bundle.
  */
-function looksLikeMetaRateLimit(message: string | null | undefined): boolean {
-  if (!message) return false;
+function metaErrorKind(
+  message: string | null | undefined
+): "rate-limit" | "transient" | "disconnect" {
+  if (!message) return "disconnect";
   const m = message.toLowerCase();
-  return (
+  if (
     m.includes("request limit reached") ||
     m.includes("rate limit") ||
     m.includes("too many calls") ||
     m.includes("user request limit") ||
     m.includes("calls to this api have exceeded")
-  );
+  ) {
+    return "rate-limit";
+  }
+  if (
+    m.includes("temporarily unavailable") ||
+    m.includes("unknown error") ||
+    m.includes("non-json response") ||
+    m.includes("timeout") ||
+    m.includes("timed out") ||
+    m.includes("please reduce the amount of data") ||
+    m.includes("try again")
+  ) {
+    return "transient";
+  }
+  return "disconnect";
 }
 
 /** Always show CRM vs Meta when either side has a count this window. */
@@ -740,18 +759,35 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
                         const noSpend = spend == null || spend === 0;
                         if (!c.metaError || !noSpend) return null;
 
-                        // A rate limit is temporary and clears itself —
-                        // "Connect" won't fix it, so don't send anyone chasing
+                        // Temporary failures (throttling or a Meta/network
+                        // hiccup) clear themselves and are auto-retried —
+                        // "Connect" won't fix them, so don't send anyone chasing
                         // Business settings. Show a neutral, self-explaining
                         // badge instead of the amber "not connected" alarm.
-                        if (looksLikeMetaRateLimit(c.metaError)) {
+                        const kind = metaErrorKind(c.metaError);
+                        if (kind === "rate-limit" || kind === "transient") {
+                          const isRate = kind === "rate-limit";
+                          const label = isRate
+                            ? "Meta rate limited"
+                            : "Meta temporarily down";
+                          const title = isRate
+                            ? `Meta throttled this ad account — ${c.metaError}. App-level rate limit, not a disconnect. It clears on its own (usually within the hour) and the numbers backfill on the next refresh.`
+                            : `Meta couldn't be reached for this ad account — ${c.metaError}. A transient Meta/API hiccup, not a disconnect. It's retried automatically and backfills on the next refresh.`;
                           return (
                             <span
-                              title={`Meta throttled this ad account — ${c.metaError}. This is an app-level rate limit, not a disconnect. It clears on its own (usually within the hour) and the numbers backfill on the next refresh.`}
-                              className="mt-1 inline-flex items-center gap-1 rounded-full bg-sky-500/15 px-2 py-0.5 text-[11px] font-medium text-sky-200 ring-1 ring-sky-500/30"
+                              title={title}
+                              className={`mt-1 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ${
+                                isRate
+                                  ? "bg-sky-500/15 text-sky-200 ring-sky-500/30"
+                                  : "bg-slate-500/15 text-slate-300 ring-slate-400/30"
+                              }`}
                             >
-                              <span className="h-1.5 w-1.5 rounded-full bg-sky-400" />
-                              Meta rate limited
+                              <span
+                                className={`h-1.5 w-1.5 rounded-full ${
+                                  isRate ? "bg-sky-400" : "bg-slate-400"
+                                }`}
+                              />
+                              {label}
                             </span>
                           );
                         }

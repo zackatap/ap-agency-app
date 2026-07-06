@@ -50,14 +50,27 @@ export function getMetaUsageSnapshot(): MetaUsageSnapshot | null {
  */
 const RATE_LIMIT_CODES = new Set([4, 17, 32, 613]);
 
+/**
+ * Graph error codes that are transient server hiccups, not our fault, and
+ * Meta's own docs say to just retry:
+ *   1 - "An unknown error occurred"
+ *   2 - "Service temporarily unavailable"
+ * These spike when the rollup hammers Meta under load and clear on a retry.
+ */
+const TRANSIENT_CODES = new Set([1, 2]);
+
 /** Backoff schedule. Length = max retries. Short on purpose — we're smoothing
  * transient bursts within a rollup, not waiting out a full hour-long block. */
 const RETRY_DELAYS_MS = [1500, 4000, 9000];
 
-function isRateLimitCode(code: unknown): boolean {
+function isRetryableCode(code: unknown): boolean {
   const n = typeof code === "number" ? code : Number(code);
   if (!Number.isFinite(n)) return false;
-  return RATE_LIMIT_CODES.has(n) || (n >= 80000 && n <= 80014);
+  return (
+    RATE_LIMIT_CODES.has(n) ||
+    TRANSIENT_CODES.has(n) ||
+    (n >= 80000 && n <= 80014)
+  );
 }
 
 /**
@@ -74,6 +87,26 @@ export function isMetaRateLimitError(message: string | null | undefined): boolea
     m.includes("too many calls") ||
     m.includes("user request limit") ||
     m.includes("calls to this api have exceeded")
+  );
+}
+
+/**
+ * Transient Meta/network failures that self-heal: server hiccups, gateway
+ * pages, timeouts. Distinct from a rate limit (see {@link isMetaRateLimitError})
+ * and from a real "app not assigned / no permission" disconnect. Used by the UI
+ * so these don't masquerade as "Meta not connected".
+ */
+export function isMetaTransientError(message: string | null | undefined): boolean {
+  if (!message) return false;
+  const m = message.toLowerCase();
+  return (
+    m.includes("temporarily unavailable") ||
+    m.includes("unknown error") ||
+    m.includes("non-json response") ||
+    m.includes("timeout") ||
+    m.includes("timed out") ||
+    m.includes("please reduce the amount of data") ||
+    m.includes("try again")
   );
 }
 
@@ -153,34 +186,75 @@ interface MetaGraphError {
   type?: string;
 }
 
+/** Build a synthetic Graph response carrying just an error message. */
+function graphErrorResult<T>(message: string): T {
+  return { error: { message } } as unknown as T;
+}
+
+async function backoff(attempt: number, reason: string): Promise<void> {
+  console.warn(
+    `[facebook-ads] Meta transient error (${reason}) — retry ${
+      attempt + 1
+    }/${RETRY_DELAYS_MS.length} in ${RETRY_DELAYS_MS[attempt]}ms`
+  );
+  return sleep(RETRY_DELAYS_MS[attempt]);
+}
+
 /**
  * Single choke point for every Graph API request. Records usage headers and
- * retries with backoff when Meta reports a rate-limit error code, so a
- * transient "Application request limit reached" during a rollup self-heals
- * instead of leaving the account showing 0 spend / "not connected".
+ * retries with backoff on the things that self-heal — rate-limit codes,
+ * transient Meta errors (codes 1/2), 5xx responses, HTML/gateway pages that
+ * aren't valid JSON, and network failures — so a blip during a rollup doesn't
+ * leave an account showing 0 spend / "not connected". A retried-to-death
+ * failure returns a clean error message instead of a raw JSON-parse exception.
  */
 async function metaGraphFetch<T extends { error?: MetaGraphError }>(
   url: string
 ): Promise<T> {
-  let lastJson: T | null = null;
+  let lastMessage = "Meta request failed";
   for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
-    const res = await fetch(url);
+    const canRetry = attempt < RETRY_DELAYS_MS.length;
+
+    let res: Response;
+    try {
+      res = await fetch(url);
+    } catch (err) {
+      lastMessage =
+        err instanceof Error ? err.message : "Network error reaching Meta";
+      if (canRetry) {
+        await backoff(attempt, "network error");
+        continue;
+      }
+      return graphErrorResult<T>(lastMessage);
+    }
+
     recordUsage(res);
-    const json = (await res.json()) as T;
-    lastJson = json;
+
+    const raw = await res.text();
+    let json: T;
+    try {
+      json = JSON.parse(raw) as T;
+    } catch {
+      // Meta returned an HTML error / gateway page instead of JSON — transient.
+      lastMessage = `Meta API temporarily unavailable (non-JSON response, HTTP ${res.status})`;
+      if (canRetry) {
+        await backoff(attempt, `HTTP ${res.status} non-JSON`);
+        continue;
+      }
+      return graphErrorResult<T>(lastMessage);
+    }
+
     const err = json.error;
-    if (err && isRateLimitCode(err.code) && attempt < RETRY_DELAYS_MS.length) {
-      console.warn(
-        `[facebook-ads] Meta rate limit (code ${err.code}) — retry ${
-          attempt + 1
-        }/${RETRY_DELAYS_MS.length} in ${RETRY_DELAYS_MS[attempt]}ms`
-      );
-      await sleep(RETRY_DELAYS_MS[attempt]);
+    const serverError = res.status >= 500 && res.status < 600;
+    const retryable = serverError || (err != null && isRetryableCode(err.code));
+    if (retryable && canRetry) {
+      lastMessage = err?.message ?? `HTTP ${res.status}`;
+      await backoff(attempt, err?.code ? `code ${err.code}` : `HTTP ${res.status}`);
       continue;
     }
     return json;
   }
-  return lastJson as T;
+  return graphErrorResult<T>(lastMessage);
 }
 
 /** Ensure ad account ID has act_ prefix */
