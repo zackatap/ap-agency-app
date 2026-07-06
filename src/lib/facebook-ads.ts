@@ -536,28 +536,63 @@ export interface DailyInsight {
   metaLeads: number;
 }
 
-/**
- * Fetch Meta insights bucketed by DAY over an inclusive `[since, until]`
- * window. Like {@link fetchSpendByDay} but also returns impressions, clicks,
- * and inline link clicks so the agency rollup can derive CPLC / CTR. Returns a
- * sparse map keyed by YYYY-MM-DD (empty object on error). Follows pagination.
- */
-export async function fetchDailyInsights(
-  nodeId: string,
-  isCampaign: boolean,
+/** Chunk size (days) for the date-split fallback on heavy accounts. */
+const DAILY_INSIGHTS_CHUNK_DAYS = 90;
+
+function toIsoDay(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+/** Split an inclusive [since, until] date range into <= chunkDays windows. */
+function splitDateRange(
+  since: string,
+  until: string,
+  chunkDays: number
+): Array<{ since: string; until: string }> {
+  const start = new Date(`${since}T00:00:00Z`);
+  const end = new Date(`${until}T00:00:00Z`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) {
+    return [{ since, until }];
+  }
+  const chunks: Array<{ since: string; until: string }> = [];
+  let cursor = start;
+  while (cursor <= end) {
+    const chunkEnd = new Date(cursor);
+    chunkEnd.setUTCDate(chunkEnd.getUTCDate() + chunkDays - 1);
+    const clampedEnd = chunkEnd > end ? end : chunkEnd;
+    chunks.push({ since: toIsoDay(cursor), until: toIsoDay(clampedEnd) });
+    cursor = new Date(clampedEnd);
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return chunks;
+}
+
+function mergeDailyInsight(
+  target: Record<string, DailyInsight>,
+  day: string,
+  src: DailyInsight
+): void {
+  const bucket = (target[day] ??= {
+    spend: 0,
+    impressions: 0,
+    clicks: 0,
+    linkClicks: 0,
+    metaLeads: 0,
+  });
+  bucket.spend += src.spend;
+  bucket.impressions += src.impressions;
+  bucket.clicks += src.clicks;
+  bucket.linkClicks += src.linkClicks;
+  bucket.metaLeads += src.metaLeads;
+}
+
+/** Fetch daily insights for one date window (paginated). */
+async function fetchDailyInsightsWindow(
+  graphId: string,
+  token: string,
   since: string,
   until: string
 ): Promise<{ insightsByDate: Record<string, DailyInsight>; error?: string }> {
-  const token = getAccessToken();
-  if (!token) {
-    return { insightsByDate: {}, error: "META_ACCESS_TOKEN not configured" };
-  }
-
-  const graphId = isCampaign ? nodeId : normalizeAdAccountId(nodeId);
-  if (!graphId) {
-    return { insightsByDate: {}, error: "Invalid ad account or campaign ID" };
-  }
-
   const params = new URLSearchParams({
     fields: "spend,impressions,clicks,inline_link_clicks,actions,results",
     access_token: token,
@@ -632,6 +667,76 @@ export async function fetchDailyInsights(
       error: err instanceof Error ? err.message : "Failed to fetch daily insights",
     };
   }
+}
+
+/**
+ * Fetch Meta insights bucketed by DAY over an inclusive `[since, until]`
+ * window. Also returns impressions, clicks, and inline link clicks so the
+ * agency rollup can derive CPLC / CTR. Returns a sparse map keyed by
+ * YYYY-MM-DD (empty object on error).
+ *
+ * Tries the whole window in one paginated pass first (cheapest — one call for
+ * healthy accounts). Heavy accounts (13 months of daily ad-set data) can be too
+ * slow for Meta to compute and time out; when the single pass fails
+ * transiently, we retry in {@link DAILY_INSIGHTS_CHUNK_DAYS}-day chunks that
+ * each compute fast enough to finish, and merge them. Costs a few extra calls
+ * only for the accounts that actually need it.
+ */
+export async function fetchDailyInsights(
+  nodeId: string,
+  isCampaign: boolean,
+  since: string,
+  until: string
+): Promise<{ insightsByDate: Record<string, DailyInsight>; error?: string }> {
+  const token = getAccessToken();
+  if (!token) {
+    return { insightsByDate: {}, error: "META_ACCESS_TOKEN not configured" };
+  }
+
+  const graphId = isCampaign ? nodeId : normalizeAdAccountId(nodeId);
+  if (!graphId) {
+    return { insightsByDate: {}, error: "Invalid ad account or campaign ID" };
+  }
+
+  const full = await fetchDailyInsightsWindow(graphId, token, since, until);
+  if (!full.error) return { insightsByDate: full.insightsByDate };
+
+  // Only worth splitting if the failure is the kind smaller windows can fix
+  // (timeout / temporarily unavailable / throttle). A permission error would
+  // just fail on every chunk too.
+  if (!isMetaTransientError(full.error) && !isMetaRateLimitError(full.error)) {
+    return full;
+  }
+
+  const chunks = splitDateRange(since, until, DAILY_INSIGHTS_CHUNK_DAYS);
+  if (chunks.length <= 1) return full;
+
+  console.warn(
+    `[facebook-ads] daily insights for ${graphId} failed on the full window (${full.error}); retrying in ${chunks.length} chunks`
+  );
+
+  const merged: Record<string, DailyInsight> = {};
+  let lastChunkError: string | undefined;
+  for (const chunk of chunks) {
+    const res = await fetchDailyInsightsWindow(
+      graphId,
+      token,
+      chunk.since,
+      chunk.until
+    );
+    for (const [day, insight] of Object.entries(res.insightsByDate)) {
+      mergeDailyInsight(merged, day, insight);
+    }
+    if (res.error) lastChunkError = res.error;
+  }
+
+  // Partial data beats none: only surface an error if every chunk came back
+  // empty (so we truly got nothing).
+  const gotData = Object.keys(merged).length > 0;
+  return {
+    insightsByDate: merged,
+    error: gotData ? undefined : lastChunkError ?? full.error,
+  };
 }
 
 export type MetaInsightsLevel = "campaign" | "adset" | "ad";
