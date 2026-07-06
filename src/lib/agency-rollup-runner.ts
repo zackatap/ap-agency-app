@@ -43,6 +43,7 @@ import {
   fetchCampaigns,
   fetchDailyInsights,
   getMetaUsageSnapshot,
+  setMetaRetryDeadline,
   type DailyInsight,
   type FacebookCampaign,
 } from "@/lib/facebook-ads";
@@ -65,6 +66,13 @@ import {
 
 const ROLLUP_CONCURRENCY = 6;
 const DEFAULT_MONTHS = 13;
+
+/**
+ * Stop retrying Meta calls this long into a run. The refresh route runs with
+ * maxDuration=800s; cutting retries at ~10min leaves headroom for the base
+ * (12s-timeout) fetches and DB writes to drain so the snapshot still finishes.
+ */
+const META_RETRY_BUDGET_MS = 10 * 60_000;
 
 /**
  * Data-hygiene thresholds.
@@ -286,6 +294,12 @@ async function executeRollup(
 ): Promise<void> {
   const errors: SnapshotError[] = [];
 
+  // Cap how long Meta retries are allowed to run so a flaky Meta can't drag the
+  // whole rollup past the platform function timeout (which leaves the snapshot
+  // stuck "running" → "timed out" and no fresh data). Reset in finally.
+  setMetaRetryDeadline(Date.now() + META_RETRY_BUDGET_MS);
+  try {
+
   await updateSnapshotProgress(snapshotId, {
     progressLabel: "Loading client roster",
   });
@@ -437,6 +451,9 @@ async function executeRollup(
     // "how much budget did this refresh burn" reading.
     metaUsage: getMetaUsageSnapshot(),
   });
+  } finally {
+    setMetaRetryDeadline(null);
+  }
 }
 
 /**

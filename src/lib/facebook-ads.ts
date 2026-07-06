@@ -61,7 +61,31 @@ const TRANSIENT_CODES = new Set([1, 2]);
 
 /** Backoff schedule. Length = max retries. Short on purpose — we're smoothing
  * transient bursts within a rollup, not waiting out a full hour-long block. */
-const RETRY_DELAYS_MS = [1500, 4000, 9000];
+const RETRY_DELAYS_MS = [1000, 3000];
+
+/**
+ * Hard per-request timeout. Node's fetch has no default, so when Meta hangs
+ * (degraded gateway / slow HTML error page) a single call can stall for
+ * minutes and starve a rollup worker. Abort well short of that so the run
+ * keeps moving.
+ */
+const REQUEST_TIMEOUT_MS = 12_000;
+
+/**
+ * Run-level guard so retries can't cascade a whole rollup past the platform's
+ * function timeout. The runner sets a deadline at the start of a batch; once
+ * we're past it we stop spending time on backoff and fail fast, so partial
+ * data still lands instead of the run getting killed with nothing.
+ */
+let retryDeadline: number | null = null;
+
+export function setMetaRetryDeadline(atEpochMs: number | null): void {
+  retryDeadline = atEpochMs;
+}
+
+function retriesAllowed(): boolean {
+  return retryDeadline == null || Date.now() < retryDeadline;
+}
 
 function isRetryableCode(code: unknown): boolean {
   const n = typeof code === "number" ? code : Number(code);
@@ -103,6 +127,8 @@ export function isMetaTransientError(message: string | null | undefined): boolea
     m.includes("temporarily unavailable") ||
     m.includes("unknown error") ||
     m.includes("non-json response") ||
+    m.includes("not valid json") ||
+    m.includes("unexpected token") ||
     m.includes("timeout") ||
     m.includes("timed out") ||
     m.includes("please reduce the amount of data") ||
@@ -163,11 +189,11 @@ function usagePctFromAdAccountHeader(raw: string | null): number | null {
 }
 
 /** Read Meta's usage headers off a response and keep the worst reading. */
-function recordUsage(res: Response): void {
+function recordUsage(headers: Headers): void {
   const candidates: Array<[MetaUsageSnapshot["source"], number | null]> = [
-    ["app", usagePctFromAppHeader(res.headers.get("x-app-usage"))],
-    ["business", usagePctFromBucHeader(res.headers.get("x-business-use-case-usage"))],
-    ["ad-account", usagePctFromAdAccountHeader(res.headers.get("x-ad-account-usage"))],
+    ["app", usagePctFromAppHeader(headers.get("x-app-usage"))],
+    ["business", usagePctFromBucHeader(headers.get("x-business-use-case-usage"))],
+    ["ad-account", usagePctFromAdAccountHeader(headers.get("x-ad-account-usage"))],
   ];
   let worst: MetaUsageSnapshot | null = null;
   for (const [source, pct] of candidates) {
@@ -200,56 +226,80 @@ async function backoff(attempt: number, reason: string): Promise<void> {
   return sleep(RETRY_DELAYS_MS[attempt]);
 }
 
+/** fetch + read body under one abort timeout so a hung call can't stall a worker. */
+async function fetchTextWithTimeout(
+  url: string
+): Promise<{ status: number; headers: Headers; text: string }> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  try {
+    const res = await fetch(url, { signal: controller.signal });
+    const text = await res.text();
+    return { status: res.status, headers: res.headers, text };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
- * Single choke point for every Graph API request. Records usage headers and
- * retries with backoff on the things that self-heal — rate-limit codes,
- * transient Meta errors (codes 1/2), 5xx responses, HTML/gateway pages that
- * aren't valid JSON, and network failures — so a blip during a rollup doesn't
- * leave an account showing 0 spend / "not connected". A retried-to-death
- * failure returns a clean error message instead of a raw JSON-parse exception.
+ * Single choke point for every Graph API request. Enforces a per-request
+ * timeout, records usage headers, and retries with bounded backoff on the
+ * things that self-heal — rate-limit codes, transient Meta errors (codes 1/2),
+ * 5xx responses, HTML/gateway pages that aren't valid JSON, timeouts, and
+ * network failures — so a blip during a rollup doesn't leave an account showing
+ * 0 spend / "not connected". Retries stop once the run-level deadline passes so
+ * they can never cascade the whole batch past the platform timeout. A
+ * retried-to-death failure returns a clean message, never a raw parse exception.
  */
 async function metaGraphFetch<T extends { error?: MetaGraphError }>(
   url: string
 ): Promise<T> {
   let lastMessage = "Meta request failed";
   for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
-    const canRetry = attempt < RETRY_DELAYS_MS.length;
+    const canRetry = attempt < RETRY_DELAYS_MS.length && retriesAllowed();
 
-    let res: Response;
+    let response: { status: number; headers: Headers; text: string };
     try {
-      res = await fetch(url);
+      response = await fetchTextWithTimeout(url);
     } catch (err) {
-      lastMessage =
-        err instanceof Error ? err.message : "Network error reaching Meta";
+      // Abort can surface as a DOMException (not instanceof Error), so read the
+      // name defensively. Either way it's transient — retry, then fail soft.
+      const name = (err as { name?: string } | null)?.name;
+      const aborted = name === "AbortError" || name === "TimeoutError";
+      lastMessage = aborted
+        ? "Meta API request timed out"
+        : "Meta API temporarily unavailable (network error)";
       if (canRetry) {
-        await backoff(attempt, "network error");
+        await backoff(attempt, aborted ? "timeout" : "network error");
         continue;
       }
       return graphErrorResult<T>(lastMessage);
     }
 
-    recordUsage(res);
+    recordUsage(response.headers);
 
-    const raw = await res.text();
     let json: T;
     try {
-      json = JSON.parse(raw) as T;
+      json = JSON.parse(response.text) as T;
     } catch {
       // Meta returned an HTML error / gateway page instead of JSON — transient.
-      lastMessage = `Meta API temporarily unavailable (non-JSON response, HTTP ${res.status})`;
+      lastMessage = `Meta API temporarily unavailable (non-JSON response, HTTP ${response.status})`;
       if (canRetry) {
-        await backoff(attempt, `HTTP ${res.status} non-JSON`);
+        await backoff(attempt, `HTTP ${response.status} non-JSON`);
         continue;
       }
       return graphErrorResult<T>(lastMessage);
     }
 
     const err = json.error;
-    const serverError = res.status >= 500 && res.status < 600;
+    const serverError = response.status >= 500 && response.status < 600;
     const retryable = serverError || (err != null && isRetryableCode(err.code));
     if (retryable && canRetry) {
-      lastMessage = err?.message ?? `HTTP ${res.status}`;
-      await backoff(attempt, err?.code ? `code ${err.code}` : `HTTP ${res.status}`);
+      lastMessage = err?.message ?? `HTTP ${response.status}`;
+      await backoff(
+        attempt,
+        err?.code ? `code ${err.code}` : `HTTP ${response.status}`
+      );
       continue;
     }
     return json;
