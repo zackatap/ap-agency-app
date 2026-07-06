@@ -71,7 +71,7 @@ const RETRY_DELAYS_MS = [1000, 3000];
  * daily ad-set insights on a big account) more room on the retry before we call
  * it dead. Indexed by attempt; falls back to the last entry.
  */
-const REQUEST_TIMEOUTS_MS = [18_000, 32_000, 45_000];
+const REQUEST_TIMEOUTS_MS = [25_000, 40_000, 55_000];
 
 function requestTimeoutFor(attempt: number): number {
   return (
@@ -482,6 +482,7 @@ export async function fetchSpendByDay(
     access_token: token,
     time_range: JSON.stringify({ since, until }),
     time_increment: "1", // daily
+    limit: "500", // 13 months of days = one page instead of ~16 at Meta's default 25
   });
 
   let url: string | null = `${META_GRAPH}/${META_API_VERSION}/${graphId}/insights?${params}`;
@@ -605,6 +606,12 @@ async function fetchDailyInsightsWindow(
     // are re-bucketed by day below, so spend / leads still sum to the campaign
     // total.
     level: "adset",
+    // Grab the max rows per page. Ad-set × day over 13 months is hundreds of
+    // rows, and Meta defaults to 25/page. At 25/page a busy account needs
+    // dozens of round trips, each of which recomputes the (expensive) `results`
+    // column and can take 15–25s — so the fetch quietly ran for minutes and
+    // blew the run's time budget. 500/page cuts that to one or two calls.
+    limit: "500",
   });
 
   let url: string | null = `${META_GRAPH}/${META_API_VERSION}/${graphId}/insights?${params}`;
