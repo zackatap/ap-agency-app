@@ -2,13 +2,21 @@
 
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { formatDateTime, formatRelative } from "./format";
-import type { ClientAgencySnapshot } from "./types";
+import type { ClientAgencySnapshot, ClientMetaUsage } from "./types";
 
 interface Props {
   latest: ClientAgencySnapshot | null;
   completeFinishedAt: string | null;
+  /** Meta rate-limit usage from the last complete run (subtle indicator). */
+  metaUsage?: ClientMetaUsage | null;
   onRefreshFinished?: () => void;
 }
+
+const USAGE_SOURCE_LABEL: Record<ClientMetaUsage["source"], string> = {
+  app: "app-level",
+  business: "ads (business use case)",
+  "ad-account": "ad-account",
+};
 
 function SplitButtonMenu({
   disabled,
@@ -78,6 +86,7 @@ function SplitButtonMenu({
 export function RefreshControls({
   latest,
   completeFinishedAt,
+  metaUsage,
   onRefreshFinished,
 }: Props) {
   const [current, setCurrent] = useState<ClientAgencySnapshot | null>(latest);
@@ -193,6 +202,18 @@ export function RefreshControls({
       ? Math.round((current.progressCurrent / current.progressTotal) * 100)
       : 0;
 
+  // Prefer the complete-snapshot usage passed in; fall back to whatever the
+  // polled snapshot carries. Only show a real reading.
+  const usage = metaUsage ?? current?.metaUsage ?? null;
+  const usageTone =
+    usage == null
+      ? ""
+      : usage.pct >= 90
+        ? "text-red-300"
+        : usage.pct >= 75
+          ? "text-amber-300"
+          : "text-slate-500";
+
   return (
     <div className="flex flex-col items-end gap-2">
       <div className="flex items-center gap-3">
@@ -204,6 +225,16 @@ export function RefreshControls({
             </span>
           </div>
           <div>{formatDateTime(completeFinishedAt)}</div>
+          {usage != null && (
+            <div
+              className={usageTone}
+              title={`Meta API rate-limit usage at the end of the last refresh: ${usage.pct}% of the ${
+                USAGE_SOURCE_LABEL[usage.source]
+              } budget. Meta throttles reads near 100%; it resets on a rolling ~1-hour window.`}
+            >
+              Meta usage: {usage.pct}%
+            </div>
+          )}
         </div>
         <SplitButtonMenu
           disabled={submitting || isRunning}

@@ -16,6 +16,173 @@ function getAccessToken(): string | null {
   return process.env.META_ACCESS_TOKEN ?? null;
 }
 
+/**
+ * Latest Meta API usage reading, as a 0–100 percentage of the applicable
+ * rate-limit budget. Meta returns this on every Graph response via the
+ * `X-App-Usage` / `X-Business-Use-Case-Usage` / `X-Ad-Account-Usage` headers,
+ * so we keep the worst (highest) number from the most recent response. Used to
+ * show a subtle "Meta usage" indicator so we can see a throttle coming before
+ * it cuts us off. Lives in module memory — resets on cold start, which is fine
+ * since the rollup repopulates it every run.
+ */
+export interface MetaUsageSnapshot {
+  /** 0–100. Worst utilization across the app / business / ad-account buckets. */
+  pct: number;
+  /** Which bucket the worst number came from (for the tooltip). */
+  source: "app" | "business" | "ad-account";
+  /** ISO timestamp of the response we read this from. */
+  at: string;
+}
+
+let latestUsage: MetaUsageSnapshot | null = null;
+
+export function getMetaUsageSnapshot(): MetaUsageSnapshot | null {
+  return latestUsage;
+}
+
+/**
+ * Graph error codes that mean "you're being throttled, back off and retry":
+ *   4   - application-level request limit ("Application request limit reached")
+ *   17  - user-level request limit
+ *   32  - page-level request limit
+ *   613 - custom-level rate limit
+ * Business-use-case (ads) throttling reports codes in the 80000–80014 band.
+ */
+const RATE_LIMIT_CODES = new Set([4, 17, 32, 613]);
+
+/** Backoff schedule. Length = max retries. Short on purpose — we're smoothing
+ * transient bursts within a rollup, not waiting out a full hour-long block. */
+const RETRY_DELAYS_MS = [1500, 4000, 9000];
+
+function isRateLimitCode(code: unknown): boolean {
+  const n = typeof code === "number" ? code : Number(code);
+  if (!Number.isFinite(n)) return false;
+  return RATE_LIMIT_CODES.has(n) || (n >= 80000 && n <= 80014);
+}
+
+/**
+ * Best-effort classifier for a Meta error *message* (what we persist). Lets the
+ * UI tell a throttle apart from a real "app not assigned" disconnect without
+ * plumbing structured error codes all the way through the rollup store.
+ */
+export function isMetaRateLimitError(message: string | null | undefined): boolean {
+  if (!message) return false;
+  const m = message.toLowerCase();
+  return (
+    m.includes("request limit reached") ||
+    m.includes("rate limit") ||
+    m.includes("too many calls") ||
+    m.includes("user request limit") ||
+    m.includes("calls to this api have exceeded")
+  );
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function usagePctFromAppHeader(raw: string | null): number | null {
+  if (!raw) return null;
+  try {
+    const u = JSON.parse(raw) as {
+      call_count?: number;
+      total_time?: number;
+      total_cputime?: number;
+    };
+    return Math.max(u.call_count ?? 0, u.total_time ?? 0, u.total_cputime ?? 0);
+  } catch {
+    return null;
+  }
+}
+
+function usagePctFromBucHeader(raw: string | null): number | null {
+  if (!raw) return null;
+  try {
+    const parsed = JSON.parse(raw) as Record<
+      string,
+      Array<{ call_count?: number; total_time?: number; total_cputime?: number }>
+    >;
+    let worst = 0;
+    for (const entries of Object.values(parsed)) {
+      for (const e of entries ?? []) {
+        worst = Math.max(
+          worst,
+          e.call_count ?? 0,
+          e.total_time ?? 0,
+          e.total_cputime ?? 0
+        );
+      }
+    }
+    return worst;
+  } catch {
+    return null;
+  }
+}
+
+function usagePctFromAdAccountHeader(raw: string | null): number | null {
+  if (!raw) return null;
+  try {
+    const u = JSON.parse(raw) as { acc_id_util_pct?: number };
+    return u.acc_id_util_pct ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Read Meta's usage headers off a response and keep the worst reading. */
+function recordUsage(res: Response): void {
+  const candidates: Array<[MetaUsageSnapshot["source"], number | null]> = [
+    ["app", usagePctFromAppHeader(res.headers.get("x-app-usage"))],
+    ["business", usagePctFromBucHeader(res.headers.get("x-business-use-case-usage"))],
+    ["ad-account", usagePctFromAdAccountHeader(res.headers.get("x-ad-account-usage"))],
+  ];
+  let worst: MetaUsageSnapshot | null = null;
+  for (const [source, pct] of candidates) {
+    if (pct == null) continue;
+    if (!worst || pct > worst.pct) {
+      worst = { pct: Math.round(pct), source, at: new Date().toISOString() };
+    }
+  }
+  if (worst) latestUsage = worst;
+}
+
+interface MetaGraphError {
+  message?: string;
+  code?: number;
+  error_subcode?: number;
+  type?: string;
+}
+
+/**
+ * Single choke point for every Graph API request. Records usage headers and
+ * retries with backoff when Meta reports a rate-limit error code, so a
+ * transient "Application request limit reached" during a rollup self-heals
+ * instead of leaving the account showing 0 spend / "not connected".
+ */
+async function metaGraphFetch<T extends { error?: MetaGraphError }>(
+  url: string
+): Promise<T> {
+  let lastJson: T | null = null;
+  for (let attempt = 0; attempt <= RETRY_DELAYS_MS.length; attempt++) {
+    const res = await fetch(url);
+    recordUsage(res);
+    const json = (await res.json()) as T;
+    lastJson = json;
+    const err = json.error;
+    if (err && isRateLimitCode(err.code) && attempt < RETRY_DELAYS_MS.length) {
+      console.warn(
+        `[facebook-ads] Meta rate limit (code ${err.code}) — retry ${
+          attempt + 1
+        }/${RETRY_DELAYS_MS.length} in ${RETRY_DELAYS_MS[attempt]}ms`
+      );
+      await sleep(RETRY_DELAYS_MS[attempt]);
+      continue;
+    }
+    return json;
+  }
+  return lastJson as T;
+}
+
 /** Ensure ad account ID has act_ prefix */
 export function normalizeAdAccountId(raw: string): string {
   const trimmed = raw.trim();
@@ -54,8 +221,10 @@ export async function fetchCampaigns(
   const url = `${META_GRAPH}/${META_API_VERSION}/${normalized}/campaigns?${params}`;
 
   try {
-    const res = await fetch(url);
-    const json = await res.json();
+    const json = await metaGraphFetch<{
+      data?: Array<{ id: string; name: string }>;
+      error?: { message?: string };
+    }>(url);
 
     if (json.error) {
       return {
@@ -123,8 +292,10 @@ export async function fetchSpendByMonth(
   const url = `${META_GRAPH}/${META_API_VERSION}/${graphId}/insights?${params}`;
 
   try {
-    const res = await fetch(url);
-    const json = await res.json();
+    const json = await metaGraphFetch<{
+      data?: Array<Record<string, unknown>>;
+      error?: { message?: string };
+    }>(url);
 
     if (json.error) {
       return { spendByMonth, error: json.error.message ?? String(json.error) };
@@ -186,12 +357,11 @@ export async function fetchSpendByDay(
   try {
     // Meta paginates day-bucket responses — follow `paging.next` until exhausted.
     while (url) {
-      const res: Response = await fetch(url);
-      const json = (await res.json()) as {
+      const json: {
         data?: Array<{ date_start?: string; spend?: string }>;
         paging?: { next?: string };
         error?: { message?: string };
-      };
+      } = await metaGraphFetch(url);
       if (json.error) {
         return {
           spendByDate,
@@ -290,8 +460,7 @@ export async function fetchDailyInsights(
   try {
     // Meta paginates day-bucket responses — follow `paging.next` until exhausted.
     while (url) {
-      const res: Response = await fetch(url);
-      const json = (await res.json()) as {
+      const json: {
         data?: Array<{
           date_start?: string;
           spend?: string;
@@ -303,7 +472,7 @@ export async function fetchDailyInsights(
         }>;
         paging?: { next?: string };
         error?: { message?: string };
-      };
+      } = await metaGraphFetch(url);
       if (json.error) {
         return {
           insightsByDate,
@@ -546,12 +715,11 @@ export async function fetchAdInsights(
 
   try {
     while (url) {
-      const res = await fetch(url);
-      const json = (await res.json()) as {
+      const json: {
         data?: Array<Record<string, unknown>>;
         paging?: { next?: string };
         error?: { message?: string };
-      };
+      } = await metaGraphFetch(url);
 
       if (json.error) {
         return { ads: Array.from(byAdId.values()), error: json.error.message ?? "Insights error" };
@@ -619,11 +787,12 @@ export async function fetchAdCreativeThumbnails(
         access_token: token,
       });
       const url = `${META_GRAPH}/${META_API_VERSION}/?${params}`;
-      const res = await fetch(url);
-      const json = (await res.json()) as Record<
-        string,
-        { creative?: { thumbnail_url?: string }; error?: { message?: string } }
-      > & { error?: { message?: string } };
+      const json = await metaGraphFetch<
+        Record<
+          string,
+          { creative?: { thumbnail_url?: string }; error?: { message?: string } }
+        > & { error?: { message?: string } }
+      >(url);
 
       if (json.error) {
         return {
@@ -702,12 +871,11 @@ export async function fetchSpendByInsightsLevel(
 
   try {
     while (url) {
-      const res = await fetch(url);
-      const json = (await res.json()) as {
+      const json: {
         data?: Array<Record<string, string | undefined>>;
         paging?: { next?: string };
         error?: { message?: string };
-      };
+      } = await metaGraphFetch(url);
 
       if (json.error) {
         return {

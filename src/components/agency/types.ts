@@ -132,6 +132,13 @@ export interface ClientCampaignSummary {
   months: ClientCampaignMonth[];
 }
 
+export interface ClientMetaUsage {
+  /** 0–100. Worst Meta rate-limit utilization at the end of the last run. */
+  pct: number;
+  source: "app" | "business" | "ad-account";
+  at: string;
+}
+
 export interface ClientAgencySnapshot {
   id: number;
   startedAt: string;
@@ -151,6 +158,8 @@ export interface ClientAgencySnapshot {
   progressCurrent: number;
   progressTotal: number;
   progressLabel: string | null;
+  /** Meta rate-limit usage snapshot from the last run, or null. */
+  metaUsage: ClientMetaUsage | null;
 }
 
 export interface ClientRollupView {

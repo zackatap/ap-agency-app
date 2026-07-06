@@ -37,6 +37,24 @@ const SCORECARD_METRICS: Array<{ key: MetricKey; label: string }> = [
   { key: "ctr", label: "CTR" },
 ];
 
+/**
+ * Does this Meta error read like throttling (temporary) rather than a real
+ * "app not assigned to the ad account" disconnect (needs action)? Mirrors the
+ * server-side `isMetaRateLimitError`, kept local so this client component
+ * doesn't pull the Graph fetch module into the browser bundle.
+ */
+function looksLikeMetaRateLimit(message: string | null | undefined): boolean {
+  if (!message) return false;
+  const m = message.toLowerCase();
+  return (
+    m.includes("request limit reached") ||
+    m.includes("rate limit") ||
+    m.includes("too many calls") ||
+    m.includes("user request limit") ||
+    m.includes("calls to this api have exceeded")
+  );
+}
+
 /** Always show CRM vs Meta when either side has a count this window. */
 function leadSourceComparison(
   totals: ClientCampaignWindowTotals
@@ -715,14 +733,32 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
                         ) : null;
                       })()}
                       {(() => {
-                        // Surface ad accounts the app can't read (e.g. not
-                        // assigned). Pair with $0 spend so a transient blip on a
-                        // spending account doesn't cry wolf.
+                        // Surface ad accounts the app can't read. Pair with $0
+                        // spend so a transient blip on a spending account
+                        // doesn't cry wolf.
                         const spend = c.totals.adSpend;
                         const noSpend = spend == null || spend === 0;
-                        if (!c.metaError || !noSpend || !c.metaConnectUrl) {
-                          return null;
+                        if (!c.metaError || !noSpend) return null;
+
+                        // A rate limit is temporary and clears itself —
+                        // "Connect" won't fix it, so don't send anyone chasing
+                        // Business settings. Show a neutral, self-explaining
+                        // badge instead of the amber "not connected" alarm.
+                        if (looksLikeMetaRateLimit(c.metaError)) {
+                          return (
+                            <span
+                              title={`Meta throttled this ad account — ${c.metaError}. This is an app-level rate limit, not a disconnect. It clears on its own (usually within the hour) and the numbers backfill on the next refresh.`}
+                              className="mt-1 inline-flex items-center gap-1 rounded-full bg-sky-500/15 px-2 py-0.5 text-[11px] font-medium text-sky-200 ring-1 ring-sky-500/30"
+                            >
+                              <span className="h-1.5 w-1.5 rounded-full bg-sky-400" />
+                              Meta rate limited
+                            </span>
+                          );
                         }
+
+                        // Genuine "app not assigned to this ad account" — keep
+                        // the actionable connect deep link.
+                        if (!c.metaConnectUrl) return null;
                         return (
                           <a
                             href={c.metaConnectUrl}

@@ -511,6 +511,8 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
 
   const latestSnapshotFinished =
     view?.snapshot.finishedAt ?? initial?.snapshot.finishedAt ?? null;
+  const latestMetaUsage =
+    view?.snapshot.metaUsage ?? initial?.snapshot.metaUsage ?? null;
 
   const currentRangeLabel = view
     ? formatRangeLabel(
@@ -544,6 +546,7 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
           <RefreshControls
             latest={currentLatest}
             completeFinishedAt={latestSnapshotFinished}
+            metaUsage={latestMetaUsage}
             onRefreshFinished={reloadSnapshot}
           />
         )}

@@ -24,6 +24,7 @@
 import { neon } from "@neondatabase/serverless";
 import type { FunnelMetrics } from "@/lib/funnel-metrics";
 import type { CampaignStatus } from "@/lib/agency-clients";
+import type { MetaUsageSnapshot } from "@/lib/facebook-ads";
 
 const SNAPSHOT_RETENTION = 10;
 
@@ -50,6 +51,12 @@ export interface AgencySnapshot {
   progressCurrent: number;
   progressTotal: number;
   progressLabel: string | null;
+  /**
+   * Meta API rate-limit utilization captured at the end of the run (0–100).
+   * Null on older snapshots or when no Meta calls were made. Surfaced as a
+   * subtle indicator so we can watch throttling before it blocks reads.
+   */
+  metaUsage: MetaUsageSnapshot | null;
 }
 
 export interface AgencyCampaignRecord {
@@ -241,6 +248,16 @@ async function ensureSchema(sql: Sql): Promise<void> {
       )
     `;
   });
+  // Additive: end-of-run Meta rate-limit utilization. Cheap on warm starts —
+  // Postgres short-circuits ADD COLUMN IF NOT EXISTS when the column is present.
+  try {
+    await sql`
+      ALTER TABLE agency_rollup_snapshots
+        ADD COLUMN IF NOT EXISTS meta_usage JSONB
+    `;
+  } catch (err) {
+    console.warn("[agency-rollup-store] ADD COLUMN meta_usage failed:", err);
+  }
   await runIfNotExists(sql, "agency_rollup_campaigns", async () => {
     await sql`
       CREATE TABLE IF NOT EXISTS agency_rollup_campaigns (
@@ -397,6 +414,30 @@ function mapSnapshotRow(row: Record<string, unknown>): AgencySnapshot {
     progressCurrent: Number(row.progress_current ?? 0),
     progressTotal: Number(row.progress_total ?? 0),
     progressLabel: (row.progress_label as string) ?? null,
+    metaUsage: parseMetaUsage(row.meta_usage),
+  };
+}
+
+function parseMetaUsage(raw: unknown): MetaUsageSnapshot | null {
+  if (raw == null) return null;
+  // Neon returns JSONB already parsed; guard against a stray string just in case.
+  const obj =
+    typeof raw === "string"
+      ? (() => {
+          try {
+            return JSON.parse(raw);
+          } catch {
+            return null;
+          }
+        })()
+      : raw;
+  if (!obj || typeof obj !== "object") return null;
+  const u = obj as Partial<MetaUsageSnapshot>;
+  if (typeof u.pct !== "number") return null;
+  return {
+    pct: u.pct,
+    source: (u.source as MetaUsageSnapshot["source"]) ?? "app",
+    at: typeof u.at === "string" ? u.at : "",
   };
 }
 
@@ -451,11 +492,14 @@ export async function finishSnapshot(
     clientsIncluded: number;
     clientsFailed: number;
     errors: AgencySnapshot["errors"];
+    metaUsage?: MetaUsageSnapshot | null;
   }
 ): Promise<void> {
   const sql = getDb();
   if (!sql) return;
   await ensureSchema(sql);
+  const metaUsageJson =
+    params.metaUsage != null ? JSON.stringify(params.metaUsage) : null;
   await sql`
     UPDATE agency_rollup_snapshots
     SET
@@ -464,6 +508,7 @@ export async function finishSnapshot(
       clients_included = ${params.clientsIncluded},
       clients_failed = ${params.clientsFailed},
       errors = ${JSON.stringify(params.errors)}::jsonb,
+      meta_usage = COALESCE(${metaUsageJson}::jsonb, meta_usage),
       progress_label = ${params.status === "complete" ? "Complete" : "Failed"}
     WHERE id = ${snapshotId}
   `;

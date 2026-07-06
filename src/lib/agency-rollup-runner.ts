@@ -42,6 +42,7 @@ import { getLocationSettings } from "@/lib/location-settings";
 import {
   fetchCampaigns,
   fetchDailyInsights,
+  getMetaUsageSnapshot,
   type DailyInsight,
   type FacebookCampaign,
 } from "@/lib/facebook-ads";
@@ -431,6 +432,10 @@ async function executeRollup(
     clientsIncluded: included,
     clientsFailed: failed,
     errors,
+    // Snapshot Meta's rate-limit utilization as of the end of the run — the
+    // headers accumulate over the hour, so this is the closest we get to a
+    // "how much budget did this refresh burn" reading.
+    metaUsage: getMetaUsageSnapshot(),
   });
 }
 
