@@ -64,12 +64,20 @@ const TRANSIENT_CODES = new Set([1, 2]);
 const RETRY_DELAYS_MS = [1000, 3000];
 
 /**
- * Hard per-request timeout. Node's fetch has no default, so when Meta hangs
- * (degraded gateway / slow HTML error page) a single call can stall for
- * minutes and starve a rollup worker. Abort well short of that so the run
- * keeps moving.
+ * Per-attempt request timeout. Node's fetch has no default, so when Meta hangs
+ * (degraded gateway / slow HTML error page) a single call can stall for minutes
+ * and starve a rollup worker. We escalate by attempt: fail fast on the first
+ * try to catch true hangs, but give a genuinely heavy query (e.g. 13 months of
+ * daily ad-set insights on a big account) more room on the retry before we call
+ * it dead. Indexed by attempt; falls back to the last entry.
  */
-const REQUEST_TIMEOUT_MS = 12_000;
+const REQUEST_TIMEOUTS_MS = [18_000, 32_000, 45_000];
+
+function requestTimeoutFor(attempt: number): number {
+  return (
+    REQUEST_TIMEOUTS_MS[Math.min(attempt, REQUEST_TIMEOUTS_MS.length - 1)]
+  );
+}
 
 /**
  * Run-level guard so retries can't cascade a whole rollup past the platform's
@@ -228,10 +236,11 @@ async function backoff(attempt: number, reason: string): Promise<void> {
 
 /** fetch + read body under one abort timeout so a hung call can't stall a worker. */
 async function fetchTextWithTimeout(
-  url: string
+  url: string,
+  timeoutMs: number
 ): Promise<{ status: number; headers: Headers; text: string }> {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   try {
     const res = await fetch(url, { signal: controller.signal });
     const text = await res.text();
@@ -260,7 +269,7 @@ async function metaGraphFetch<T extends { error?: MetaGraphError }>(
 
     let response: { status: number; headers: Headers; text: string };
     try {
-      response = await fetchTextWithTimeout(url);
+      response = await fetchTextWithTimeout(url, requestTimeoutFor(attempt));
     } catch (err) {
       // Abort can surface as a DOMException (not instanceof Error), so read the
       // name defensively. Either way it's transient — retry, then fail soft.
