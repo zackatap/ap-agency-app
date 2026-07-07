@@ -818,6 +818,13 @@ function leadsFromActions(actions: MetaAction[]): number {
 
 /** Ads Manager Results column — match specific lead indicators in priority order. */
 const LEAD_RESULT_PRIORITY = [
+  // "Conversion leads" objective. This is its own Results indicator — NOT an
+  // `actions:*_lead` type — so it must be matched explicitly. It's first because
+  // when a campaign optimizes for conversion leads, that IS the number Ads
+  // Manager shows in its Results column. Missing it made us fall through to the
+  // raw `actions` count, which is higher (every form/pixel fire, qualified or
+  // not) and no longer matched Ads Manager.
+  "conversion_leads:conversion_lead",
   "actions:onsite_conversion.lead_grouped",
   "actions:leadgen.other",
   "actions:leadgen_grouped",
@@ -856,12 +863,15 @@ function parseResultLeads(raw: unknown): number {
     if (value > 0) return value;
   }
 
-  // Custom-conversion goal: the indicator is the campaign's own optimization
-  // event, so it's the real lead count even though the id is arbitrary.
+  // Custom-conversion goal (indicator is the campaign's own optimization event)
+  // or any `conversion_leads:` variant Meta may introduce: the indicator IS the
+  // real lead count even though the id/suffix is arbitrary.
   let best = 0;
   for (const result of rows) {
     const indicator = String(result?.indicator ?? "").toLowerCase();
-    if (!indicator.includes("custom")) continue;
+    if (!indicator.includes("custom") && !indicator.startsWith("conversion_leads:")) {
+      continue;
+    }
     for (const entry of result?.values ?? []) {
       best = Math.max(best, parseNumber(entry?.value));
     }
