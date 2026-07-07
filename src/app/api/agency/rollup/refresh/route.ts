@@ -18,11 +18,15 @@ export async function POST(req: Request) {
   const { searchParams } = new URL(req.url);
   const rawLimit = searchParams.get("limit");
   const limit = rawLimit ? Math.max(1, parseInt(rawLimit, 10)) : undefined;
+  // `?mode=ghl` re-pulls GHL only (re-reads the Client Database) and carries
+  // Meta numbers forward from the last complete snapshot — fast, no Meta quota.
+  const mode = searchParams.get("mode") === "ghl" ? "ghl" : "full";
 
   const result = await startRollupRefresh({
     triggeredBy: "manual",
     skipIfRunning: true,
     limit,
+    mode,
     waitUntil: (p: Promise<void>) => after(p),
   });
   if (result.status === "error") {

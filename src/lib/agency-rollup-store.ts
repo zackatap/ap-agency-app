@@ -948,6 +948,112 @@ export async function listSnapshotCampaignDays(
   });
 }
 
+/** Per-day Meta figures (structurally a DailyInsight) for carry-forward. */
+export interface CarriedMetaDay {
+  spend: number;
+  impressions: number;
+  clicks: number;
+  linkClicks: number;
+  metaLeads: number;
+}
+
+/**
+ * Meta data from the latest complete snapshot, indexed by ad-account +
+ * campaign-keyword rather than campaign_key. A GHL-only refresh uses this to
+ * keep the last-known Meta numbers instead of re-hitting the Meta API. The
+ * ad-key is used (not campaign_key) so the carry-forward survives edits that
+ * change the key but NOT the underlying Meta pull — e.g. changing the tag
+ * filter (column K) or ACTIVE↔2ND status. Meta is fetched per ad account +
+ * campaign name keyword, so those two fields fully identify a Meta pull.
+ */
+export function metaAdKey(
+  adAccountId: string | null,
+  campaignKeyword: string | null
+): string {
+  return `${(adAccountId ?? "").trim().toLowerCase()}::${(campaignKeyword ?? "")
+    .trim()
+    .toLowerCase()}`;
+}
+
+export async function getLatestCompleteMetaByAdKey(): Promise<{
+  sourceSnapshotId: number | null;
+  metaByAdKey: Map<string, Record<string, CarriedMetaDay>>;
+  metaErrorByAdKey: Map<string, string | null>;
+}> {
+  const empty = {
+    sourceSnapshotId: null,
+    metaByAdKey: new Map<string, Record<string, CarriedMetaDay>>(),
+    metaErrorByAdKey: new Map<string, string | null>(),
+  };
+  const sql = getDb();
+  if (!sql) return empty;
+  await ensureSchema(sql);
+
+  const [latest] = await sql`
+    SELECT id FROM agency_rollup_snapshots
+    WHERE status = 'complete'
+    ORDER BY started_at DESC
+    LIMIT 1
+  `;
+  if (!latest) return empty;
+  const sourceSnapshotId = Number((latest as Record<string, unknown>).id);
+
+  // Day-level Meta figures joined to the (current) ad account + keyword.
+  const dayRows = await sql`
+    SELECT c.ad_account_id, c.campaign_keyword, d.date,
+           d.ad_spend, d.impressions, d.clicks, d.link_clicks, d.meta_leads
+    FROM agency_rollup_campaign_days d
+    JOIN agency_rollup_campaigns c ON c.campaign_key = d.campaign_key
+    WHERE d.snapshot_id = ${sourceSnapshotId}
+      AND (d.ad_spend > 0 OR d.meta_leads > 0 OR d.impressions > 0 OR d.link_clicks > 0)
+  `;
+  const metaByAdKey = new Map<string, Record<string, CarriedMetaDay>>();
+  for (const raw of dayRows) {
+    const r = raw as Record<string, unknown>;
+    const key = metaAdKey(
+      (r.ad_account_id as string) ?? null,
+      (r.campaign_keyword as string) ?? null
+    );
+    const date =
+      r.date instanceof Date
+        ? (r.date as Date).toISOString().slice(0, 10)
+        : String(r.date);
+    const byDate = metaByAdKey.get(key) ?? {};
+    // Same ad key can appear under two campaign_keys (ACTIVE + 2ND on the same
+    // ad pull); sum so the carried figures match a single fresh Meta fetch.
+    const prev = byDate[date];
+    byDate[date] = {
+      spend: (prev?.spend ?? 0) + Number(r.ad_spend ?? 0),
+      impressions: (prev?.impressions ?? 0) + Number(r.impressions ?? 0),
+      clicks: (prev?.clicks ?? 0) + Number(r.clicks ?? 0),
+      linkClicks: (prev?.linkClicks ?? 0) + Number(r.link_clicks ?? 0),
+      metaLeads: (prev?.metaLeads ?? 0) + Number(r.meta_leads ?? 0),
+    };
+    metaByAdKey.set(key, byDate);
+  }
+
+  // Carry the last Meta error (badge state) alongside the numbers.
+  const runRows = await sql`
+    SELECT c.ad_account_id, c.campaign_keyword, r.meta_error
+    FROM agency_rollup_campaign_runs r
+    JOIN agency_rollup_campaigns c ON c.campaign_key = r.campaign_key
+    WHERE r.snapshot_id = ${sourceSnapshotId}
+  `;
+  const metaErrorByAdKey = new Map<string, string | null>();
+  for (const raw of runRows) {
+    const r = raw as Record<string, unknown>;
+    const key = metaAdKey(
+      (r.ad_account_id as string) ?? null,
+      (r.campaign_keyword as string) ?? null
+    );
+    const err = (r.meta_error as string) ?? null;
+    // Prefer a non-null error if any row for this ad key had one.
+    if (err || !metaErrorByAdKey.has(key)) metaErrorByAdKey.set(key, err);
+  }
+
+  return { sourceSnapshotId, metaByAdKey, metaErrorByAdKey };
+}
+
 /**
  * Upsert a campaign-run status row. Called once per (snapshot, campaign)
  * when the runner finishes with that campaign — ok / skipped / error.

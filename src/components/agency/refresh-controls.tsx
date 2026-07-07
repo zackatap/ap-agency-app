@@ -139,11 +139,14 @@ export function RefreshControls({
     return () => clearInterval(id);
   }, [current, onRefreshFinished]);
 
-  async function handleRefresh(limit?: number) {
+  async function handleRefresh(opts?: { limit?: number; mode?: "ghl" }) {
     setSubmitting(true);
     setError(null);
     try {
-      const qs = limit ? `?limit=${limit}` : "";
+      const params = new URLSearchParams();
+      if (opts?.limit) params.set("limit", String(opts.limit));
+      if (opts?.mode) params.set("mode", opts.mode);
+      const qs = params.toString() ? `?${params.toString()}` : "";
       const res = await fetch(`/api/agency/rollup/refresh${qs}`, {
         method: "POST",
       });
@@ -243,13 +246,25 @@ export function RefreshControls({
           dividerClassName="border-l border-indigo-500/50"
           menu={
             <>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  void handleRefresh({ mode: "ghl" });
+                }}
+                title="Re-reads the Client Database and re-pulls GHL only. Keeps the last Meta numbers, so it's fast and uses no Meta quota. Use after editing pipeline keyword, tag filter, or stage mappings."
+                className="block w-full rounded px-3 py-2 text-left text-slate-200 hover:bg-white/5"
+              >
+                GHL only · skip Meta (fast)
+              </button>
+              <div className="my-1 border-t border-white/10" />
               {[5, 10, 25].map((n) => (
                 <button
                   key={n}
                   type="button"
                   role="menuitem"
                   onClick={() => {
-                    void handleRefresh(n);
+                    void handleRefresh({ limit: n });
                   }}
                   className="block w-full rounded px-3 py-2 text-left text-slate-200 hover:bg-white/5"
                 >

@@ -60,10 +60,28 @@ import {
   upsertCampaignRuns,
   getRunningSnapshot,
   getLatestCompleteSnapshot,
+  getLatestCompleteMetaByAdKey,
+  metaAdKey,
   expireStaleRunningSnapshots,
   type AgencyCampaignDay,
   type AgencySnapshot,
+  type CarriedMetaDay,
 } from "@/lib/agency-rollup-store";
+
+/**
+ * "full"  → fetch fresh GHL + Meta (default).
+ * "ghl"   → re-read the Client Database + re-pull GHL only; carry Meta figures
+ *           forward from the last complete snapshot. Fast, and spends zero Meta
+ *           quota — used after editing a sheet field that only affects GHL
+ *           (pipeline keyword, tag filter, stage mappings).
+ */
+export type RollupMode = "full" | "ghl";
+
+/** Meta figures carried forward for a GHL-only run, indexed by ad key. */
+interface PriorMeta {
+  metaByAdKey: Map<string, Record<string, CarriedMetaDay>>;
+  metaErrorByAdKey: Map<string, string | null>;
+}
 
 const ROLLUP_CONCURRENCY = 6;
 const DEFAULT_MONTHS = 13;
@@ -227,6 +245,8 @@ export interface StartRollupParams {
   skipIfRunning?: boolean;
   /** Process at most this many campaigns. Useful for testing/debugging. */
   limit?: number;
+  /** "full" (GHL + Meta) or "ghl" (GHL only, Meta carried forward). */
+  mode?: RollupMode;
   /**
    * Optional hook for `after()` / `waitUntil()` so serverless platforms keep
    * the function alive until the background work finishes. Vercel kills
@@ -248,6 +268,7 @@ export async function startRollupRefresh(
 ): Promise<StartRollupResult> {
   const months = params.monthsCovered ?? DEFAULT_MONTHS;
   const trigger = params.triggeredBy ?? "manual";
+  const mode: RollupMode = params.mode ?? "full";
 
   await expireStaleRunningSnapshots();
 
@@ -273,7 +294,7 @@ export async function startRollupRefresh(
     };
   }
 
-  const runPromise = executeRollup(snapshot.id, months, params.limit).catch(
+  const runPromise = executeRollup(snapshot.id, months, params.limit, mode).catch(
     (err) => {
       console.error("[agency-rollup-runner] execute failed:", err);
     }
@@ -366,9 +387,35 @@ export async function refreshCampaignInLatestSnapshot(
 async function executeRollup(
   snapshotId: number,
   months: number,
-  limit?: number
+  limit?: number,
+  mode: RollupMode = "full"
 ): Promise<void> {
   const errors: SnapshotError[] = [];
+
+  // GHL-only run: load the last complete snapshot's Meta figures once, up front,
+  // so we can carry them forward per campaign instead of calling the Meta API.
+  let priorMeta: PriorMeta | null = null;
+  if (mode === "ghl") {
+    const carried = await getLatestCompleteMetaByAdKey();
+    if (!carried.sourceSnapshotId) {
+      await finishSnapshot(snapshotId, {
+        status: "failed",
+        clientsIncluded: 0,
+        clientsFailed: 0,
+        errors: [
+          {
+            message:
+              "GHL-only refresh needs a prior complete snapshot to keep Meta numbers. Run a full refresh first.",
+          },
+        ],
+      });
+      return;
+    }
+    priorMeta = {
+      metaByAdKey: carried.metaByAdKey,
+      metaErrorByAdKey: carried.metaErrorByAdKey,
+    };
+  }
 
   // Cap how long Meta retries are allowed to run so a flaky Meta can't drag the
   // whole rollup past the platform function timeout (which leaves the snapshot
@@ -431,7 +478,9 @@ async function executeRollup(
     clientsTotal: campaigns.length,
     progressTotal: campaigns.length,
     progressCurrent: 0,
-    progressLabel: `Fetching data for ${campaigns.length} campaigns across ${locationGroups.length} locations`,
+    progressLabel: `${
+      mode === "ghl" ? "GHL-only refresh" : "Fetching data"
+    } for ${campaigns.length} campaigns across ${locationGroups.length} locations`,
   });
 
   let completed = 0;
@@ -465,6 +514,8 @@ async function executeRollup(
           campaignsAtLocation,
           windowRange,
           getFbCampaigns,
+          mode,
+          priorMeta,
           onCampaignResult: (result) => {
             if (result === "ok") included += 1;
             else failed += 1;
@@ -547,6 +598,8 @@ async function processLocation(args: {
   getFbCampaigns: (
     adAccountId: string
   ) => Promise<{ campaigns: FacebookCampaign[]; error?: string }>;
+  mode?: RollupMode;
+  priorMeta?: PriorMeta | null;
   onCampaignResult: (result: "ok" | "skipped" | "failed-with-error") => void;
   pushError: (e: SnapshotError) => void;
 }): Promise<void> {
@@ -556,6 +609,8 @@ async function processLocation(args: {
     campaignsAtLocation,
     windowRange,
     getFbCampaigns,
+    mode = "full",
+    priorMeta = null,
     onCampaignResult,
     pushError,
   } = args;
@@ -669,12 +724,24 @@ async function processLocation(args: {
     // monthly rollup effectively did the same thing.
     const configuredAdSpend = settings?.adSpend?.[pipeline.id] ?? {};
 
-    const { insights: fbInsightsByDay, metaError } =
-      await resolveCampaignDailyInsights({
+    // GHL-only run: don't touch the Meta API. Reuse the last complete
+    // snapshot's Meta figures for this ad account + keyword so spend / meta
+    // leads / impressions stay intact instead of resetting to zero.
+    let fbInsightsByDay: Record<string, DailyInsight>;
+    let metaError: string | null;
+    if (mode === "ghl") {
+      const adKey = metaAdKey(campaign.adAccountId, campaign.campaignKeyword);
+      fbInsightsByDay = priorMeta?.metaByAdKey.get(adKey) ?? {};
+      metaError = priorMeta?.metaErrorByAdKey.get(adKey) ?? null;
+    } else {
+      const resolved = await resolveCampaignDailyInsights({
         campaign,
         windowRange,
         getFbCampaigns,
       });
+      fbInsightsByDay = resolved.insights;
+      metaError = resolved.metaError;
+    }
 
     const daysWithMetrics = perDay.map((d) => ({
       date: d.date,
