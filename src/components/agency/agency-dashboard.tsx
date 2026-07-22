@@ -536,7 +536,7 @@ export function AgencyDashboard({ initial, initialLatest }: Props) {
             {activeTab === "performance"
               ? "Performance across every active & 2nd campaign client. Each sheet row is its own campaign; clients with ACTIVE + 2ND CMPN show both pipelines rolled up under their CID."
               : activeTab === "scorecard"
-                ? "Ad spend, leads, CPL, link clicks, CPLC, and CTR per active & 2nd campaign client over a 3/7/14/30-day or custom window, with movement vs the same-length prior period. Flip to “Attention only” to see just the campaigns tripping a CPL, lead, or ad-spend threshold."
+                ? "Ad spend, leads, CPL, link clicks, CPLC, CTR, plus appts / booking / show / success rates per active & 2nd campaign client over a 3/7/14/30-day or custom window. Ads flags cover leads / CPL / spend (media buyer); Appts/Success flags cover the funnel (account manager). Use the Show toggles to filter either."
                 : activeTab === "ads"
                   ? "Ad-level Meta performance across active client ad accounts with recent spend, including creative thumbnails and name-based rollups."
                   : "Every client from the Client DB sheet plotted on a map. Filter by status to focus the view; each pin is one client even when they have multiple campaigns."}

@@ -8,7 +8,8 @@
  *
  * Data comes from the rollup snapshot via {@link buildAgencyRollupView} (the
  * same source the Scorecard uses); the ClickUp ID comes live from the Client DB
- * (column BC). Flags are computed by {@link computeAttentionFlag}.
+ * (column BC). Quantity flags are computed by {@link computeAttentionFlag};
+ * Quality (funnel) flags by {@link computeQualityFlag}.
  */
 
 import {
@@ -26,8 +27,13 @@ import {
 } from "@/lib/date-ranges";
 import {
   computeAttentionFlag,
+  computeLeadDataFlag,
   type AttentionMetrics,
 } from "@/lib/attention-flags";
+import {
+  computeQualityFlag,
+  type QualityMetrics,
+} from "@/lib/quality-flags";
 import { getLatestCompleteSnapshot } from "@/lib/agency-rollup-store";
 import { fetchClickUpRelationMap } from "@/lib/google-sheets";
 
@@ -115,15 +121,22 @@ export interface AttentionFeedResult {
  * @param windows Which trailing windows to include as metric columns (defaults
  *   to all of 3/7/14/30). Flags are always computed from all four windows
  *   regardless of this setting.
- * @param flaggedOnly When true, returns only campaigns that have an attention
- *   flag (matching the sheet's `CI <> '-'` filter), excludes client names with
- *   `*`, and sorts by urgency then name. This is the Attention Dashboard view.
- * @param urgency When set (e.g. 0 for red), only flagged rows at that urgency
- *   level are returned. Ignored when flaggedOnly is false.
+ * @param flaggedOnly When true, returns only campaigns with an Ads *performance*
+ *   flag (lead/CPL/spend) — the original Zapier Attention Dashboard view.
+ *   Meta↔CRM Data flags alone do not qualify. Shorthand for
+ *   `flaggedMode: "quantity"`.
+ * @param flaggedMode Which flag category a row must have to be returned:
+ *   "quantity" (Ads performance only — Zapier), "quality" (funnel), or
+ *   "either" (Ads performance, Ads Data, or Quality — in-app KPI tab).
+ *   Takes precedence over `flaggedOnly`. When unset and `flaggedOnly` is
+ *   false, all rows return.
+ * @param urgency When set (e.g. 0 for red), only rows whose *performance*
+ *   Ads urgency matches are returned. Ignored when no flag filter is active.
  */
 export async function buildAttentionFeed(opts?: {
   windows?: number[];
   flaggedOnly?: boolean;
+  flaggedMode?: "quantity" | "quality" | "either";
   urgency?: number;
   /** Viewer tz so windows align with the KPI table's refresh-date anchor. */
   tz?: string;
@@ -208,6 +221,29 @@ export async function buildAttentionFeed(opts?: {
     // skipped campaigns carry no real signal, and now that the lead/spend rules
     // fire off raw counts they'd otherwise alert on empty rows.
     const flag = base.included ? computeAttentionFlag(metrics) : null;
+    // Meta↔CRM leak is independent: Data badge can sit next to a performance
+    // flag so a sync gap never hides a real CPL / lead-volume problem.
+    const dataFlag = base.included ? computeLeadDataFlag(metrics) : null;
+
+    // Quality (funnel) flags run off the same rollup windows. 30d drives the
+    // absolute-rate rules; the 14d summary carries its own prior period, which
+    // is exactly the "vs prior 14 days" trend the show-rate drop rule needs.
+    const qualityMetrics: QualityMetrics = {
+      businessName: base.businessName,
+      appts30d: s30?.totals.totalAppts ?? 0,
+      showed30d: s30?.totals.showed ?? 0,
+      noShow30d: s30?.totals.noShow ?? 0,
+      closed30d: s30?.totals.closed ?? 0,
+      leads30d: s30?.totals.leads ?? 0,
+      bookingRate30d: s30?.totals.bookingRate ?? null,
+      showRate30d: s30?.totals.showRate ?? null,
+      closeRate30d: s30?.totals.closeRate ?? null,
+      showRate14d: s14?.totals.showRate ?? null,
+      showRate14dPrev: s14?.priorTotals.showRate ?? null,
+      appts14d: s14?.totals.totalAppts ?? 0,
+      appts14dPrev: s14?.priorTotals.totalAppts ?? 0,
+    };
+    const qualityFlag = base.included ? computeQualityFlag(qualityMetrics) : null;
 
     const relationId =
       relationMap.byLocation.get(base.locationId) ??
@@ -226,13 +262,21 @@ export async function buildAttentionFeed(opts?: {
       campaign_name: campaignName,
       included: base.included,
       needs_setup: Boolean(base.needsSetupReason),
-      // Attention Dashboard fields (the sheet's derived columns). The sheet's
-      // "STATUS" column is this code (S_R4, S_O3, ...); `status` above is the
-      // ACTIVE / 2ND CMPN campaign status, a different thing.
+      // Ads performance (R/O/Y). Zapier maps these as the primary attention fields.
       flagged: flag != null,
       attention_code: flag?.code ?? "-",
       reason: flag?.reason ?? "",
       urgency: flag?.urgency ?? null,
+      // Ads Data (Meta↔CRM leak) — parallel to performance, never replaces it.
+      data_flagged: dataFlag != null,
+      data_code: dataFlag?.code ?? "-",
+      data_reason: dataFlag?.reason ?? "",
+      data_urgency: dataFlag?.urgency ?? null,
+      // Quality (funnel) flag — the account-manager signal.
+      quality_flagged: qualityFlag != null,
+      quality_code: qualityFlag?.code ?? "-",
+      quality_reason: qualityFlag?.reason ?? "",
+      quality_urgency: qualityFlag?.urgency ?? null,
       clickup_relation_id: relationId,
     };
 
@@ -253,21 +297,42 @@ export async function buildAttentionFeed(opts?: {
     rows.push(row);
   }
 
+  // "quantity" = Ads performance only (Zapier / media-buyer tasks).
+  // "either" includes Ads Data leaks so the KPI tab can show them without
+  // creating empty ClickUp rows when only a sync gap fires.
+  const mode: "quantity" | "quality" | "either" | null =
+    opts?.flaggedMode ?? (opts?.flaggedOnly ? "quantity" : null);
+
   let finalRows = rows;
-  if (opts?.flaggedOnly) {
+  if (mode) {
     finalRows = rows
-      .filter((r) => r.flagged === true)
+      .filter((r) => {
+        const perf = r.flagged === true;
+        const data = r.data_flagged === true;
+        const ql = r.quality_flagged === true;
+        if (mode === "quantity") return perf;
+        if (mode === "quality") return ql;
+        return perf || data || ql;
+      })
       // Sheet's `NOT B LIKE '%*%'`: drop paused/internal names marked with "*".
       .filter((r) => !String(r.client_name ?? "").includes("*"));
-    if (typeof opts.urgency === "number") {
+    // Urgency filter targets Ads performance (Zapier "red only").
+    if (typeof opts?.urgency === "number" && mode !== "quality") {
       finalRows = finalRows.filter((r) => r.urgency === opts.urgency);
     }
+    // Sort by the most urgent flag across Ads performance, Ads Data, and Quality.
+    const rank = (r: Record<string, unknown>) =>
+      Math.min(
+        typeof r.urgency === "number" ? r.urgency : 99,
+        typeof r.data_urgency === "number" ? r.data_urgency : 99,
+        typeof r.quality_urgency === "number" ? r.quality_urgency : 99
+      );
     finalRows = finalRows.sort((a, b) => {
-        const ua = (a.urgency as number | null) ?? 99;
-        const ub = (b.urgency as number | null) ?? 99;
-        if (ua !== ub) return ua - ub;
-        return String(a.client_name ?? "").localeCompare(String(b.client_name ?? ""));
-      });
+      const ra = rank(a);
+      const rb = rank(b);
+      if (ra !== rb) return ra - rb;
+      return String(a.client_name ?? "").localeCompare(String(b.client_name ?? ""));
+    });
   }
 
   return {

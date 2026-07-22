@@ -34,7 +34,10 @@ const WINDOWS = [
 
 type WindowId = (typeof WINDOWS)[number]["id"] | "custom";
 
-/** The KPIs, in the order the agency reads them. Leads + CPL use Meta. */
+/**
+ * Scorecard columns, ads block first then the appt/success funnel.
+ * Leads + CPL use Meta; appts / showed / success come from the GHL pipeline.
+ */
 const SCORECARD_METRICS: Array<{ key: MetricKey; label: string }> = [
   { key: "adSpend", label: "Ad spend" },
   { key: "metaLeads", label: "Leads" },
@@ -42,6 +45,12 @@ const SCORECARD_METRICS: Array<{ key: MetricKey; label: string }> = [
   { key: "linkClicks", label: "Link clicks" },
   { key: "cplc", label: "CPLC" },
   { key: "ctr", label: "CTR" },
+  { key: "totalAppts", label: "Appts" },
+  { key: "bookingRate", label: "Booking rate" },
+  { key: "showed", label: "Showed" },
+  { key: "showRate", label: "Show rate" },
+  { key: "closed", label: "Success" },
+  { key: "closeRate", label: "Close rate" },
 ];
 
 /**
@@ -119,11 +128,19 @@ function formatValue(key: MetricKey, value: number | null): string {
     case "leads":
     case "metaLeads":
     case "linkClicks":
+    case "totalAppts":
+    case "showed":
+    case "closed":
       return formatCount(value);
     case "cpl":
     case "cplc":
+    case "cps":
+    case "cpClose":
       return formatMoneyDecimal(value);
     case "ctr":
+    case "bookingRate":
+    case "showRate":
+    case "closeRate":
       return formatPercent(value);
     default:
       return formatCount(value);
@@ -166,13 +183,21 @@ function computeDelta(
     case "leads":
     case "metaLeads":
     case "linkClicks":
+    case "totalAppts":
+    case "showed":
+    case "closed":
       body = formatCount(magnitude);
       break;
     case "cpl":
     case "cplc":
+    case "cps":
+    case "cpClose":
       body = formatMoneyDecimal(magnitude);
       break;
     case "ctr":
+    case "bookingRate":
+    case "showRate":
+    case "closeRate":
       body = `${magnitude.toFixed(1)} pts`;
       break;
     default:
@@ -188,14 +213,29 @@ const TONE_CLASS: Record<DeltaTone, string> = {
   none: "text-slate-600",
 };
 
-/** What the Attention tab knows about a campaign, keyed by campaignKey. */
-interface AttentionInfo {
+/** A single flag (one engine) for a campaign. */
+interface FlagInfo {
   urgency: number | null;
   code: string;
   reason: string;
 }
 
-/** Urgency badge styling, mirrored from the Attention tab (red / orange / yellow). */
+/**
+ * What the attention feed knows about a campaign, keyed by campaignKey.
+ *   quantity     — Ads performance (R/O/Y, Meta SoT)
+ *   quantityData — Ads Meta↔CRM leak (Data badge, can sit next to performance)
+ *   quality      — Appts/Success funnel (account manager)
+ */
+interface AttentionInfo {
+  quantity: FlagInfo | null;
+  quantityData: FlagInfo | null;
+  quality: FlagInfo | null;
+}
+
+/**
+ * Urgency badge styling. 0/1/2 = red/orange/yellow; 3 = Data hygiene
+ * (Meta↔CRM lead leak on Ads, or CRM not updated past Appt Confirmed on Appts).
+ */
 const URGENCY_META: Record<
   number,
   { label: string; dot: string; text: string; ring: string }
@@ -203,6 +243,7 @@ const URGENCY_META: Record<
   0: { label: "Red", dot: "bg-red-500", text: "text-red-300", ring: "ring-red-500/30" },
   1: { label: "Orange", dot: "bg-amber-500", text: "text-amber-300", ring: "ring-amber-500/30" },
   2: { label: "Yellow", dot: "bg-yellow-400", text: "text-yellow-200", ring: "ring-yellow-400/30" },
+  3: { label: "Data", dot: "bg-sky-400", text: "text-sky-200", ring: "ring-sky-400/30" },
 };
 
 /** Header cell: sticks to the top on vertical scroll (matches the leaderboard). */
@@ -256,15 +297,17 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
   const [expandedMetrics, setExpandedMetrics] = useState<Set<MetricKey>>(
     new Set()
   );
-  // "client" groups a client's campaigns together (Active above 2nd); "urgency"
-  // sorts by attention flag (red→yellow); metric keys sort by that KPI. Default
-  // is client name, ascending.
-  const [sortKey, setSortKey] = useState<MetricKey | "client" | "urgency">(
-    "client"
-  );
+  // "client" groups a client's campaigns together (Active above 2nd);
+  // "quantity"/"quality" sort by that engine's flag (red→yellow); metric keys
+  // sort by that KPI. Default is client name, ascending.
+  const [sortKey, setSortKey] = useState<
+    MetricKey | "client" | "quantity" | "quality"
+  >("client");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
-  // When on, only campaigns flagged in the Attention tab are shown.
-  const [flaggedOnly, setFlaggedOnly] = useState(false);
+  // Independent on/off filters. Off/off shows everything; turning one (or both)
+  // on narrows to campaigns flagged by that engine (union when both are on).
+  const [showQuantity, setShowQuantity] = useState(false);
+  const [showQuality, setShowQuality] = useState(false);
   // Custom range inputs (draft) + the applied range that actually drives a
   // fetch. Apply commits the draft so typing doesn't refetch on every keystroke.
   const [customFrom, setCustomFrom] = useState("");
@@ -317,11 +360,31 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
         const attn = await attnRes.json();
         const map = new Map<string, AttentionInfo>();
         for (const r of (attn?.rows ?? []) as Array<Record<string, unknown>>) {
-          map.set(String(r.campaign_key), {
-            urgency: typeof r.urgency === "number" ? r.urgency : null,
-            code: String(r.attention_code ?? ""),
-            reason: String(r.reason ?? ""),
-          });
+          const quantity: FlagInfo | null =
+            typeof r.urgency === "number"
+              ? {
+                  urgency: r.urgency,
+                  code: String(r.attention_code ?? ""),
+                  reason: String(r.reason ?? ""),
+                }
+              : null;
+          const quantityData: FlagInfo | null =
+            typeof r.data_urgency === "number"
+              ? {
+                  urgency: r.data_urgency,
+                  code: String(r.data_code ?? ""),
+                  reason: String(r.data_reason ?? ""),
+                }
+              : null;
+          const quality: FlagInfo | null =
+            typeof r.quality_urgency === "number"
+              ? {
+                  urgency: r.quality_urgency,
+                  code: String(r.quality_code ?? ""),
+                  reason: String(r.quality_reason ?? ""),
+                }
+              : null;
+          map.set(String(r.campaign_key), { quantity, quantityData, quality });
         }
         setAttentionByKey(map);
       }
@@ -400,14 +463,34 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
     // Only campaigns that produced data this snapshot — needs-setup and
     // failed campaigns carry no spend/lead signal worth scoring.
     let visible = view.campaigns.filter((c) => c.included);
-    // "Attention only" narrows to the same set the Attention tab shows.
-    if (flaggedOnly) {
-      visible = visible.filter((c) => attentionByKey.has(c.campaignKey));
+    // Off/off shows everything; one or both on narrows to campaigns flagged by
+    // the selected engine(s) (union). Matches the Show toggles.
+    if (showQuantity || showQuality) {
+      visible = visible.filter((c) => {
+        const a = attentionByKey.get(c.campaignKey);
+        if (!a) return false;
+        return (
+          (showQuantity && (a.quantity != null || a.quantityData != null)) ||
+          (showQuality && a.quality != null)
+        );
+      });
     }
     const dir = sortDir === "desc" ? -1 : 1;
-    const urgencyOf = (c: ClientCampaignSummary) => {
-      const u = attentionByKey.get(c.campaignKey)?.urgency;
-      return typeof u === "number" ? u : null;
+    const flagUrgencyOf = (
+      c: ClientCampaignSummary,
+      category: "quantity" | "quality"
+    ) => {
+      if (category === "quality") {
+        const u = attentionByKey.get(c.campaignKey)?.quality?.urgency;
+        return typeof u === "number" ? u : null;
+      }
+      // Ads sort: performance urgency wins; Data-only (3) sorts after R/O/Y.
+      const a = attentionByKey.get(c.campaignKey);
+      const perf = a?.quantity?.urgency;
+      const data = a?.quantityData?.urgency;
+      if (typeof perf === "number") return perf;
+      if (typeof data === "number") return data;
+      return null;
     };
     // Keeps a client's campaigns adjacent: name first, then Active before 2nd
     // (status order is fixed regardless of direction), then campaign label.
@@ -423,9 +506,9 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
     };
     return visible.slice().sort((a, b) => {
       if (sortKey === "client") return byClient(a, b);
-      if (sortKey === "urgency") {
-        const au = urgencyOf(a);
-        const bu = urgencyOf(b);
+      if (sortKey === "quantity" || sortKey === "quality") {
+        const au = flagUrgencyOf(a, sortKey);
+        const bu = flagUrgencyOf(b, sortKey);
         // Unflagged rows sink; flagged ties fall back to client grouping.
         if (au == null && bu == null) return byClient(a, b);
         if (au == null) return 1;
@@ -443,21 +526,32 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
       if (av === bv) return byClient(a, b);
       return (av - bv) * dir;
     });
-  }, [view, sortKey, sortDir, flaggedOnly, attentionByKey]);
+  }, [view, sortKey, sortDir, showQuantity, showQuality, attentionByKey]);
 
   const attentionCounts = useMemo(() => {
     if (!view) return null;
-    const counts = { total: 0, red: 0, orange: 0, yellow: 0 };
+    const quantity = { total: 0, red: 0, orange: 0, yellow: 0, data: 0 };
+    const quality = { total: 0, red: 0, orange: 0, yellow: 0, data: 0 };
+    const tallyLevel = (
+      bucket: typeof quantity,
+      flag: FlagInfo | null | undefined
+    ) => {
+      if (!flag || typeof flag.urgency !== "number") return;
+      if (flag.urgency === 0) bucket.red += 1;
+      else if (flag.urgency === 1) bucket.orange += 1;
+      else if (flag.urgency === 2) bucket.yellow += 1;
+      else if (flag.urgency === 3) bucket.data += 1;
+    };
     for (const c of view.campaigns) {
       if (!c.included) continue;
       const attn = attentionByKey.get(c.campaignKey);
-      if (!attn || typeof attn.urgency !== "number") continue;
-      counts.total += 1;
-      if (attn.urgency === 0) counts.red += 1;
-      else if (attn.urgency === 1) counts.orange += 1;
-      else if (attn.urgency === 2) counts.yellow += 1;
+      if (attn?.quantity || attn?.quantityData) quantity.total += 1;
+      tallyLevel(quantity, attn?.quantity);
+      tallyLevel(quantity, attn?.quantityData);
+      if (attn?.quality) quality.total += 1;
+      tallyLevel(quality, attn?.quality);
     }
-    return counts;
+    return { quantity, quality };
   }, [view, attentionByKey]);
 
   // Campaigns the roster expects but that couldn't be read this snapshot
@@ -466,7 +560,8 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
   // worse than a greyed row. Dedupe on the display signature so a stale
   // campaign-key orphan doesn't list the same client twice.
   const disconnected = useMemo(() => {
-    if (!view || flaggedOnly) return [];
+    // A flag filter hides these — a needs-setup row can't be flagged.
+    if (!view || showQuantity || showQuality) return [];
     const seen = new Set<string>();
     const out: ClientCampaignSummary[] = [];
     for (const c of view.campaigns) {
@@ -477,7 +572,7 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
       out.push(c);
     }
     return out.sort((a, b) => a.businessName.localeCompare(b.businessName));
-  }, [view, flaggedOnly]);
+  }, [view, showQuantity, showQuality]);
 
   const toggleMetric = useCallback((key: MetricKey) => {
     setExpandedMetrics((prev) => {
@@ -488,7 +583,7 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
     });
   }, []);
 
-  const toggleSort = useCallback((key: MetricKey | "client" | "urgency") => {
+  const toggleSort = useCallback((key: MetricKey | "client" | "quantity" | "quality") => {
     if (sortKey === key) {
       setSortDir((d) => (d === "desc" ? "asc" : "desc"));
     } else {
@@ -595,53 +690,50 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
             <div className="text-xs uppercase tracking-wide text-slate-400">
               Show
             </div>
-            <div className="mt-2 inline-flex rounded-lg border border-white/10 bg-slate-950/40 p-1">
+            <div className="mt-2 inline-flex gap-2">
               <button
                 type="button"
-                onClick={() => setFlaggedOnly(false)}
-                className={`rounded-md px-4 py-1.5 text-sm transition-colors ${
-                  !flaggedOnly
-                    ? "bg-indigo-600 text-white"
-                    : "text-slate-300 hover:text-white"
+                aria-pressed={showQuantity}
+                onClick={() => setShowQuantity((v) => !v)}
+                title="Show only campaigns with a lead / CPL / spend flag (media buyer)"
+                className={`rounded-lg border px-4 py-1.5 text-sm transition-colors ${
+                  showQuantity
+                    ? "border-indigo-500 bg-indigo-600 text-white"
+                    : "border-white/10 bg-slate-950/40 text-slate-300 hover:text-white"
                 }`}
               >
-                All campaigns
+                Ads
               </button>
               <button
                 type="button"
-                onClick={() => setFlaggedOnly(true)}
-                className={`rounded-md px-4 py-1.5 text-sm transition-colors ${
-                  flaggedOnly
-                    ? "bg-indigo-600 text-white"
-                    : "text-slate-300 hover:text-white"
+                aria-pressed={showQuality}
+                onClick={() => setShowQuality((v) => !v)}
+                title="Show only campaigns with a booking / show / sign-on flag (account manager)"
+                className={`rounded-lg border px-4 py-1.5 text-sm transition-colors ${
+                  showQuality
+                    ? "border-indigo-500 bg-indigo-600 text-white"
+                    : "border-white/10 bg-slate-950/40 text-slate-300 hover:text-white"
                 }`}
               >
-                Attention only
+                Appts/Success
               </button>
             </div>
-            {flaggedOnly && attentionCounts && (
-              <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-                <span className="font-medium text-slate-200">
-                  {attentionCounts.total} flagged
-                </span>
-                {([0, 1, 2] as const).map((urgency) => {
-                  const meta = URGENCY_META[urgency];
-                  const count =
-                    urgency === 0
-                      ? attentionCounts.red
-                      : urgency === 1
-                        ? attentionCounts.orange
-                        : attentionCounts.yellow;
-                  return (
-                    <span
-                      key={urgency}
-                      className={`inline-flex items-center gap-1 ${meta.text}`}
-                    >
-                      <span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} />
-                      {count} {meta.label}
-                    </span>
-                  );
-                })}
+            {(showQuantity || showQuality) && attentionCounts && (
+              <div className="mt-2 space-y-1 text-xs">
+                {showQuantity && (
+                  <FlagCountLine
+                    label="Ads"
+                    counts={attentionCounts.quantity}
+                    levels={[0, 1, 2, 3]}
+                  />
+                )}
+                {showQuality && (
+                  <FlagCountLine
+                    label="Appts/Success"
+                    counts={attentionCounts.quality}
+                    levels={[0, 1, 2, 3]}
+                  />
+                )}
               </div>
             )}
           </div>
@@ -703,17 +795,34 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
                 <th className={`${TH_BASE} border-l text-left`}>
                   <button
                     type="button"
-                    onClick={() => toggleSort("urgency")}
+                    onClick={() => toggleSort("quantity")}
+                    title="Lead / CPL / spend flag (media buyer)"
                     className={`inline-flex items-center gap-1 transition-colors hover:text-white ${
-                      sortKey === "urgency" ? "text-white" : ""
+                      sortKey === "quantity" ? "text-white" : ""
                     }`}
                   >
-                    Urgency
-                    {sortKey === "urgency" && (
+                    Ads
+                    {sortKey === "quantity" && (
                       <span aria-hidden>{sortDir === "desc" ? "▾" : "▴"}</span>
                     )}
                   </button>
                 </th>
+                <th className={`${TH_BASE} border-l text-left`}>
+                  <button
+                    type="button"
+                    onClick={() => toggleSort("quality")}
+                    title="Booking / show / no-show / sign-on flag (account manager)"
+                    className={`inline-flex items-center gap-1 transition-colors hover:text-white ${
+                      sortKey === "quality" ? "text-white" : ""
+                    }`}
+                  >
+                    Appts/Success
+                    {sortKey === "quality" && (
+                      <span aria-hidden>{sortDir === "desc" ? "▾" : "▴"}</span>
+                    )}
+                  </button>
+                </th>
+                <th className={`${TH_BASE} border-l text-left`}>Reason</th>
                 {SCORECARD_METRICS.map((m) => {
                   const active = sortKey === m.key;
                   const exp = expandedMetrics.has(m.key);
@@ -769,13 +878,14 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
                     </Fragment>
                   );
                 })}
-                <th className={`${TH_BASE} border-l text-left`}>Reason</th>
               </tr>
             </thead>
             <tbody>
               {rows.map((c) => {
                 const attn = attentionByKey.get(c.campaignKey);
-                const urgency = attn?.urgency ?? null;
+                const quantityFlag = attn?.quantity ?? null;
+                const quantityDataFlag = attn?.quantityData ?? null;
+                const qualityFlag = attn?.quality ?? null;
                 return (
                   <tr
                     key={c.campaignKey}
@@ -905,10 +1015,45 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
                       })()}
                     </td>
                     <td className="whitespace-nowrap border-b border-b-white/5 border-l border-l-white/10 px-4 py-3">
-                      {urgency != null ? (
-                        <UrgencyBadge urgency={urgency} />
+                      {quantityFlag?.urgency != null ||
+                      quantityDataFlag?.urgency != null ? (
+                        <span className="inline-flex flex-wrap items-center gap-1.5">
+                          {quantityFlag?.urgency != null && (
+                            <UrgencyBadge urgency={quantityFlag.urgency} />
+                          )}
+                          {quantityDataFlag?.urgency != null && (
+                            <UrgencyBadge urgency={quantityDataFlag.urgency} />
+                          )}
+                        </span>
                       ) : (
                         <span className="text-slate-600">—</span>
+                      )}
+                    </td>
+                    <td className="whitespace-nowrap border-b border-b-white/5 border-l border-l-white/10 px-4 py-3">
+                      {qualityFlag?.urgency != null ? (
+                        <UrgencyBadge urgency={qualityFlag.urgency} />
+                      ) : (
+                        <span className="text-slate-600">—</span>
+                      )}
+                    </td>
+                    <td className="border-b border-b-white/5 border-l border-l-white/10 px-4 py-3 text-slate-300">
+                      {quantityFlag?.reason && (
+                        <div className="whitespace-nowrap">
+                          <span className="text-slate-500">Ads:</span>{" "}
+                          {quantityFlag.reason}
+                        </div>
+                      )}
+                      {quantityDataFlag?.reason && (
+                        <div className="whitespace-nowrap">
+                          <span className="text-slate-500">Data:</span>{" "}
+                          {quantityDataFlag.reason}
+                        </div>
+                      )}
+                      {qualityFlag?.reason && (
+                        <div className="whitespace-nowrap">
+                          <span className="text-slate-500">Appts:</span>{" "}
+                          {qualityFlag.reason}
+                        </div>
                       )}
                     </td>
                     {SCORECARD_METRICS.map((m) => {
@@ -947,9 +1092,6 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
                         </Fragment>
                       );
                     })}
-                    <td className="whitespace-nowrap border-b border-b-white/5 border-l border-l-white/10 px-4 py-3 text-slate-300">
-                      {attn?.reason ?? ""}
-                    </td>
                   </tr>
                 );
               })}
@@ -982,6 +1124,12 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
                     <td className="whitespace-nowrap border-b border-b-white/5 border-l border-l-white/10 px-4 py-3 text-slate-600">
                       —
                     </td>
+                    <td className="whitespace-nowrap border-b border-b-white/5 border-l border-l-white/10 px-4 py-3 text-slate-600">
+                      —
+                    </td>
+                    <td className="whitespace-nowrap border-b border-b-white/5 border-l border-l-white/10 px-4 py-3 text-slate-500">
+                      {c.needsSetupReason ?? ""}
+                    </td>
                     {SCORECARD_METRICS.map((m) => {
                       const exp = expandedMetrics.has(m.key);
                       return (
@@ -1002,9 +1150,6 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
                         </Fragment>
                       );
                     })}
-                    <td className="whitespace-nowrap border-b border-b-white/5 border-l border-l-white/10 px-4 py-3 text-slate-500">
-                      {c.needsSetupReason ?? ""}
-                    </td>
                   </tr>
                 );
               })}
@@ -1015,11 +1160,52 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
 
       {view && rows.length === 0 && disconnected.length === 0 && !loading && (
         <div className="rounded-2xl border border-white/10 bg-slate-900/40 p-8 text-center text-slate-300">
-          {flaggedOnly
-            ? "Nothing flagged right now. Every active campaign is within thresholds."
+          {showQuantity || showQuality
+            ? "Nothing flagged for that filter right now. Every active campaign is within thresholds."
             : "No campaigns with data in this window."}
         </div>
       )}
+    </div>
+  );
+}
+
+/** One line of flag counts (e.g. "Appts/Success: 4 flagged · 1 Red · 2 Yellow"). */
+function FlagCountLine({
+  label,
+  counts,
+  levels,
+}: {
+  label: string;
+  counts: { total: number; red: number; orange: number; yellow: number; data: number };
+  levels: number[];
+}) {
+  const countFor = (level: number) =>
+    level === 0
+      ? counts.red
+      : level === 1
+        ? counts.orange
+        : level === 2
+          ? counts.yellow
+          : counts.data;
+  return (
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+      <span className="font-medium text-slate-200">
+        {label}: {counts.total} flagged
+      </span>
+      {levels.map((level) => {
+        const meta = URGENCY_META[level];
+        const count = countFor(level);
+        if (!count) return null;
+        return (
+          <span
+            key={level}
+            className={`inline-flex items-center gap-1 ${meta.text}`}
+          >
+            <span className={`h-1.5 w-1.5 rounded-full ${meta.dot}`} />
+            {count} {meta.label}
+          </span>
+        );
+      })}
     </div>
   );
 }
