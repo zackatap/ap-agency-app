@@ -55,8 +55,8 @@ export const ATTENTION_REASONS: Record<AttentionCode, string> = {
 
 /** Fallback copy; live reasons include the CRM/Meta counts. */
 export const LEAD_DATA_REASONS: Record<LeadDataCode, string> = {
-  S_D1: "Meta leads exceed CRM by 15% or more — paid leads may not be reaching the CRM.",
-  S_D2: "CRM leads exceed Meta by 15% or more — Meta may be under-counting.",
+  S_D1: "Meta leads exceed GHL by 15% or more — paid leads may not be reaching GHL.",
+  S_D2: "GHL leads exceed Meta by 15% or more — Meta may be under-counting.",
 };
 
 /** Relative gap vs CRM (SoT). Flag when this or higher. */
@@ -146,8 +146,8 @@ export function computeLeadDataFlag(m: AttentionMetrics): AttentionFlag | null {
   const code: LeadDataCode = meta > crm ? "S_D1" : "S_D2";
   const reason =
     code === "S_D1"
-      ? `Meta leads (${meta}) exceed CRM (${crm}) by 15% or more — paid leads may not be reaching the CRM.`
-      : `CRM leads (${crm}) exceed Meta (${meta}) by 15% or more — Meta may be under-counting.`;
+      ? `Meta leads (${meta}) exceed GHL (${crm}) by 15% or more — paid leads may not be reaching GHL.`
+      : `GHL leads (${crm}) exceed Meta (${meta}) by 15% or more — Meta may be under-counting.`;
 
   return { code, reason, urgency: 3 };
 }

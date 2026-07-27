@@ -988,10 +988,10 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
                         if (!cmp) return null;
                         const title =
                           cmp.direction === "meta_high"
-                            ? `Meta counted ${cmp.meta} paid leads; ${cmp.crm} reached the CRM. Check lead-form sync, pipeline stage mapping, and tag filter.`
+                            ? `Meta counted ${cmp.meta} paid leads; ${cmp.crm} reached GHL. Check lead-form sync, pipeline stage mapping, and tag filter.`
                             : cmp.direction === "crm_high"
-                              ? `CRM has ${cmp.crm} leads; Meta attributed ${cmp.meta}. Extra CRM leads are usually organic/referral or missing pixel/CAPI tagging.`
-                              : `CRM and Meta agree: ${cmp.crm} leads this window.`;
+                              ? `GHL has ${cmp.crm} leads; Meta attributed ${cmp.meta}. Extra GHL leads are usually organic/referral or missing pixel/CAPI tagging.`
+                              : `GHL and Meta agree: ${cmp.crm} leads this window.`;
                         const dotClass = cmp.largeGap
                           ? "bg-red-400"
                           : cmp.direction === "meta_high"
@@ -1009,7 +1009,7 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
                             }`}
                           >
                             <span className={`h-1.5 w-1.5 rounded-full ${dotClass}`} />
-                            Leads: CRM {cmp.crm} · Meta {cmp.meta}
+                            Leads: GHL {cmp.crm} · Meta {cmp.meta}
                           </span>
                         );
                       })()}

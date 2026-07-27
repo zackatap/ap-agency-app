@@ -39,7 +39,7 @@ export const QUALITY_REASONS: Record<QualityCode, string> = {
   Q_Y2: "Sign-on rate under 25% over 30 days.",
   Q_Y3: "Booking rate under 30% over 30 days (leads aren't turning into appointments).",
   Q_DATA:
-    "Appointments booked but CRM barely updated past Appt Confirmed (few/no shows or sign-ons logged).",
+    "Appointments booked but GHL barely updated past Appt Confirmed (few/no shows or sign-ons logged).",
 };
 
 /**

@@ -354,7 +354,7 @@ function buildFindings(args: {
   // Lead flow is the headline for most support tickets (CRM = source of truth).
   const leads = metricByKey(metrics, "leads")!;
   if (current.leads === 0) {
-    out.push("No CRM leads in this window. Check that ads are active and leads are landing in the pipeline.");
+    out.push("No GHL leads in this window. Check that ads are active and leads are landing in the pipeline.");
   } else if (leads.deltaPct != null) {
     out.push(
       `Leads ${dirWord(leads)} ${Math.abs(leads.deltaPct)}% this window (${fmtCount(leads.current)} vs ${fmtCount(leads.prior)} prior).`
@@ -423,15 +423,15 @@ function buildLeadSourceFindings(current: CampaignWindowTotals): string[] {
   const meta = current.metaLeads;
   if (meta === 0 && crm === 0) return [];
   if (crm === meta) {
-    return [`CRM and Meta agree: ${crm} leads.`];
+    return [`GHL and Meta agree: ${crm} leads.`];
   }
   if (meta > crm) {
     return [
-      `Meta counted ${meta} paid leads; ${crm} reached the CRM. Check lead-form sync, pipeline stage mapping, and tag filter.`,
+      `Meta counted ${meta} paid leads; ${crm} reached GHL. Check lead-form sync, pipeline stage mapping, and tag filter.`,
     ];
   }
   return [
-    `CRM has ${crm} leads; Meta attributed ${meta}. Extra CRM leads are usually organic/referral or missing pixel/CAPI tagging.`,
+    `GHL has ${crm} leads; Meta attributed ${meta}. Extra GHL leads are usually organic/referral or missing pixel/CAPI tagging.`,
   ];
 }
 
