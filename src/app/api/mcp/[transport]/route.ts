@@ -126,7 +126,7 @@ const handler = createMcpHandler(
 
     server.tool(
       "get_pipeline_status",
-      "Lead-flow health for one client: a day-by-day lead count for the trailing window plus the open pipeline and stale-opportunity count. Use this for 'the leads aren't showing up' or 'we stopped getting leads' tickets to tell apart a real drop in volume, a tracking break (spend but no leads), or a CRM-hygiene problem (leads captured but not worked). Returns a daily series, days since last lead, and findings.",
+      "Lead-flow health for one client: a day-by-day lead count for the trailing window plus the open pipeline and stale-opportunity count. Use this for 'the leads aren't showing up' or 'we stopped getting leads' tickets to tell apart a real drop in volume, a tracking break (spend but no leads), or a GHL-hygiene problem (leads captured but not worked). Returns a daily series, days since last lead, and findings.",
       {
         client: z.string().min(2).describe("Client name or identifier from the ticket."),
         days: z

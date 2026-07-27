@@ -230,7 +230,7 @@ function buildPipelineFindings(args: {
       (Date.now() - new Date(openPipeline.lastBoardMovementAt).getTime()) / (1000 * 60 * 60 * 24)
     );
     if (ageDays >= 5) {
-      out.push(`The pipeline board hasn't been touched in ${ageDays} days, so "leads not showing up" may be a CRM-hygiene issue.`);
+      out.push(`The pipeline board hasn't been touched in ${ageDays} days, so "leads not showing up" may be a GHL-hygiene issue.`);
     }
   }
 
