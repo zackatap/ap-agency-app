@@ -147,8 +147,8 @@ function combineTotals(list: CampaignWindowTotals[]): CampaignWindowTotals {
   acc.showRate = rateOrNull(acc.showed, acc.totalAppts);
   acc.closeRate = rateOrNull(acc.closed, acc.showed);
   acc.cpl =
-    acc.adSpend > 0 && acc.metaLeads > 0
-      ? moneyOrNull(acc.adSpend, acc.metaLeads)
+    acc.adSpend > 0 && acc.leads > 0
+      ? moneyOrNull(acc.adSpend, acc.leads)
       : null;
   acc.cps = acc.adSpend > 0 ? moneyOrNull(acc.adSpend, acc.showed) : null;
   acc.cpClose = acc.adSpend > 0 ? moneyOrNull(acc.adSpend, acc.closed) : null;
@@ -266,8 +266,8 @@ export async function analyzeClientPerformance(params: {
   const noData = included.length === 0;
 
   const metrics: MetricComparison[] = [
-    buildMetric("metaLeads", "Leads", "count", current.metaLeads, prior.metaLeads, true),
-    buildMetric("leads", "Leads (CRM)", "count", current.leads, prior.leads, true),
+    buildMetric("leads", "Leads", "count", current.leads, prior.leads, true),
+    buildMetric("metaLeads", "Leads (Meta)", "count", current.metaLeads, prior.metaLeads, true),
     buildMetric("appointments", "Appointments", "count", current.totalAppts, prior.totalAppts, true),
     buildMetric("showed", "Showed", "count", current.showed, prior.showed, true),
     buildMetric("closed", "Closed", "count", current.closed, prior.closed, true),
@@ -351,10 +351,10 @@ function buildFindings(args: {
     return out;
   }
 
-  // Lead flow is the headline for most support tickets (Meta = source of truth).
-  const leads = metricByKey(metrics, "metaLeads")!;
-  if (current.metaLeads === 0) {
-    out.push("No Meta-attributed leads in this window. Check that ads are active and lead capture is firing.");
+  // Lead flow is the headline for most support tickets (CRM = source of truth).
+  const leads = metricByKey(metrics, "leads")!;
+  if (current.leads === 0) {
+    out.push("No CRM leads in this window. Check that ads are active and leads are landing in the pipeline.");
   } else if (leads.deltaPct != null) {
     out.push(
       `Leads ${dirWord(leads)} ${Math.abs(leads.deltaPct)}% this window (${fmtCount(leads.current)} vs ${fmtCount(leads.prior)} prior).`

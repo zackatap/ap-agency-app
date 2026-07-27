@@ -36,11 +36,11 @@ type WindowId = (typeof WINDOWS)[number]["id"] | "custom";
 
 /**
  * Scorecard columns, ads block first then the appt/success funnel.
- * Leads + CPL use Meta; appts / showed / success come from the GHL pipeline.
+ * Leads + CPL use GHL/CRM; ad spend / clicks stay Meta.
  */
 const SCORECARD_METRICS: Array<{ key: MetricKey; label: string }> = [
   { key: "adSpend", label: "Ad spend" },
-  { key: "metaLeads", label: "Leads" },
+  { key: "leads", label: "Leads" },
   { key: "cpl", label: "CPL" },
   { key: "linkClicks", label: "Link clicks" },
   { key: "cplc", label: "CPLC" },
@@ -104,11 +104,11 @@ function leadSourceComparison(
   if (crm === 0 && meta === 0) return null;
   const direction =
     meta > crm ? "meta_high" : crm > meta ? "crm_high" : "match";
-  const diff = Math.abs(crm - meta);
-  const base = Math.min(crm, meta);
-  // e.g. 10 vs 15 → 5/10 = 50%. One side at 0 with the other > 0 always flags.
-  const largeGap =
-    direction !== "match" && (base === 0 || diff / base >= 0.5);
+  // Match the Ads Data flag: ≥15% vs CRM (SoT). One side at 0 with the other
+  // > 0 is always a large gap.
+  const gapPct =
+    crm === 0 ? 1 : Math.abs(meta - crm) / crm;
+  const largeGap = direction !== "match" && gapPct >= 0.15;
   return { crm, meta, direction, largeGap };
 }
 

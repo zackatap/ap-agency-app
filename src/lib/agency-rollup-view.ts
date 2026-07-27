@@ -289,8 +289,8 @@ function deriveRatesFromDisjointCounts(base: CountAccumulator): CampaignWindowTo
     showRate: apptPool > 0 ? rateOrNull(base.showed + base.closed, apptPool) : null,
     closeRate: rateOrNull(base.closed, showPool),
     cpl:
-      base.adSpend > 0 && base.metaLeads > 0
-        ? moneyOrNull(base.adSpend, base.metaLeads)
+      base.adSpend > 0 && base.leads > 0
+        ? moneyOrNull(base.adSpend, base.leads)
         : null,
     cps: base.adSpend > 0 && base.showed > 0 ? moneyOrNull(base.adSpend, base.showed) : null,
     cpClose:
@@ -323,8 +323,8 @@ function deriveRatesFromRollupCounts(base: CountAccumulator): CampaignWindowTota
     showRate: reqPool > 0 ? rateOrNull(showedR, reqPool) : null,
     closeRate: showedR > 0 ? rateOrNull(base.closed, showedR) : null,
     cpl:
-      base.adSpend > 0 && base.metaLeads > 0
-        ? moneyOrNull(base.adSpend, base.metaLeads)
+      base.adSpend > 0 && base.leads > 0
+        ? moneyOrNull(base.adSpend, base.leads)
         : null,
     cps: base.adSpend > 0 && showedR > 0 ? moneyOrNull(base.adSpend, showedR) : null,
     cpClose:
@@ -716,8 +716,8 @@ export async function buildAgencyRollupView(params?: {
       closeRateSimple: average(bucket.closeRates),
       closeRateWeighted: rateOrNull(s.closed, weightedShowPool),
       cpl:
-        s.adSpend > 0 && s.metaLeads > 0
-          ? moneyOrNull(s.adSpend, s.metaLeads)
+        s.adSpend > 0 && s.leads > 0
+          ? moneyOrNull(s.adSpend, s.leads)
           : null,
       cps:
         s.adSpend > 0 && s.showed > 0 ? moneyOrNull(s.adSpend, s.showed) : null,
@@ -757,7 +757,7 @@ export const METRIC_META: Record<
   bookingRate: { label: "Booking rate", kind: "rate", higherIsBetter: true },
   showRate: { label: "Show rate", kind: "rate", higherIsBetter: true },
   closeRate: { label: "Close rate", kind: "rate", higherIsBetter: true },
-  cpl: { label: "Cost / Lead (Meta)", kind: "money", higherIsBetter: false },
+  cpl: { label: "Cost / Lead", kind: "money", higherIsBetter: false },
   cps: { label: "Cost / Show", kind: "money", higherIsBetter: false },
   cpClose: { label: "Cost / Close", kind: "money", higherIsBetter: false },
   cplc: { label: "Cost / Link Click", kind: "money", higherIsBetter: false },

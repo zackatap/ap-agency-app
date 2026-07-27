@@ -8,7 +8,8 @@
  *
  * Data comes from the rollup snapshot via {@link buildAgencyRollupView} (the
  * same source the Scorecard uses); the ClickUp ID comes live from the Client DB
- * (column BC). Quantity flags are computed by {@link computeAttentionFlag};
+ * (column BC). Ads performance flags are computed by {@link computeAttentionFlag}
+ * (CRM leads + Meta spend); Meta↔CRM Data flags by {@link computeLeadDataFlag};
  * Quality (funnel) flags by {@link computeQualityFlag}.
  */
 
@@ -53,8 +54,9 @@ const FEED_METRICS: Array<{
   out: string;
 }> = [
   { key: "adSpend", out: "ad_spend" },
-  { key: "metaLeads", out: "leads" },
-  { key: "leads", out: "crm_leads" },
+  // CRM is the lead source of truth; Meta kept as a parallel column for gaps.
+  { key: "leads", out: "leads" },
+  { key: "metaLeads", out: "meta_leads" },
   { key: "cpl", out: "cpl" },
   { key: "linkClicks", out: "link_clicks" },
   { key: "cplc", out: "cplc" },
@@ -73,31 +75,28 @@ function round(value: number, decimals: number): number {
 
 /** Counts stay whole; money/rate metrics keep 2 decimals. */
 function decimalsFor(out: string): number {
-  return out === "leads" || out === "crm_leads" || out === "link_clicks"
+  return out === "leads" || out === "meta_leads" || out === "link_clicks"
     ? 0
     : 2;
 }
 
 /**
- * CPL the way the sheet computed it: spend / leads. That's $0 when spend is $0
- * but leads exist (a paused-ads campaign still pulling leads), and null only
- * when there are no leads to divide by.
+ * CPL for flag math: spend / CRM leads. That's $0 when spend is $0 but leads
+ * exist (a paused-ads campaign still pulling leads), and null only when there
+ * are no CRM leads to divide by.
  *
  * The rollup view nulls CPL at $0 spend for display, but the flag logic needs
  * the numeric 0 — otherwise the 14d/7d CPL-delta ISNUMBER guards short-circuit
  * and the "$0 ad spend in 3 days" (S_O4) flag can never fire for fully-paused
- * campaigns. The sheet's CPL was numeric here, so this matches it.
+ * campaigns.
  */
-/** CPL = spend / Meta-attributed leads (matches Ads Manager + scorecard). */
 function sheetCpl(totals: CampaignWindowTotals | undefined): number | null {
   if (!totals) return null;
   const spend = totals.adSpend;
-  const leads = totals.metaLeads;
+  const leads = totals.leads;
   if (typeof spend !== "number" || typeof leads !== "number" || leads <= 0) {
     return null;
   }
-  // Round to cents to match the rollup view's moneyOrNull, so spend>0 campaigns
-  // are byte-for-byte identical and only $0-spend ones change (null -> 0).
   return Math.round((spend / leads) * 100) / 100;
 }
 
@@ -205,9 +204,11 @@ export async function buildAttentionFeed(opts?: {
     const metrics: AttentionMetrics = {
       businessName: base.businessName,
       campaignName,
-      metaLeads3d: s3?.totals.metaLeads ?? 0,
-      metaLeads7d: s7?.totals.metaLeads ?? 0,
+      crmLeads3d: s3?.totals.leads ?? 0,
       crmLeads7d: s7?.totals.leads ?? 0,
+      crmLeads30d: s30?.totals.leads ?? 0,
+      metaLeads7d: s7?.totals.metaLeads ?? 0,
+      metaLeads30d: s30?.totals.metaLeads ?? 0,
       cpl7d: sheetCpl(s7?.totals),
       cpl30d: sheetCpl(s30?.totals),
       cpl30dPrev: sheetCpl(s30?.priorTotals),
