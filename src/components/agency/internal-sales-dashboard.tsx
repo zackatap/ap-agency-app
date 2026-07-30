@@ -1048,12 +1048,6 @@ export function InternalSalesDashboard() {
         </div>
       ) : null}
 
-      {funnel?.warning || monthly?.warning || attribution?.warning ? (
-        <div className="mt-4 rounded-xl border border-amber-500/30 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">
-          {funnel?.warning || monthly?.warning || attribution?.warning}
-        </div>
-      ) : null}
-
       {spendError ? (
         <div className="mt-4 rounded-xl border border-amber-500/30 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">
           Meta spend unavailable: {spendError}
@@ -1567,6 +1561,12 @@ export function InternalSalesDashboard() {
           }
           loading={loading}
         />
+      ) : null}
+
+      {funnel?.warning || monthly?.warning || attribution?.warning ? (
+        <div className="mt-10 rounded-xl border border-amber-500/30 bg-amber-950/30 px-4 py-3 text-sm text-amber-200">
+          {funnel?.warning || monthly?.warning || attribution?.warning}
+        </div>
       ) : null}
     </div>
   );
