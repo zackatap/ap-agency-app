@@ -1,5 +1,5 @@
 /**
- * Internal Sales metric calculations from Appointments sheet rows.
+ * Internal Sales metric calculations from merged Leads + Appointments rows.
  *
  * Rates:
  *   Booking = booked / leads
@@ -7,16 +7,19 @@
  *   Close   = signed / showed
  *   Qualified = yes / (yes + no)
  *
- * Attribution columns (Appointments sheet):
- *   utmCampaign → Campaign
- *   utmMedium   → Ad set
- *   utmContent  → Ad
- *   utmSource   → Source
+ * Counting modes:
+ *   activity — count each stage on the date it happened
+ *              lead → leadDate, booked → creationDate, show/cancel → apptDate,
+ *              signed → closeDate (apptDate proxy)
+ *   cohort   — include people whose leadDate is in range; count ALL eventual
+ *              outcomes (ad attribution: "Jan leads → N closes")
  */
 
 import type { DateRange } from "@/lib/date-ranges";
 import { getMonthsBack, getPreviousPeriod } from "@/lib/date-ranges";
 import type { InternalSalesLead } from "@/lib/internal-sales-sheet";
+
+export type CountingMode = "activity" | "cohort";
 
 export interface InternalSalesCounts {
   leads: number;
@@ -81,6 +84,18 @@ export interface AttributionFilterOptions {
 
 export const BLANK_ATTR = "__blank__";
 
+export const COUNTING_MODE_LABELS: Record<CountingMode, string> = {
+  activity: "When it happened",
+  cohort: "Lead cohort",
+};
+
+export const COUNTING_MODE_HELP: Record<CountingMode, string> = {
+  activity:
+    "Leads, bookings, shows, and closes each count on the date that stage happened.",
+  cohort:
+    "People who became leads in this range. Bookings / shows / closes count whenever they happened later.",
+};
+
 function attrValue(raw: string): string {
   return raw.trim();
 }
@@ -115,14 +130,19 @@ export function hasAttributionFilters(filters: AttributionFilters): boolean {
   );
 }
 
-/** Min/max appt or creation date across leads (YYYY-MM-DD), if any. */
+/** Min/max origin / stage dates across leads (YYYY-MM-DD), if any. */
 export function getLeadDateSpan(
   leads: InternalSalesLead[]
 ): { min: string; max: string } | null {
   let min: string | null = null;
   let max: string | null = null;
   for (const lead of leads) {
-    for (const d of [lead.apptDate, lead.creationDate]) {
+    for (const d of [
+      lead.leadDate,
+      lead.apptDate,
+      lead.creationDate,
+      lead.closeDate,
+    ]) {
       if (!d) continue;
       if (!min || d < min) min = d;
       if (!max || d > max) max = d;
@@ -149,7 +169,6 @@ export function buildCampaignAliasMap(
     if (!aa || !bb || aa === bb) return;
     if (!map.has(aa)) map.set(aa, new Set([aa]));
     if (!map.has(bb)) map.set(bb, new Set([bb]));
-    // union
     const merged = new Set([...map.get(aa)!, ...map.get(bb)!]);
     for (const key of merged) map.set(key, merged);
   };
@@ -158,8 +177,6 @@ export function buildCampaignAliasMap(
     const name = attrValue(lead.utmCampaign);
     const id = attrValue(lead.campaignId);
     if (name && id && !isMetaObjectId(name)) link(name, id);
-    // Some rows put the id in the campaign column and the name elsewhere —
-    // if campaign col is a bare id, still register it as an id token.
     if (name && isMetaObjectId(name) && id && name !== id) link(name, id);
   }
   return map;
@@ -295,11 +312,12 @@ function dimensionRaw(
 export function computeAttributionBreakdown(
   leads: InternalSalesLead[],
   range: DateRange,
-  dimension: AttributionDimension
+  dimension: AttributionDimension,
+  mode: CountingMode = "cohort"
 ): AttributionBreakdownRow[] {
   const groups = new Map<string, InternalSalesLead[]>();
   for (const lead of leads) {
-    if (!isLeadInRange(lead, range)) continue;
+    if (!personTouchesRange(lead, range, mode)) continue;
     const key = attrKey(dimensionRaw(lead, dimension));
     const list = groups.get(key);
     if (list) list.push(lead);
@@ -311,7 +329,7 @@ export function computeAttributionBreakdown(
     rows.push({
       key,
       label: key === BLANK_ATTR ? "(none)" : key,
-      metrics: computeInternalSalesMetrics(group, range),
+      metrics: computeInternalSalesMetrics(group, range, mode),
     });
   }
 
@@ -335,24 +353,13 @@ function inRange(ymd: string, range: DateRange): boolean {
   return ymd >= range.startDate && ymd <= range.endDate;
 }
 
-/**
- * Include in lead/booking pool if appt date is in range, OR creation/booking
- * date is in range (covers leads booked this period with no/future appt).
- */
-function isLeadInRange(lead: InternalSalesLead, range: DateRange): boolean {
-  if (lead.apptDate && inRange(lead.apptDate, range)) return true;
-  if (lead.creationDate && inRange(lead.creationDate, range)) return true;
-  // No creation date, appt outside range → exclude
-  // No dates at all → exclude
-  return false;
-}
-
-function isApptInRange(lead: InternalSalesLead, range: DateRange): boolean {
-  return !!(lead.apptDate && inRange(lead.apptDate, range));
-}
-
 function isBooked(lead: InternalSalesLead): boolean {
   return !!(lead.apptDate || lead.creationDate);
+}
+
+/** Book date: when the appointment was created, else appt day. */
+function bookDate(lead: InternalSalesLead): string | null {
+  return lead.creationDate || lead.apptDate;
 }
 
 function emptyCounts(): InternalSalesCounts {
@@ -384,56 +391,231 @@ export function ratesFromCounts(counts: InternalSalesCounts): InternalSalesRates
   };
 }
 
-export function computeInternalSalesMetrics(
-  leads: InternalSalesLead[],
-  range: DateRange
-): InternalSalesMetrics {
-  const counts = emptyCounts();
-
-  for (const lead of leads) {
-    if (!isLeadInRange(lead, range)) continue;
-
-    counts.leads += 1;
-    if (isBooked(lead)) counts.booked += 1;
-
+function tallyOutcomes(
+  lead: InternalSalesLead,
+  counts: InternalSalesCounts,
+  opts: { qualify: boolean; showClose: boolean }
+) {
+  if (opts.qualify) {
     if (lead.qualified === "yes") counts.qualifiedYes += 1;
     else if (lead.qualified === "no") counts.qualifiedNo += 1;
     else counts.qualifiedUnknown += 1;
+  }
 
-    // Show / close / cancel only when the appointment itself falls in range
-    if (!isApptInRange(lead, range)) continue;
+  if (!opts.showClose) return;
 
-    switch (lead.apptStatus) {
-      case "showed":
-        counts.showed += 1;
-        break;
-      case "no_showed":
-        counts.noShowed += 1;
-        break;
-      case "cancelled":
-        counts.cancelled += 1;
-        break;
-      case "rescheduled":
-        counts.rescheduled += 1;
-        break;
-      default:
-        break;
+  switch (lead.apptStatus) {
+    case "showed":
+      counts.showed += 1;
+      break;
+    case "no_showed":
+      counts.noShowed += 1;
+      break;
+    case "cancelled":
+      counts.cancelled += 1;
+      break;
+    case "rescheduled":
+      counts.rescheduled += 1;
+      break;
+    default:
+      break;
+  }
+
+  switch (lead.closedStatus) {
+    case "signed":
+      counts.signed += 1;
+      break;
+    case "good_chance":
+    case "great_chance":
+    case "some_chance":
+      counts.pipeline += 1;
+      break;
+    case "no_chance":
+      counts.noChance += 1;
+      break;
+    default:
+      break;
+  }
+}
+
+/** Whether this person should appear in breakdowns for the range/mode. */
+export function personTouchesRange(
+  lead: InternalSalesLead,
+  range: DateRange,
+  mode: CountingMode
+): boolean {
+  if (mode === "cohort") {
+    return !!(lead.leadDate && inRange(lead.leadDate, range));
+  }
+  if (lead.leadDate && inRange(lead.leadDate, range)) return true;
+  const bookedOn = bookDate(lead);
+  if (bookedOn && inRange(bookedOn, range)) return true;
+  if (lead.apptDate && inRange(lead.apptDate, range)) return true;
+  if (lead.closeDate && inRange(lead.closeDate, range)) return true;
+  return false;
+}
+
+/** Slim row for the dashboard detail table. */
+export interface InternalSalesLeadRow {
+  name: string;
+  firstName: string;
+  lastName: string;
+  phone: string;
+  email: string;
+  ghlLink: string;
+  leadDate: string | null;
+  creationDate: string | null;
+  apptDate: string | null;
+  closeDate: string | null;
+  qualified: string;
+  apptStatus: string;
+  closedStatus: string;
+  campaign: string;
+  adSet: string;
+  ad: string;
+  source: string;
+  campaignId: string;
+  notes: string;
+  sourceTab: string;
+}
+
+function displayStatus(raw: string, fallback: string): string {
+  const r = raw.trim();
+  if (r) return r;
+  if (!fallback || fallback === "empty" || fallback === "unknown") return "";
+  return fallback.replace(/_/g, " ");
+}
+
+export function toLeadTableRow(lead: InternalSalesLead): InternalSalesLeadRow {
+  const name = [lead.firstName, lead.lastName].filter(Boolean).join(" ").trim();
+  return {
+    name: name || "(no name)",
+    firstName: lead.firstName,
+    lastName: lead.lastName,
+    phone: lead.phone,
+    email: lead.email,
+    ghlLink: lead.ghlLink,
+    leadDate: lead.leadDate,
+    creationDate: lead.creationDate,
+    apptDate: lead.apptDate,
+    closeDate: lead.closeDate,
+    qualified: displayStatus(lead.qualifiedRaw, lead.qualified),
+    apptStatus: displayStatus(lead.apptStatusRaw, lead.apptStatus),
+    closedStatus: displayStatus(lead.closedStatusRaw, lead.closedStatus),
+    campaign: lead.utmCampaign,
+    adSet: lead.utmMedium,
+    ad: lead.utmContent,
+    source: lead.utmSource,
+    campaignId: lead.campaignId,
+    notes: lead.notes.length > 400 ? `${lead.notes.slice(0, 400)}…` : lead.notes,
+    sourceTab: lead.sourceTab,
+  };
+}
+
+/**
+ * People in the current date range + counting mode, newest lead/appt first.
+ */
+export function filterLeadsInRange(
+  leads: InternalSalesLead[],
+  range: DateRange,
+  mode: CountingMode
+): InternalSalesLead[] {
+  return leads
+    .filter((lead) => personTouchesRange(lead, range, mode))
+    .sort((a, b) => {
+      const ad = a.apptDate || a.creationDate || a.leadDate || "";
+      const bd = b.apptDate || b.creationDate || b.leadDate || "";
+      if (ad === bd) {
+        return `${a.lastName}${a.firstName}`.localeCompare(
+          `${b.lastName}${b.firstName}`
+        );
+      }
+      return ad < bd ? 1 : -1;
+    });
+}
+
+export function buildLeadTableRows(
+  leads: InternalSalesLead[],
+  range: DateRange,
+  mode: CountingMode
+): InternalSalesLeadRow[] {
+  return filterLeadsInRange(leads, range, mode).map(toLeadTableRow);
+}
+
+/**
+ * Activity: each stage counts on its own date.
+ * Cohort: people with leadDate in range; all eventual outcomes counted.
+ */
+export function computeInternalSalesMetrics(
+  leads: InternalSalesLead[],
+  range: DateRange,
+  mode: CountingMode = "activity"
+): InternalSalesMetrics {
+  const counts = emptyCounts();
+
+  if (mode === "cohort") {
+    for (const lead of leads) {
+      if (!lead.leadDate || !inRange(lead.leadDate, range)) continue;
+      counts.leads += 1;
+      if (isBooked(lead)) counts.booked += 1;
+      tallyOutcomes(lead, counts, { qualify: true, showClose: true });
+    }
+    return { counts, rates: ratesFromCounts(counts) };
+  }
+
+  // Activity mode
+  for (const lead of leads) {
+    const becameLead = !!(lead.leadDate && inRange(lead.leadDate, range));
+    const bookedOn = bookDate(lead);
+    const becameBooked = !!(bookedOn && inRange(bookedOn, range));
+    const apptInRange = !!(lead.apptDate && inRange(lead.apptDate, range));
+    const closedInRange = !!(lead.closeDate && inRange(lead.closeDate, range));
+
+    if (becameLead) counts.leads += 1;
+    if (becameBooked) counts.booked += 1;
+
+    // Qualify with the lead-origin window when we have one; else with booking
+    if (becameLead || (!lead.leadDate && becameBooked)) {
+      if (lead.qualified === "yes") counts.qualifiedYes += 1;
+      else if (lead.qualified === "no") counts.qualifiedNo += 1;
+      else if (becameLead || becameBooked) counts.qualifiedUnknown += 1;
     }
 
-    switch (lead.closedStatus) {
-      case "signed":
-        counts.signed += 1;
-        break;
-      case "good_chance":
-      case "great_chance":
-      case "some_chance":
-        counts.pipeline += 1;
-        break;
-      case "no_chance":
-        counts.noChance += 1;
-        break;
-      default:
-        break;
+    if (apptInRange) {
+      switch (lead.apptStatus) {
+        case "showed":
+          counts.showed += 1;
+          break;
+        case "no_showed":
+          counts.noShowed += 1;
+          break;
+        case "cancelled":
+          counts.cancelled += 1;
+          break;
+        case "rescheduled":
+          counts.rescheduled += 1;
+          break;
+        default:
+          break;
+      }
+
+      // Pipeline / no-chance tracked on appt day (status snapshot)
+      switch (lead.closedStatus) {
+        case "good_chance":
+        case "great_chance":
+        case "some_chance":
+          counts.pipeline += 1;
+          break;
+        case "no_chance":
+          counts.noChance += 1;
+          break;
+        default:
+          break;
+      }
+    }
+
+    if (closedInRange && lead.closedStatus === "signed") {
+      counts.signed += 1;
     }
   }
 
@@ -461,18 +643,18 @@ function monthLabel(monthKey: string): string {
 }
 
 /**
- * Month-to-month using the same range logic as the funnel view
- * (appt date or creation date in the calendar month).
+ * Month-to-month using the active counting mode.
  * Returns most recent first (matches client conversions Month to Month).
  */
 export function computeMonthlyMetrics(
   leads: InternalSalesLead[],
   months = 13,
-  todayOverride?: string
+  todayOverride?: string,
+  mode: CountingMode = "activity"
 ): InternalSalesMonthRow[] {
   const ranges = getMonthsBack(months, todayOverride);
   return ranges.map((r) => {
-    const metrics = computeInternalSalesMetrics(leads, r);
+    const metrics = computeInternalSalesMetrics(leads, r, mode);
     return {
       monthKey: r.monthKey,
       label: monthLabel(r.monthKey),
@@ -485,7 +667,8 @@ export function computeMonthlyMetrics(
 
 export function computeWithCompare(
   leads: InternalSalesLead[],
-  range: DateRange
+  range: DateRange,
+  mode: CountingMode = "activity"
 ): {
   current: InternalSalesMetrics;
   previous: InternalSalesMetrics;
@@ -493,8 +676,8 @@ export function computeWithCompare(
 } {
   const previousRange = getPreviousPeriod(range);
   return {
-    current: computeInternalSalesMetrics(leads, range),
-    previous: computeInternalSalesMetrics(leads, previousRange),
+    current: computeInternalSalesMetrics(leads, range, mode),
+    previous: computeInternalSalesMetrics(leads, previousRange, mode),
     previousRange,
   };
 }
@@ -510,4 +693,8 @@ export function rateDelta(
 
 export function countDelta(current: number, previous: number): number {
   return current - previous;
+}
+
+export function isCountingMode(v: string | null | undefined): v is CountingMode {
+  return v === "activity" || v === "cohort";
 }

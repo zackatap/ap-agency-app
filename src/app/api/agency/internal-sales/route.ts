@@ -6,6 +6,7 @@ import {
 } from "@/lib/date-ranges";
 import { fetchInternalSalesLeads } from "@/lib/internal-sales-sheet";
 import {
+  buildLeadTableRows,
   computeAttributionBreakdown,
   computeInternalSalesMetrics,
   computeMonthlyMetrics,
@@ -14,9 +15,11 @@ import {
   expandFilterTokens,
   filterLeadsByAttribution,
   getLeadDateSpan,
+  isCountingMode,
   listAttributionOptions,
   type AttributionDimension,
   type AttributionFilters,
+  type CountingMode,
 } from "@/lib/internal-sales-metrics";
 import {
   costsFromSpend,
@@ -81,11 +84,43 @@ function readFilters(searchParams: URLSearchParams): AttributionFilters {
   };
 }
 
+function defaultModeForView(
+  view: "funnel" | "monthly" | "attribution"
+): CountingMode {
+  // Ad attribution answers "of leads from this period, what happened?"
+  return view === "attribution" ? "cohort" : "activity";
+}
+
+function buildSheetWarning(
+  error: string | undefined,
+  meta: {
+    leadTabCount: number;
+    appointmentTabCount: number;
+    matchedCount: number;
+    undatedCount: number;
+  }
+): string | undefined {
+  const parts: string[] = [];
+  if (error) parts.push(error);
+  if (meta.leadTabCount > 0 && meta.appointmentTabCount > 0) {
+    parts.push(
+      `Matched ${meta.matchedCount} of ${meta.leadTabCount} Leads rows to Appointments (email/phone).`
+    );
+  }
+  if (meta.undatedCount > 0) {
+    parts.push(
+      `${meta.undatedCount} people have no usable origin date and are excluded from ranged views.`
+    );
+  }
+  return parts.length ? parts.join(" ") : undefined;
+}
+
 /**
  * GET /api/agency/internal-sales
  *
  * Query:
  *   view=funnel|monthly|attribution
+ *   mode=activity|cohort
  *   preset=last_30|...
  *   dateFrom / dateTo
  *   clientDate
@@ -102,6 +137,10 @@ export async function GET(req: Request) {
       viewParam === "monthly" || viewParam === "attribution"
         ? viewParam
         : "funnel";
+    const modeParam = searchParams.get("mode");
+    const mode: CountingMode = isCountingMode(modeParam)
+      ? modeParam
+      : defaultModeForView(view);
     const presetParam =
       searchParams.get("preset") ?? searchParams.get("dateRange");
     const preset: DateRangePreset = isPreset(presetParam)
@@ -124,8 +163,13 @@ export async function GET(req: Request) {
       : "ad";
     const filters = readFilters(searchParams);
 
-    const { leads: allLeads, fetchedAt, error, fromCache } =
-      await fetchInternalSalesLeads();
+    const {
+      leads: allLeads,
+      meta: sheetMeta,
+      fetchedAt,
+      error,
+      fromCache,
+    } = await fetchInternalSalesLeads();
 
     if (error && allLeads.length === 0) {
       return NextResponse.json(
@@ -162,11 +206,13 @@ export async function GET(req: Request) {
       fromCache,
       filters: activeFilters,
       filterOptions,
-      warning: error || undefined,
+      mode,
+      sheetMeta,
+      warning: buildSheetWarning(error, sheetMeta),
     };
 
     if (view === "monthly") {
-      const monthly = computeMonthlyMetrics(leads, months, clientDate);
+      const monthly = computeMonthlyMetrics(leads, months, clientDate, mode);
       const monthKeys = monthly.map((m) => m.monthKey);
       const {
         spendByMonth,
@@ -180,6 +226,18 @@ export async function GET(req: Request) {
         return { ...m, spend: costs.spend, costs };
       });
 
+      // Detail table spans the same months shown in the grid (oldest → newest).
+      const monthRange = {
+        startDate: monthly[monthly.length - 1]?.startDate ?? "",
+        endDate: monthly[0]?.endDate ?? "",
+        label: "Month to Month",
+        preset: "custom" as const,
+      };
+      const leadRows =
+        monthRange.startDate && monthRange.endDate
+          ? buildLeadTableRows(leads, monthRange, mode)
+          : [];
+
       return NextResponse.json(
         {
           view: "monthly",
@@ -187,6 +245,7 @@ export async function GET(req: Request) {
           spendByMonth,
           adAccountId,
           metaSpendError: spendError,
+          leadRows,
           ...baseMeta,
         },
         { headers: { "Cache-Control": "no-store" } }
@@ -194,9 +253,10 @@ export async function GET(req: Request) {
     }
 
     const range = getDateRangeForPreset(preset, dateFrom, dateTo, clientDate);
+    const leadRows = buildLeadTableRows(leads, range, mode);
 
     if (view === "attribution") {
-      const rows = computeAttributionBreakdown(leads, range, dimension);
+      const rows = computeAttributionBreakdown(leads, range, dimension, mode);
       const {
         ads,
         error: spendError,
@@ -235,6 +295,7 @@ export async function GET(req: Request) {
             label: DATE_RANGE_LABELS[preset],
           },
           rows: rowsWithSpend,
+          leadRows,
           adAccountId,
           metaSpendError: spendError,
           ...baseMeta,
@@ -258,7 +319,8 @@ export async function GET(req: Request) {
     if (compare) {
       const { current, previous, previousRange } = computeWithCompare(
         leads,
-        range
+        range,
+        mode
       );
       const {
         ads: prevAds,
@@ -284,6 +346,7 @@ export async function GET(req: Request) {
           previousMetrics: previous,
           costs: costsFromSpend(spend, current.counts),
           previousCosts: costsFromSpend(prevSpend, previous.counts),
+          leadRows,
           adAccountId,
           metaSpendError: spendError || prevSpendError,
           ...baseMeta,
@@ -292,7 +355,7 @@ export async function GET(req: Request) {
       );
     }
 
-    const metrics = computeInternalSalesMetrics(leads, range);
+    const metrics = computeInternalSalesMetrics(leads, range, mode);
     return NextResponse.json(
       {
         view: "funnel",
@@ -307,6 +370,7 @@ export async function GET(req: Request) {
         previousRange: null,
         costs: costsFromSpend(spend, metrics.counts),
         previousCosts: null,
+        leadRows,
         adAccountId,
         metaSpendError: spendError,
         ...baseMeta,

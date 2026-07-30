@@ -11,11 +11,15 @@ import type {
   AttributionBreakdownRow,
   AttributionDimension,
   AttributionFilterOptions,
+  CountingMode,
+  InternalSalesLeadRow,
   InternalSalesMetrics,
   InternalSalesMonthRow,
 } from "@/lib/internal-sales-metrics";
 import {
   BLANK_ATTR,
+  COUNTING_MODE_HELP,
+  COUNTING_MODE_LABELS,
   countDelta,
   rateDelta,
 } from "@/lib/internal-sales-metrics";
@@ -33,6 +37,13 @@ interface SharedMeta {
   filteredRowCount?: number;
   fetchedAt: number;
   fromCache: boolean;
+  mode?: CountingMode;
+  sheetMeta?: {
+    leadTabCount: number;
+    appointmentTabCount: number;
+    matchedCount: number;
+    undatedCount: number;
+  };
   filters?: {
     campaigns: string[];
     adSets: string[];
@@ -41,6 +52,7 @@ interface SharedMeta {
   };
   filterOptions?: AttributionFilterOptions;
   filterDateSpan?: { min: string; max: string } | null;
+  leadRows?: InternalSalesLeadRow[];
   adAccountId?: string;
   metaSpendError?: string;
   warning?: string;
@@ -344,6 +356,7 @@ function MultiFilterSelect({
 
 export function InternalSalesDashboard() {
   const [tab, setTab] = useState<Tab>("funnel");
+  const [mode, setMode] = useState<CountingMode>("activity");
   const [preset, setPreset] = useState<DateRangePreset>("last_30");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
@@ -363,8 +376,9 @@ export function InternalSalesDashboard() {
   );
   const [filterOptions, setFilterOptions] =
     useState<AttributionFilterOptions | null>(null);
-  /** Prevents repeat auto-fit for the same filter + span. */
-  const autoFitKeyRef = useRef("");
+  const [leadSearch, setLeadSearch] = useState("");
+  const [leadStatusFilter, setLeadStatusFilter] = useState<string>("all");
+  const [expandedNotes, setExpandedNotes] = useState<string | null>(null);
 
   const appendFilters = useCallback(
     (params: URLSearchParams) => {
@@ -381,11 +395,12 @@ export function InternalSalesDashboard() {
       from?: string,
       to?: string,
       nextCompare?: boolean,
-      allowAutoFit = true
+      nextMode: CountingMode = mode
     ) => {
       if (nextPreset === "custom" && (!from || !to)) return;
       const params = new URLSearchParams();
       params.set("view", "funnel");
+      params.set("mode", nextMode);
       params.set("preset", nextPreset);
       params.set("clientDate", getTodayLocal());
       if (nextCompare) params.set("compare", "true");
@@ -406,103 +421,60 @@ export function InternalSalesDashboard() {
           setError(body.error || "Failed to load");
           return;
         }
-        if (body.filterOptions) setFilterOptions(body.filterOptions);
-
-        const filterActive = !!(
-          body.filters?.campaigns?.length ||
-          body.filters?.adSets?.length ||
-          body.filters?.ads?.length
-        );
-        const span = body.filterDateSpan;
-        // If the filter matches rows but none sit in the selected date window,
-        // jump the range to those appointment dates so the UI isn't empty zeros.
-        if (
-          allowAutoFit &&
-          filterActive &&
-          body.metrics.counts.leads === 0 &&
-          (body.filteredRowCount ?? 0) > 0 &&
-          span?.min &&
-          span?.max
-        ) {
-          const fitKey = `${(body.filters?.campaigns ?? []).join("|")}::${(
-            body.filters?.adSets ?? []
-          ).join("|")}::${(body.filters?.ads ?? []).join("|")}::${span.min}::${span.max}`;
-          if (autoFitKeyRef.current !== fitKey) {
-            autoFitKeyRef.current = fitKey;
-            setPreset("custom");
-            setCustomFrom(span.min);
-            setCustomTo(span.max);
-
-            const fitParams = new URLSearchParams();
-            fitParams.set("view", "funnel");
-            fitParams.set("preset", "custom");
-            fitParams.set("clientDate", getTodayLocal());
-            fitParams.set("dateFrom", span.min);
-            fitParams.set("dateTo", span.max);
-            if (nextCompare) fitParams.set("compare", "true");
-            appendFilters(fitParams);
-            const fitRes = await fetch(
-              `/api/agency/internal-sales?${fitParams.toString()}`,
-              { cache: "no-store" }
-            );
-            const fitBody = (await fitRes.json()) as FunnelResponse;
-            if (!fitRes.ok) {
-              setError(fitBody.error || "Failed to load");
-              return;
-            }
-            if (fitBody.filterOptions) setFilterOptions(fitBody.filterOptions);
-            setFunnel(fitBody);
-            return;
-          }
-        }
-
         setFunnel(body);
+        if (body.filterOptions) setFilterOptions(body.filterOptions);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load");
       } finally {
         setLoading(false);
       }
     },
-    [appendFilters]
+    [appendFilters, mode]
   );
 
-  const fetchMonthly = useCallback(async () => {
-    const params = new URLSearchParams();
-    params.set("view", "monthly");
-    params.set("months", "13");
-    params.set("clientDate", getTodayLocal());
-    appendFilters(params);
-    setLoading(true);
-    setError(null);
-    try {
-      const res = await fetch(
-        `/api/agency/internal-sales?${params.toString()}`,
-        { cache: "no-store" }
-      );
-      const body = (await res.json()) as MonthlyResponse;
-      if (!res.ok) {
-        setError(body.error || "Failed to load");
-        return;
+  const fetchMonthly = useCallback(
+    async (nextMode: CountingMode = mode) => {
+      const params = new URLSearchParams();
+      params.set("view", "monthly");
+      params.set("mode", nextMode);
+      params.set("months", "13");
+      params.set("clientDate", getTodayLocal());
+      appendFilters(params);
+      setLoading(true);
+      setError(null);
+      try {
+        const res = await fetch(
+          `/api/agency/internal-sales?${params.toString()}`,
+          { cache: "no-store" }
+        );
+        const body = (await res.json()) as MonthlyResponse;
+        if (!res.ok) {
+          setError(body.error || "Failed to load");
+          return;
+        }
+        setMonthly(body);
+        if (body.filterOptions) setFilterOptions(body.filterOptions);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to load");
+      } finally {
+        setLoading(false);
       }
-      setMonthly(body);
-      if (body.filterOptions) setFilterOptions(body.filterOptions);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load");
-    } finally {
-      setLoading(false);
-    }
-  }, [appendFilters]);
+    },
+    [appendFilters, mode]
+  );
 
   const fetchAttribution = useCallback(
     async (
       nextPreset: DateRangePreset,
       nextDimension: AttributionDimension,
       from?: string,
-      to?: string
+      to?: string,
+      nextMode: CountingMode = mode
     ) => {
       if (nextPreset === "custom" && (!from || !to)) return;
       const params = new URLSearchParams();
       params.set("view", "attribution");
+      params.set("mode", nextMode);
       params.set("preset", nextPreset);
       params.set("dimension", nextDimension);
       params.set("clientDate", getTodayLocal());
@@ -531,28 +503,38 @@ export function InternalSalesDashboard() {
         setLoading(false);
       }
     },
-    [appendFilters]
+    [appendFilters, mode]
   );
 
-  const refetchActive = useCallback(() => {
-    if (tab === "monthly") void fetchMonthly();
-    else if (tab === "attribution")
-      void fetchAttribution(preset, dimension, customFrom, customTo);
-    else void fetchFunnel(preset, customFrom, customTo, compare);
-  }, [
-    tab,
-    fetchMonthly,
-    fetchAttribution,
-    fetchFunnel,
-    preset,
-    dimension,
-    customFrom,
-    customTo,
-    compare,
-  ]);
+  const refetchActive = useCallback(
+    (nextMode: CountingMode = mode) => {
+      if (tab === "monthly") void fetchMonthly(nextMode);
+      else if (tab === "attribution")
+        void fetchAttribution(
+          preset,
+          dimension,
+          customFrom,
+          customTo,
+          nextMode
+        );
+      else void fetchFunnel(preset, customFrom, customTo, compare, nextMode);
+    },
+    [
+      tab,
+      fetchMonthly,
+      fetchAttribution,
+      fetchFunnel,
+      preset,
+      dimension,
+      customFrom,
+      customTo,
+      compare,
+      mode,
+    ]
+  );
 
   useEffect(() => {
-    void fetchFunnel("last_30", undefined, undefined, false);
+    void fetchFunnel("last_30", undefined, undefined, false, "activity");
     // initial load only
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -562,32 +544,48 @@ export function InternalSalesDashboard() {
     setPreset(next);
     if (next === "custom") return;
     if (tab === "attribution") {
-      void fetchAttribution(next, dimension, customFrom, customTo);
+      void fetchAttribution(next, dimension, customFrom, customTo, mode);
     } else if (tab === "funnel") {
-      void fetchFunnel(next, customFrom, customTo, compare);
+      void fetchFunnel(next, customFrom, customTo, compare, mode);
     }
   };
 
   const handleCustomApply = () => {
     if (!customFrom || !customTo) return;
     if (tab === "attribution") {
-      void fetchAttribution("custom", dimension, customFrom, customTo);
+      void fetchAttribution("custom", dimension, customFrom, customTo, mode);
     } else {
-      void fetchFunnel("custom", customFrom, customTo, compare);
+      void fetchFunnel("custom", customFrom, customTo, compare, mode);
     }
   };
 
   const handleCompareToggle = (checked: boolean) => {
     setCompare(checked);
-    void fetchFunnel(preset, customFrom, customTo, checked);
+    void fetchFunnel(preset, customFrom, customTo, checked, mode);
+  };
+
+  const handleModeChange = (next: CountingMode) => {
+    if (next === mode) return;
+    setMode(next);
+    refetchActive(next);
   };
 
   const handleTabChange = (next: Tab) => {
+    // Recommend cohort for ad attribution; activity for ops views.
+    const nextMode: CountingMode =
+      next === "attribution" ? "cohort" : "activity";
     setTab(next);
-    if (next === "monthly") void fetchMonthly();
+    setMode(nextMode);
+    if (next === "monthly") void fetchMonthly(nextMode);
     else if (next === "attribution")
-      void fetchAttribution(preset, dimension, customFrom, customTo);
-    else void fetchFunnel(preset, customFrom, customTo, compare);
+      void fetchAttribution(
+        preset,
+        dimension,
+        customFrom,
+        customTo,
+        nextMode
+      );
+    else void fetchFunnel(preset, customFrom, customTo, compare, nextMode);
   };
 
   // Filter state updates are applied on next fetch via appendFilters.
@@ -595,7 +593,6 @@ export function InternalSalesDashboard() {
   useEffect(() => {
     // Skip the first render (initial fetch handles that).
     if (!filterOptions) return;
-    autoFitKeyRef.current = "";
     refetchActive();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [campaigns, adSets, ads]);
@@ -612,23 +609,9 @@ export function InternalSalesDashboard() {
   };
 
   const clearFilters = () => {
-    autoFitKeyRef.current = "";
     setCampaigns([]);
     setAdSets([]);
     setAds([]);
-  };
-
-  const applyMatchingDateSpan = (span?: { min: string; max: string } | null) => {
-    if (!span?.min || !span?.max) {
-      setPreset("maximum");
-      void fetchFunnel("maximum", undefined, undefined, compare, false);
-      return;
-    }
-    autoFitKeyRef.current = `${campaigns.join("|")}::${adSets.join("|")}::${ads.join("|")}::${span.min}::${span.max}`;
-    setPreset("custom");
-    setCustomFrom(span.min);
-    setCustomTo(span.max);
-    void fetchFunnel("custom", span.min, span.max, compare, false);
   };
 
   const hasFilters = campaigns.length > 0 || adSets.length > 0 || ads.length > 0;
@@ -697,6 +680,69 @@ export function InternalSalesDashboard() {
     monthly?.metaSpendError ||
     attribution?.metaSpendError;
 
+  const activeLeadRows = useMemo(() => {
+    if (tab === "monthly") return monthly?.leadRows ?? [];
+    if (tab === "attribution") return attribution?.leadRows ?? [];
+    return funnel?.leadRows ?? [];
+  }, [tab, funnel?.leadRows, monthly?.leadRows, attribution?.leadRows]);
+
+  const visibleLeadRows = useMemo(() => {
+    const q = leadSearch.trim().toLowerCase();
+    return activeLeadRows.filter((row) => {
+      if (leadStatusFilter === "signed" && row.closedStatus.toLowerCase() !== "signed")
+        return false;
+      if (leadStatusFilter === "showed" && row.apptStatus.toLowerCase() !== "showed")
+        return false;
+      if (
+        leadStatusFilter === "no_show" &&
+        !row.apptStatus.toLowerCase().includes("no show")
+      )
+        return false;
+      if (
+        leadStatusFilter === "booked" &&
+        !row.creationDate &&
+        !row.apptDate
+      )
+        return false;
+      if (
+        leadStatusFilter === "pipeline" &&
+        !row.closedStatus.toLowerCase().includes("chance")
+      )
+        return false;
+      if (!q) return true;
+      const hay = [
+        row.name,
+        row.email,
+        row.phone,
+        row.campaign,
+        row.adSet,
+        row.ad,
+        row.source,
+        row.apptStatus,
+        row.closedStatus,
+        row.notes,
+      ]
+        .join(" ")
+        .toLowerCase();
+      return hay.includes(q);
+    });
+  }, [activeLeadRows, leadSearch, leadStatusFilter]);
+
+  const leadTableRangeLabel = useMemo(() => {
+    if (tab === "monthly") {
+      const months = monthly?.months ?? [];
+      if (!months.length) return null;
+      return `${months[months.length - 1]?.startDate} → ${months[0]?.endDate}`;
+    }
+    if (tab === "attribution" && attribution?.range) {
+      return `${attribution.range.label} · ${attribution.range.startDate} → ${attribution.range.endDate}`;
+    }
+    if (funnel?.range) {
+      return `${funnel.range.label} · ${funnel.range.startDate} → ${funnel.range.endDate}`;
+    }
+    return null;
+  }, [tab, monthly?.months, attribution?.range, funnel?.range]);
+
   const SortTh = ({
     k,
     children,
@@ -740,7 +786,7 @@ export function InternalSalesDashboard() {
             Internal Sales
           </h1>
           <p className="mt-1 text-sm text-slate-400">
-            Appointments sheet · booking, show, and close rates
+            Leads + Appointments · booking, show, and close rates
           </p>
         </div>
 
@@ -837,27 +883,59 @@ export function InternalSalesDashboard() {
         ) : null}
       </div>
 
-      <div className="mt-6 flex gap-1 rounded-lg bg-slate-800/50 p-1 w-fit">
-        {(
-          [
-            { id: "funnel" as const, label: "Funnel" },
-            { id: "attribution" as const, label: "By ad" },
-            { id: "monthly" as const, label: "Month to Month" },
-          ] as const
-        ).map((t) => (
-          <button
-            key={t.id}
-            type="button"
-            onClick={() => handleTabChange(t.id)}
-            className={`rounded-md px-4 py-1.5 text-sm transition-colors ${
-              tab === t.id
-                ? "bg-indigo-600 text-white"
-                : "text-slate-300 hover:text-white"
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
+      <div className="mt-6 flex flex-wrap items-center gap-4">
+        <div className="flex gap-1 rounded-lg bg-slate-800/50 p-1 w-fit">
+          {(
+            [
+              { id: "funnel" as const, label: "Funnel" },
+              { id: "attribution" as const, label: "By ad" },
+              { id: "monthly" as const, label: "Month to Month" },
+            ] as const
+          ).map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => handleTabChange(t.id)}
+              className={`rounded-md px-4 py-1.5 text-sm transition-colors ${
+                tab === t.id
+                  ? "bg-indigo-600 text-white"
+                  : "text-slate-300 hover:text-white"
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex flex-col gap-1">
+          <div className="flex gap-1 rounded-lg bg-slate-800/50 p-1 w-fit">
+            {(
+              [
+                { id: "activity" as const },
+                { id: "cohort" as const },
+              ] as const
+            ).map((mOpt) => (
+              <button
+                key={mOpt.id}
+                type="button"
+                onClick={() => handleModeChange(mOpt.id)}
+                className={`rounded-md px-3 py-1.5 text-sm transition-colors ${
+                  mode === mOpt.id
+                    ? "bg-white/10 text-white"
+                    : "text-slate-400 hover:text-white"
+                }`}
+              >
+                {COUNTING_MODE_LABELS[mOpt.id]}
+              </button>
+            ))}
+          </div>
+          <p className="max-w-xl text-xs text-slate-500">
+            {COUNTING_MODE_HELP[mode]}
+            {mode === "activity"
+              ? " Closes use appointment day (no close-date column yet)."
+              : ""}
+          </p>
+        </div>
       </div>
 
       {error ? (
@@ -916,13 +994,19 @@ export function InternalSalesDashboard() {
               </p>
               <button
                 type="button"
-                onClick={() => applyMatchingDateSpan(funnel?.filterDateSpan)}
+                onClick={() => {
+                  setPreset("maximum");
+                  void fetchFunnel(
+                    "maximum",
+                    undefined,
+                    undefined,
+                    compare,
+                    mode
+                  );
+                }}
                 className="mt-2 rounded-lg bg-amber-500/20 px-3 py-1.5 text-sm font-medium text-amber-50 hover:bg-amber-500/30"
               >
-                Show matching dates
-                {funnel?.filterDateSpan
-                  ? ` (${funnel.filterDateSpan.min} → ${funnel.filterDateSpan.max})`
-                  : ""}
+                Show all matching
               </button>
             </div>
           ) : null}
@@ -1099,7 +1183,13 @@ export function InternalSalesDashboard() {
                 onChange={(e) => {
                   const next = e.target.value as AttributionDimension;
                   setDimension(next);
-                  void fetchAttribution(preset, next, customFrom, customTo);
+                  void fetchAttribution(
+                    preset,
+                    next,
+                    customFrom,
+                    customTo,
+                    mode
+                  );
                 }}
                 className={selectClass}
               >
@@ -1128,15 +1218,20 @@ export function InternalSalesDashboard() {
                 <button
                   type="button"
                   onClick={() => {
-                    applyMatchingDateSpan(attribution?.filterDateSpan);
+                    setPreset("maximum");
                     setTab("funnel");
+                    setMode("activity");
+                    void fetchFunnel(
+                      "maximum",
+                      undefined,
+                      undefined,
+                      compare,
+                      "activity"
+                    );
                   }}
                   className="mt-2 rounded-lg bg-amber-500/20 px-3 py-1.5 text-sm font-medium text-amber-50 hover:bg-amber-500/30"
                 >
-                  Show matching dates
-                  {attribution?.filterDateSpan
-                    ? ` (${attribution.filterDateSpan.min} → ${attribution.filterDateSpan.max})`
-                    : ""}
+                  Show all matching
                 </button>
               </div>
             ) : (
@@ -1328,7 +1423,231 @@ export function InternalSalesDashboard() {
           </div>
         </div>
       ) : null}
+
+      {(funnel || monthly || attribution) && !error ? (
+        <LeadDetailTable
+          rows={visibleLeadRows}
+          totalInFilter={activeLeadRows.length}
+          rangeLabel={leadTableRangeLabel}
+          mode={mode}
+          search={leadSearch}
+          onSearchChange={setLeadSearch}
+          statusFilter={leadStatusFilter}
+          onStatusFilterChange={setLeadStatusFilter}
+          expandedNotes={expandedNotes}
+          onToggleNotes={(key) =>
+            setExpandedNotes((cur) => (cur === key ? null : key))
+          }
+          loading={loading}
+        />
+      ) : null}
     </div>
+  );
+}
+
+function formatPhoneDisplay(phone: string): string {
+  const d = phone.replace(/\D/g, "");
+  const ten = d.length >= 10 ? d.slice(-10) : d;
+  if (ten.length !== 10) return phone || "—";
+  return `(${ten.slice(0, 3)}) ${ten.slice(3, 6)}-${ten.slice(6)}`;
+}
+
+function statusTone(value: string): string {
+  const v = value.toLowerCase();
+  if (v === "signed" || v === "showed" || v === "yes") return "text-emerald-300";
+  if (v.includes("no show") || v === "no" || v === "no chance")
+    return "text-rose-300";
+  if (v.includes("chance") || v === "rescheduled") return "text-amber-200";
+  if (v.includes("cancel")) return "text-slate-400";
+  return "text-slate-200";
+}
+
+function LeadDetailTable({
+  rows,
+  totalInFilter,
+  rangeLabel,
+  mode,
+  search,
+  onSearchChange,
+  statusFilter,
+  onStatusFilterChange,
+  expandedNotes,
+  onToggleNotes,
+  loading,
+}: {
+  rows: InternalSalesLeadRow[];
+  totalInFilter: number;
+  rangeLabel: string | null;
+  mode: CountingMode;
+  search: string;
+  onSearchChange: (v: string) => void;
+  statusFilter: string;
+  onStatusFilterChange: (v: string) => void;
+  expandedNotes: string | null;
+  onToggleNotes: (key: string) => void;
+  loading: boolean;
+}) {
+  return (
+    <section className={`mt-10 ${loading ? "opacity-60" : ""}`}>
+      <div className="overflow-hidden rounded-xl border border-white/10 bg-white/5">
+        <div className="flex flex-wrap items-end justify-between gap-4 border-b border-white/10 px-5 py-4">
+          <div>
+            <h2 className="text-lg font-semibold text-white">Leads in view</h2>
+            <p className="mt-0.5 text-xs text-slate-500">
+              {rows.length === totalInFilter
+                ? `${totalInFilter} people`
+                : `${rows.length} of ${totalInFilter} people`}
+              {rangeLabel ? ` · ${rangeLabel}` : ""}
+              {` · ${COUNTING_MODE_LABELS[mode]}`}
+            </p>
+          </div>
+          <div className="flex flex-wrap items-end gap-3">
+            <label className="block text-xs text-slate-400">
+              Status
+              <select
+                value={statusFilter}
+                onChange={(e) => onStatusFilterChange(e.target.value)}
+                className={selectClass}
+              >
+                <option value="all">All</option>
+                <option value="booked">Booked</option>
+                <option value="showed">Showed</option>
+                <option value="no_show">No show</option>
+                <option value="pipeline">Pipeline</option>
+                <option value="signed">Signed</option>
+              </select>
+            </label>
+            <label className="block text-xs text-slate-400">
+              Search
+              <input
+                type="search"
+                value={search}
+                onChange={(e) => onSearchChange(e.target.value)}
+                placeholder="Name, email, campaign…"
+                className={`${selectClass} min-w-[220px]`}
+              />
+            </label>
+          </div>
+        </div>
+
+        {rows.length === 0 ? (
+          <p className="px-5 py-8 text-sm text-slate-500">
+            No leads match the current filters.
+          </p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full min-w-[1100px] text-left">
+              <thead>
+                <tr className="border-b border-white/10 text-xs font-medium uppercase tracking-wider text-slate-400">
+                  <th className="px-4 py-3">Name</th>
+                  <th className="px-4 py-3">Contact</th>
+                  <th className="px-4 py-3">Lead</th>
+                  <th className="px-4 py-3">Booked</th>
+                  <th className="px-4 py-3">Appt</th>
+                  <th className="px-4 py-3">Qualified</th>
+                  <th className="px-4 py-3">Appt status</th>
+                  <th className="px-4 py-3">Closed</th>
+                  <th className="px-4 py-3">Campaign</th>
+                  <th className="px-4 py-3">Ad set</th>
+                  <th className="px-4 py-3">Ad</th>
+                  <th className="px-4 py-3">Notes</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/5">
+                {rows.map((row, i) => {
+                  const key = `${row.email}|${row.phone}|${i}`;
+                  const notesOpen = expandedNotes === key;
+                  return (
+                    <tr key={key} className="align-top hover:bg-white/[0.03]">
+                      <td className="px-4 py-3 text-sm text-white">
+                        <div className="font-medium">{row.name}</div>
+                        {row.ghlLink ? (
+                          <a
+                            href={row.ghlLink}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="mt-0.5 inline-block text-xs text-indigo-300 hover:text-indigo-200"
+                          >
+                            Open in GHL
+                          </a>
+                        ) : null}
+                      </td>
+                      <td className="px-4 py-3 text-sm text-slate-300">
+                        <div>{formatPhoneDisplay(row.phone)}</div>
+                        <div className="max-w-[180px] truncate text-xs text-slate-500">
+                          {row.email || "—"}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-sm tabular-nums text-slate-300">
+                        {row.leadDate || "—"}
+                      </td>
+                      <td className="px-4 py-3 text-sm tabular-nums text-slate-300">
+                        {row.creationDate || "—"}
+                      </td>
+                      <td className="px-4 py-3 text-sm tabular-nums text-slate-300">
+                        {row.apptDate || "—"}
+                      </td>
+                      <td
+                        className={`px-4 py-3 text-sm capitalize ${statusTone(row.qualified)}`}
+                      >
+                        {row.qualified || "—"}
+                      </td>
+                      <td
+                        className={`px-4 py-3 text-sm capitalize ${statusTone(row.apptStatus)}`}
+                      >
+                        {row.apptStatus || "—"}
+                      </td>
+                      <td
+                        className={`px-4 py-3 text-sm capitalize ${statusTone(row.closedStatus)}`}
+                      >
+                        {row.closedStatus || "—"}
+                      </td>
+                      <td className="px-4 py-3 text-sm text-slate-300">
+                        <div className="max-w-[160px] truncate" title={row.campaign}>
+                          {row.campaign || "—"}
+                        </div>
+                        {row.source ? (
+                          <div className="text-xs text-slate-500">{row.source}</div>
+                        ) : null}
+                      </td>
+                      <td className="px-4 py-3 text-sm text-slate-300">
+                        <div className="max-w-[140px] truncate" title={row.adSet}>
+                          {row.adSet || "—"}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-sm text-slate-300">
+                        <div className="max-w-[140px] truncate" title={row.ad}>
+                          {row.ad || "—"}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3 text-sm text-slate-400">
+                        {row.notes ? (
+                          <button
+                            type="button"
+                            onClick={() => onToggleNotes(key)}
+                            className="max-w-[220px] text-left hover:text-slate-200"
+                          >
+                            <span
+                              className={
+                                notesOpen ? "whitespace-pre-wrap" : "line-clamp-2"
+                              }
+                            >
+                              {row.notes}
+                            </span>
+                          </button>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </section>
   );
 }
 
