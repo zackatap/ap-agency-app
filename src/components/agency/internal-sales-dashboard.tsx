@@ -26,6 +26,7 @@ import {
 type SpendCosts = {
   spend: number;
   cpl: number | null;
+  cpb: number | null;
   cps: number | null;
   cpClose: number | null;
 };
@@ -87,6 +88,7 @@ interface MonthlyResponse extends SharedMeta {
 interface AttributionRow extends AttributionBreakdownRow {
   spend: number | null;
   cpl: number | null;
+  cpb: number | null;
   cps: number | null;
   cpClose: number | null;
 }
@@ -128,10 +130,13 @@ type AttrSortKey =
   | "leads"
   | "cpl"
   | "booked"
+  | "cpb"
   | "bookingRate"
   | "showed"
+  | "cps"
   | "showRate"
   | "signed"
+  | "cpClose"
   | "closeRate";
 
 function formatPct(v: number | null): string {
@@ -225,6 +230,99 @@ function KpiCard({
       </div>
       {sub ? <p className="mt-0.5 text-xs text-slate-500">{sub}</p> : null}
     </div>
+  );
+}
+
+function KpiPairCard({
+  ariaTitle,
+  leftLabel,
+  rightLabel,
+  leftValue,
+  rightValue,
+  leftDelta,
+  rightDelta,
+  leftDeltaKind = "count",
+  rightDeltaKind = "count",
+  leftSub,
+  rightSub,
+}: {
+  ariaTitle: string;
+  leftLabel: string;
+  rightLabel: string;
+  leftValue: string;
+  rightValue: string;
+  leftDelta?: number | null;
+  rightDelta?: number | null;
+  leftDeltaKind?: "pct" | "count";
+  rightDeltaKind?: "pct" | "count";
+  leftSub?: string;
+  rightSub?: string;
+}) {
+  const colClass =
+    "text-[11px] font-medium uppercase tracking-wide text-slate-400";
+  const ruleClass = "mt-1.5 border-b border-white/[0.04]";
+  const valueClass =
+    "pt-2 text-xl font-semibold leading-none tracking-tight tabular-nums text-white sm:text-2xl";
+
+  return (
+    <div
+      role="group"
+      aria-label={ariaTitle}
+      className="rounded-xl border border-white/10 bg-slate-900/40 p-4"
+    >
+      <div className="grid grid-cols-2 gap-x-0">
+        <div className="min-w-0 pr-3">
+          <div className={colClass}>{leftLabel}</div>
+          <div className={ruleClass} />
+          <div className="flex items-baseline gap-2">
+            <div className={valueClass}>{leftValue}</div>
+            {leftDelta !== undefined ? (
+              <DeltaBadge value={leftDelta} kind={leftDeltaKind} />
+            ) : null}
+          </div>
+          {leftSub ? (
+            <div className="mt-2 text-xs leading-snug text-slate-500">
+              {leftSub}
+            </div>
+          ) : null}
+        </div>
+        <div className="min-w-0 border-l border-white/[0.04] pl-3">
+          <div className={colClass}>{rightLabel}</div>
+          <div className={ruleClass} />
+          <div className="flex items-baseline gap-2">
+            <div className={valueClass}>{rightValue}</div>
+            {rightDelta !== undefined ? (
+              <DeltaBadge value={rightDelta} kind={rightDeltaKind} />
+            ) : null}
+          </div>
+          {rightSub ? (
+            <div className="mt-2 text-xs leading-snug text-slate-500">
+              {rightSub}
+            </div>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function KpiSection({
+  title,
+  subtitle,
+  children,
+}: {
+  title: string;
+  subtitle: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="space-y-3">
+      <div>
+        <h2 className="text-sm font-semibold text-white">{title}</h2>
+        <p className="mt-0.5 text-xs text-slate-500">{subtitle}</p>
+      </div>
+      <div className="grid gap-3 md:grid-cols-3">{children}</div>
+    </section>
   );
 }
 
@@ -625,6 +723,12 @@ export function InternalSalesDashboard() {
           return row.spend ?? -1;
         case "cpl":
           return row.cpl ?? -1;
+        case "cpb":
+          return row.cpb ?? -1;
+        case "cps":
+          return row.cps ?? -1;
+        case "cpClose":
+          return row.cpClose ?? -1;
         case "leads":
           return row.metrics.counts.leads;
         case "booked":
@@ -1011,11 +1115,90 @@ export function InternalSalesDashboard() {
             </div>
           ) : null}
 
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <KpiCard
-              label="Ad spend"
-              value={formatMoney(costs?.spend ?? null)}
-              delta={
+          <KpiSection
+            title="Leads & Appointments"
+            subtitle="Lead and appointment volume, cost per stage, and funnel rates through the show."
+          >
+            <KpiPairCard
+              ariaTitle="Leads & CPL"
+              leftLabel="Leads"
+              rightLabel="CPL"
+              leftValue={String(c.leads)}
+              rightValue={formatMoneyExact(costs?.cpl ?? null)}
+              leftDelta={
+                compare && prev
+                  ? countDelta(c.leads, prev.counts.leads)
+                  : undefined
+              }
+            />
+            <KpiPairCard
+              ariaTitle="Appts & booking rate"
+              leftLabel="Appts"
+              rightLabel="Booking rate"
+              leftValue={String(c.booked)}
+              rightValue={formatPct(r.bookingRate)}
+              leftDelta={
+                compare && prev
+                  ? countDelta(c.booked, prev.counts.booked)
+                  : undefined
+              }
+              rightDelta={
+                compare && prev
+                  ? rateDelta(r.bookingRate, prev.rates.bookingRate)
+                  : undefined
+              }
+              rightDeltaKind="pct"
+            />
+            <KpiPairCard
+              ariaTitle="Showed & show rate"
+              leftLabel="Showed"
+              rightLabel="Show rate"
+              leftValue={String(c.showed)}
+              rightValue={formatPct(r.showRate)}
+              leftDelta={
+                compare && prev
+                  ? countDelta(c.showed, prev.counts.showed)
+                  : undefined
+              }
+              rightDelta={
+                compare && prev
+                  ? rateDelta(r.showRate, prev.rates.showRate)
+                  : undefined
+              }
+              rightDeltaKind="pct"
+              rightSub={`${c.noShowed} no-shows`}
+            />
+          </KpiSection>
+
+          <KpiSection
+            title="Conversions"
+            subtitle="Closes, ad spend, and cost per booking / show / close."
+          >
+            <KpiPairCard
+              ariaTitle="Signed & close rate"
+              leftLabel="Signed"
+              rightLabel="Close rate"
+              leftValue={String(c.signed)}
+              rightValue={formatPct(r.closeRate)}
+              leftDelta={
+                compare && prev
+                  ? countDelta(c.signed, prev.counts.signed)
+                  : undefined
+              }
+              rightDelta={
+                compare && prev
+                  ? rateDelta(r.closeRate, prev.rates.closeRate)
+                  : undefined
+              }
+              rightDeltaKind="pct"
+            />
+            <KpiPairCard
+              ariaTitle="Ad spend & cost per booking"
+              leftLabel="Ad spend"
+              rightLabel="Cost / booking"
+              leftValue={formatMoney(costs?.spend ?? null)}
+              rightValue={formatMoneyExact(costs?.cpb ?? null)}
+              leftDelta={
                 compare && costs && prevCosts
                   ? countDelta(
                       Math.round(costs.spend),
@@ -1023,52 +1206,22 @@ export function InternalSalesDashboard() {
                     )
                   : undefined
               }
-              sub={
+              leftSub={
                 funnel?.adAccountId
                   ? funnel.adAccountId.replace(/^act_/, "act_")
                   : undefined
               }
             />
-            <KpiCard
-              label="Cost per lead"
-              value={formatMoneyExact(costs?.cpl ?? null)}
+            <KpiPairCard
+              ariaTitle="Cost per show & cost per close"
+              leftLabel="Cost / show"
+              rightLabel="Cost / close"
+              leftValue={formatMoneyExact(costs?.cps ?? null)}
+              rightValue={formatMoneyExact(costs?.cpClose ?? null)}
             />
-            <KpiCard
-              label="Cost per show"
-              value={formatMoneyExact(costs?.cps ?? null)}
-            />
-            <KpiCard
-              label="Cost per close"
-              value={formatMoneyExact(costs?.cpClose ?? null)}
-            />
-            <KpiCard
-              label="Leads"
-              value={String(c.leads)}
-              delta={
-                compare && prev
-                  ? countDelta(c.leads, prev.counts.leads)
-                  : undefined
-              }
-            />
-            <KpiCard
-              label="Booked"
-              value={String(c.booked)}
-              delta={
-                compare && prev
-                  ? countDelta(c.booked, prev.counts.booked)
-                  : undefined
-              }
-            />
-            <KpiCard
-              label="Booking rate"
-              value={formatPct(r.bookingRate)}
-              delta={
-                compare && prev
-                  ? rateDelta(r.bookingRate, prev.rates.bookingRate)
-                  : undefined
-              }
-              deltaKind="pct"
-            />
+          </KpiSection>
+
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
             <KpiCard
               label="Qualified rate"
               value={formatPct(r.qualifiedRate)}
@@ -1080,51 +1233,8 @@ export function InternalSalesDashboard() {
               deltaKind="pct"
               sub={`${c.qualifiedYes} yes · ${c.qualifiedNo} no`}
             />
-            <KpiCard
-              label="Showed"
-              value={String(c.showed)}
-              delta={
-                compare && prev
-                  ? countDelta(c.showed, prev.counts.showed)
-                  : undefined
-              }
-            />
-            <KpiCard
-              label="Show rate"
-              value={formatPct(r.showRate)}
-              delta={
-                compare && prev
-                  ? rateDelta(r.showRate, prev.rates.showRate)
-                  : undefined
-              }
-              deltaKind="pct"
-              sub={`${c.noShowed} no-shows`}
-            />
-            <KpiCard
-              label="Signed"
-              value={String(c.signed)}
-              delta={
-                compare && prev
-                  ? countDelta(c.signed, prev.counts.signed)
-                  : undefined
-              }
-            />
-            <KpiCard
-              label="Close rate"
-              value={formatPct(r.closeRate)}
-              delta={
-                compare && prev
-                  ? rateDelta(r.closeRate, prev.rates.closeRate)
-                  : undefined
-              }
-              deltaKind="pct"
-            />
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
             <KpiCard label="Cancelled" value={String(c.cancelled)} />
             <KpiCard label="No showed" value={String(c.noShowed)} />
-            <KpiCard label="Rescheduled" value={String(c.rescheduled)} />
             <KpiCard
               label="Pipeline"
               value={String(c.pipeline)}
@@ -1241,7 +1351,7 @@ export function InternalSalesDashboard() {
             )
           ) : (
             <div className="overflow-x-auto rounded-xl border border-white/10">
-              <table className="w-full min-w-[900px] text-sm">
+              <table className="w-full min-w-[1200px] text-sm">
                 <thead>
                   <tr className="border-b border-white/10 bg-white/5">
                     <SortTh k="key" align="left">
@@ -1252,10 +1362,13 @@ export function InternalSalesDashboard() {
                     <SortTh k="leads">Leads</SortTh>
                     <SortTh k="cpl">CPL</SortTh>
                     <SortTh k="booked">Appts</SortTh>
+                    <SortTh k="cpb">CPB</SortTh>
                     <SortTh k="bookingRate">Book %</SortTh>
                     <SortTh k="showed">Showed</SortTh>
+                    <SortTh k="cps">CPS</SortTh>
                     <SortTh k="showRate">Show %</SortTh>
                     <SortTh k="signed">Signed</SortTh>
+                    <SortTh k="cpClose">CPClose</SortTh>
                     <SortTh k="closeRate">Close %</SortTh>
                   </tr>
                 </thead>
@@ -1281,16 +1394,25 @@ export function InternalSalesDashboard() {
                         {row.metrics.counts.booked}
                       </td>
                       <td className="px-3 py-2.5 text-center tabular-nums text-white">
+                        {formatMoneyExact(row.cpb)}
+                      </td>
+                      <td className="px-3 py-2.5 text-center tabular-nums text-white">
                         {formatPct(row.metrics.rates.bookingRate)}
                       </td>
                       <td className="px-3 py-2.5 text-center tabular-nums text-white">
                         {row.metrics.counts.showed}
                       </td>
                       <td className="px-3 py-2.5 text-center tabular-nums text-white">
+                        {formatMoneyExact(row.cps)}
+                      </td>
+                      <td className="px-3 py-2.5 text-center tabular-nums text-white">
                         {formatPct(row.metrics.rates.showRate)}
                       </td>
                       <td className="px-3 py-2.5 text-center tabular-nums text-white">
                         {row.metrics.counts.signed}
+                      </td>
+                      <td className="px-3 py-2.5 text-center tabular-nums text-white">
+                        {formatMoneyExact(row.cpClose)}
                       </td>
                       <td className="px-3 py-2.5 text-center tabular-nums text-white">
                         {formatPct(row.metrics.rates.closeRate)}
@@ -1352,6 +1474,15 @@ export function InternalSalesDashboard() {
                     format="currency"
                   />
                   <SalesMetricRow
+                    label="Appointments"
+                    values={monthly.months.map((x) => x.metrics.counts.booked)}
+                  />
+                  <SalesMetricRow
+                    label="Cost Per Booking"
+                    values={monthly.months.map((x) => x.costs?.cpb ?? null)}
+                    format="currency"
+                  />
+                  <SalesMetricRow
                     label="Booking %"
                     values={monthly.months.map(
                       (x) => x.metrics.rates.bookingRate
@@ -1359,12 +1490,18 @@ export function InternalSalesDashboard() {
                     format="percent"
                   />
                   <SalesMetricRow
-                    label="Appointments"
-                    values={monthly.months.map((x) => x.metrics.counts.booked)}
-                  />
-                  <SalesMetricRow
                     label="Showed"
                     values={monthly.months.map((x) => x.metrics.counts.showed)}
+                  />
+                  <SalesMetricRow
+                    label="Cost Per Show"
+                    values={monthly.months.map((x) => x.costs?.cps ?? null)}
+                    format="currency"
+                  />
+                  <SalesMetricRow
+                    label="Show %"
+                    values={monthly.months.map((x) => x.metrics.rates.showRate)}
+                    format="percent"
                   />
                   <SalesMetricRow
                     label="No Show"
@@ -1379,18 +1516,13 @@ export function InternalSalesDashboard() {
                     )}
                   />
                   <SalesMetricRow
-                    label="Show %"
-                    values={monthly.months.map((x) => x.metrics.rates.showRate)}
-                    format="percent"
-                  />
-                  <SalesMetricRow
-                    label="Cost Per Show"
-                    values={monthly.months.map((x) => x.costs?.cps ?? null)}
-                    format="currency"
-                  />
-                  <SalesMetricRow
                     label="Signed"
                     values={monthly.months.map((x) => x.metrics.counts.signed)}
+                  />
+                  <SalesMetricRow
+                    label="Cost Per Close"
+                    values={monthly.months.map((x) => x.costs?.cpClose ?? null)}
+                    format="currency"
                   />
                   <SalesMetricRow
                     label="Close %"
@@ -1398,11 +1530,6 @@ export function InternalSalesDashboard() {
                       (x) => x.metrics.rates.closeRate
                     )}
                     format="percent"
-                  />
-                  <SalesMetricRow
-                    label="Cost Per Close"
-                    values={monthly.months.map((x) => x.costs?.cpClose ?? null)}
-                    format="currency"
                   />
                   <SalesMetricRow
                     label="Qualified %"

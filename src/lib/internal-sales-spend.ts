@@ -107,17 +107,20 @@ export function sumInsightSpend(ads: MetaAdInsight[]): number {
 export interface SpendCosts {
   spend: number;
   cpl: number | null;
+  /** Cost per booked appointment */
+  cpb: number | null;
   cps: number | null;
   cpClose: number | null;
 }
 
 export function costsFromSpend(
   spend: number,
-  counts: { leads: number; showed: number; signed: number }
+  counts: { leads: number; booked: number; showed: number; signed: number }
 ): SpendCosts {
   return {
     spend: money(spend),
     cpl: costPer(spend, counts.leads),
+    cpb: costPer(spend, counts.booked),
     cps: costPer(spend, counts.showed),
     cpClose: costPer(spend, counts.signed),
   };

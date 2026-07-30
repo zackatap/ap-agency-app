@@ -269,19 +269,25 @@ export async function GET(req: Request) {
 
       const rowsWithSpend = rows.map((row) => {
         const spend = spendForBreakdownKey(ads, dimension, row.key);
-        const cpl =
-          spend != null && row.metrics.counts.leads > 0
-            ? Math.round((spend / row.metrics.counts.leads) * 100) / 100
-            : null;
-        const cps =
-          spend != null && row.metrics.counts.showed > 0
-            ? Math.round((spend / row.metrics.counts.showed) * 100) / 100
-            : null;
-        const cpClose =
-          spend != null && row.metrics.counts.signed > 0
-            ? Math.round((spend / row.metrics.counts.signed) * 100) / 100
-            : null;
-        return { ...row, spend, cpl, cps, cpClose };
+        if (spend == null) {
+          return {
+            ...row,
+            spend: null,
+            cpl: null,
+            cpb: null,
+            cps: null,
+            cpClose: null,
+          };
+        }
+        const costs = costsFromSpend(spend, row.metrics.counts);
+        return {
+          ...row,
+          spend: costs.spend,
+          cpl: costs.cpl,
+          cpb: costs.cpb,
+          cps: costs.cps,
+          cpClose: costs.cpClose,
+        };
       });
 
       return NextResponse.json(
