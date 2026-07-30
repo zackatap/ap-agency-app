@@ -5,7 +5,7 @@ import {
 } from "@/lib/agency-auth";
 
 /**
- * Guards /agency/* and /api/agency/* routes behind the shared password cookie.
+ * Guards /agency/*, /sales, and /api/agency/* behind the shared password cookie.
  * Public exceptions: the login page and the login POST endpoint.
  */
 export async function middleware(req: NextRequest) {
@@ -42,5 +42,5 @@ export async function middleware(req: NextRequest) {
 }
 
 export const config = {
-  matcher: ["/agency/:path*", "/api/agency/:path*"],
+  matcher: ["/agency/:path*", "/api/agency/:path*", "/sales", "/sales/:path*"],
 };
