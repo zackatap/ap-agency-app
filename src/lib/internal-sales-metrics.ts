@@ -131,16 +131,70 @@ export function getLeadDateSpan(
   return min && max ? { min, max } : null;
 }
 
+function isMetaObjectId(value: string): boolean {
+  return /^\d{8,}$/.test(value.trim());
+}
+
+/**
+ * Build name ↔ id synonym sets from sheet rows so filtering by campaign name
+ * also matches rows that only stored the Meta campaign id (and vice versa).
+ */
+export function buildCampaignAliasMap(
+  leads: InternalSalesLead[]
+): Map<string, Set<string>> {
+  const map = new Map<string, Set<string>>();
+  const link = (a: string, b: string) => {
+    const aa = attrValue(a);
+    const bb = attrValue(b);
+    if (!aa || !bb || aa === bb) return;
+    if (!map.has(aa)) map.set(aa, new Set([aa]));
+    if (!map.has(bb)) map.set(bb, new Set([bb]));
+    // union
+    const merged = new Set([...map.get(aa)!, ...map.get(bb)!]);
+    for (const key of merged) map.set(key, merged);
+  };
+
+  for (const lead of leads) {
+    const name = attrValue(lead.utmCampaign);
+    const id = attrValue(lead.campaignId);
+    if (name && id && !isMetaObjectId(name)) link(name, id);
+    // Some rows put the id in the campaign column and the name elsewhere —
+    // if campaign col is a bare id, still register it as an id token.
+    if (name && isMetaObjectId(name) && id && name !== id) link(name, id);
+  }
+  return map;
+}
+
+export function expandFilterTokens(
+  tokens: string[] | undefined,
+  aliasMap: Map<string, Set<string>>
+): string[] | undefined {
+  if (!tokens?.length) return tokens;
+  const out = new Set<string>();
+  for (const token of tokens) {
+    out.add(token);
+    const syns = aliasMap.get(token);
+    if (syns) for (const s of syns) out.add(s);
+  }
+  return [...out];
+}
+
 export function filterLeadsByAttribution(
   leads: InternalSalesLead[],
   filters: AttributionFilters
 ): InternalSalesLead[] {
+  const aliasMap = buildCampaignAliasMap(leads);
+  const campaigns = expandFilterTokens(filters.campaigns, aliasMap);
+  const adSets = filters.adSets;
+  const ads = filters.ads;
+  const sources = filters.sources;
+
   return leads.filter(
     (l) =>
-      matchesAnyAttr([l.utmCampaign, l.campaignId], filters.campaigns) &&
-      matchesAnyAttr([l.utmMedium, l.adSetId], filters.adSets) &&
-      matchesAnyAttr([l.utmContent], filters.ads) &&
-      matchesAnyAttr([l.utmSource], filters.sources)
+      matchesAnyAttr([l.utmCampaign, l.campaignId], campaigns) &&
+      matchesAnyAttr([l.utmMedium, l.adSetId], adSets) &&
+      matchesAnyAttr([l.utmContent], ads) &&
+      matchesAnyAttr([l.utmSource], sources)
   );
 }
 
@@ -159,12 +213,49 @@ function uniqueSorted(values: string[]): string[] {
   return list;
 }
 
+/**
+ * Prefer human campaign names in the dropdown. Bare Meta IDs are remapped to
+ * their known name when the sheet has both.
+ */
+function displayCampaignOptions(leads: InternalSalesLead[]): string[] {
+  const aliasMap = buildCampaignAliasMap(leads);
+  const idToName = new Map<string, string>();
+  for (const [key, syns] of aliasMap) {
+    if (!isMetaObjectId(key)) continue;
+    for (const s of syns) {
+      if (!isMetaObjectId(s)) {
+        idToName.set(key, s);
+        break;
+      }
+    }
+  }
+
+  const labels = new Set<string>();
+  let hasBlank = false;
+  for (const lead of leads) {
+    const raw = attrValue(lead.utmCampaign);
+    if (!raw) {
+      hasBlank = true;
+      continue;
+    }
+    if (isMetaObjectId(raw)) {
+      labels.add(idToName.get(raw) || raw);
+    } else {
+      labels.add(raw);
+    }
+  }
+  const list = [...labels].sort((a, b) =>
+    a.localeCompare(b, undefined, { sensitivity: "base" })
+  );
+  if (hasBlank) list.push(BLANK_ATTR);
+  return list;
+}
+
 /** Dropdown options. When a parent filter is set, child lists narrow to matching rows. */
 export function listAttributionOptions(
   leads: InternalSalesLead[],
   filters: AttributionFilters = {}
 ): AttributionFilterOptions {
-  const forCampaigns = leads;
   const forAdSets = filters.campaigns?.length
     ? filterLeadsByAttribution(leads, { campaigns: filters.campaigns })
     : leads;
@@ -174,7 +265,7 @@ export function listAttributionOptions(
   });
 
   return {
-    campaigns: uniqueSorted(forCampaigns.map((l) => l.utmCampaign)),
+    campaigns: displayCampaignOptions(leads),
     adSets: uniqueSorted(forAdSets.map((l) => l.utmMedium)),
     ads: uniqueSorted(forAds.map((l) => l.utmContent)),
     sources: uniqueSorted(leads.map((l) => l.utmSource)),

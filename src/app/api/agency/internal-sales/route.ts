@@ -10,6 +10,8 @@ import {
   computeInternalSalesMetrics,
   computeMonthlyMetrics,
   computeWithCompare,
+  buildCampaignAliasMap,
+  expandFilterTokens,
   filterLeadsByAttribution,
   getLeadDateSpan,
   listAttributionOptions,
@@ -135,7 +137,14 @@ export async function GET(req: Request) {
       );
     }
 
-    const leads = filterLeadsByAttribution(allLeads, filters);
+    // Expand campaign name ↔ Meta id synonyms so spend + sheet filters agree.
+    const campaignAliases = buildCampaignAliasMap(allLeads);
+    const expandedFilters: AttributionFilters = {
+      ...filters,
+      campaigns: expandFilterTokens(filters.campaigns, campaignAliases),
+    };
+
+    const leads = filterLeadsByAttribution(allLeads, expandedFilters);
     const filterOptions = listAttributionOptions(allLeads, filters);
     const filterDateSpan = getLeadDateSpan(leads);
     const activeFilters = {
@@ -163,7 +172,7 @@ export async function GET(req: Request) {
         spendByMonth,
         error: spendError,
         adAccountId,
-      } = await fetchMonthlySpend(monthKeys, filters);
+      } = await fetchMonthlySpend(monthKeys, expandedFilters);
 
       const monthsWithSpend = monthly.map((m) => {
         const spend = spendByMonth[m.monthKey] ?? 0;
@@ -195,7 +204,7 @@ export async function GET(req: Request) {
       } = await fetchFilteredAdInsights(
         range.startDate,
         range.endDate,
-        filters
+        expandedFilters
       );
 
       const rowsWithSpend = rows.map((row) => {
@@ -242,7 +251,7 @@ export async function GET(req: Request) {
     } = await fetchFilteredAdInsights(
       range.startDate,
       range.endDate,
-      filters
+      expandedFilters
     );
     const spend = sumInsightSpend(ads);
 
@@ -257,7 +266,7 @@ export async function GET(req: Request) {
       } = await fetchFilteredAdInsights(
         previousRange.startDate,
         previousRange.endDate,
-        filters
+        expandedFilters
       );
       const prevSpend = sumInsightSpend(prevAds);
 

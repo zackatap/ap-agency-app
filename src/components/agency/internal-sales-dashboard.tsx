@@ -363,6 +363,8 @@ export function InternalSalesDashboard() {
   );
   const [filterOptions, setFilterOptions] =
     useState<AttributionFilterOptions | null>(null);
+  /** Prevents repeat auto-fit for the same filter + span. */
+  const autoFitKeyRef = useRef("");
 
   const appendFilters = useCallback(
     (params: URLSearchParams) => {
@@ -378,7 +380,8 @@ export function InternalSalesDashboard() {
       nextPreset: DateRangePreset,
       from?: string,
       to?: string,
-      nextCompare?: boolean
+      nextCompare?: boolean,
+      allowAutoFit = true
     ) => {
       if (nextPreset === "custom" && (!from || !to)) return;
       const params = new URLSearchParams();
@@ -403,8 +406,57 @@ export function InternalSalesDashboard() {
           setError(body.error || "Failed to load");
           return;
         }
-        setFunnel(body);
         if (body.filterOptions) setFilterOptions(body.filterOptions);
+
+        const filterActive = !!(
+          body.filters?.campaigns?.length ||
+          body.filters?.adSets?.length ||
+          body.filters?.ads?.length
+        );
+        const span = body.filterDateSpan;
+        // If the filter matches rows but none sit in the selected date window,
+        // jump the range to those appointment dates so the UI isn't empty zeros.
+        if (
+          allowAutoFit &&
+          filterActive &&
+          body.metrics.counts.leads === 0 &&
+          (body.filteredRowCount ?? 0) > 0 &&
+          span?.min &&
+          span?.max
+        ) {
+          const fitKey = `${(body.filters?.campaigns ?? []).join("|")}::${(
+            body.filters?.adSets ?? []
+          ).join("|")}::${(body.filters?.ads ?? []).join("|")}::${span.min}::${span.max}`;
+          if (autoFitKeyRef.current !== fitKey) {
+            autoFitKeyRef.current = fitKey;
+            setPreset("custom");
+            setCustomFrom(span.min);
+            setCustomTo(span.max);
+
+            const fitParams = new URLSearchParams();
+            fitParams.set("view", "funnel");
+            fitParams.set("preset", "custom");
+            fitParams.set("clientDate", getTodayLocal());
+            fitParams.set("dateFrom", span.min);
+            fitParams.set("dateTo", span.max);
+            if (nextCompare) fitParams.set("compare", "true");
+            appendFilters(fitParams);
+            const fitRes = await fetch(
+              `/api/agency/internal-sales?${fitParams.toString()}`,
+              { cache: "no-store" }
+            );
+            const fitBody = (await fitRes.json()) as FunnelResponse;
+            if (!fitRes.ok) {
+              setError(fitBody.error || "Failed to load");
+              return;
+            }
+            if (fitBody.filterOptions) setFilterOptions(fitBody.filterOptions);
+            setFunnel(fitBody);
+            return;
+          }
+        }
+
+        setFunnel(body);
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to load");
       } finally {
@@ -543,6 +595,7 @@ export function InternalSalesDashboard() {
   useEffect(() => {
     // Skip the first render (initial fetch handles that).
     if (!filterOptions) return;
+    autoFitKeyRef.current = "";
     refetchActive();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [campaigns, adSets, ads]);
@@ -559,9 +612,23 @@ export function InternalSalesDashboard() {
   };
 
   const clearFilters = () => {
+    autoFitKeyRef.current = "";
     setCampaigns([]);
     setAdSets([]);
     setAds([]);
+  };
+
+  const applyMatchingDateSpan = (span?: { min: string; max: string } | null) => {
+    if (!span?.min || !span?.max) {
+      setPreset("maximum");
+      void fetchFunnel("maximum", undefined, undefined, compare, false);
+      return;
+    }
+    autoFitKeyRef.current = `${campaigns.join("|")}::${adSets.join("|")}::${ads.join("|")}::${span.min}::${span.max}`;
+    setPreset("custom");
+    setCustomFrom(span.min);
+    setCustomTo(span.max);
+    void fetchFunnel("custom", span.min, span.max, compare, false);
   };
 
   const hasFilters = campaigns.length > 0 || adSets.length > 0 || ads.length > 0;
@@ -849,13 +916,13 @@ export function InternalSalesDashboard() {
               </p>
               <button
                 type="button"
-                onClick={() => {
-                  setPreset("maximum");
-                  void fetchFunnel("maximum", undefined, undefined, compare);
-                }}
+                onClick={() => applyMatchingDateSpan(funnel?.filterDateSpan)}
                 className="mt-2 rounded-lg bg-amber-500/20 px-3 py-1.5 text-sm font-medium text-amber-50 hover:bg-amber-500/30"
               >
-                Show all matching
+                Show matching dates
+                {funnel?.filterDateSpan
+                  ? ` (${funnel.filterDateSpan.min} → ${funnel.filterDateSpan.max})`
+                  : ""}
               </button>
             </div>
           ) : null}
@@ -1061,17 +1128,15 @@ export function InternalSalesDashboard() {
                 <button
                   type="button"
                   onClick={() => {
-                    setPreset("maximum");
-                    void fetchAttribution(
-                      "maximum",
-                      dimension,
-                      undefined,
-                      undefined
-                    );
+                    applyMatchingDateSpan(attribution?.filterDateSpan);
+                    setTab("funnel");
                   }}
                   className="mt-2 rounded-lg bg-amber-500/20 px-3 py-1.5 text-sm font-medium text-amber-50 hover:bg-amber-500/30"
                 >
-                  Show all matching
+                  Show matching dates
+                  {attribution?.filterDateSpan
+                    ? ` (${attribution.filterDateSpan.min} → ${attribution.filterDateSpan.max})`
+                    : ""}
                 </button>
               </div>
             ) : (
