@@ -883,31 +883,31 @@ export function InternalSalesDashboard() {
         ) : null}
       </div>
 
-      <div className="mt-6 flex flex-wrap items-center gap-4">
-        <div className="flex gap-1 rounded-lg bg-slate-800/50 p-1 w-fit">
-          {(
-            [
-              { id: "funnel" as const, label: "Funnel" },
-              { id: "attribution" as const, label: "By ad" },
-              { id: "monthly" as const, label: "Month to Month" },
-            ] as const
-          ).map((t) => (
-            <button
-              key={t.id}
-              type="button"
-              onClick={() => handleTabChange(t.id)}
-              className={`rounded-md px-4 py-1.5 text-sm transition-colors ${
-                tab === t.id
-                  ? "bg-indigo-600 text-white"
-                  : "text-slate-300 hover:text-white"
-              }`}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
+      <div className="mt-6 space-y-1.5">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex gap-1 rounded-lg bg-slate-800/50 p-1 w-fit">
+            {(
+              [
+                { id: "funnel" as const, label: "Funnel" },
+                { id: "attribution" as const, label: "By ad" },
+                { id: "monthly" as const, label: "Month to Month" },
+              ] as const
+            ).map((t) => (
+              <button
+                key={t.id}
+                type="button"
+                onClick={() => handleTabChange(t.id)}
+                className={`rounded-md px-4 py-1.5 text-sm transition-colors ${
+                  tab === t.id
+                    ? "bg-indigo-600 text-white"
+                    : "text-slate-300 hover:text-white"
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
 
-        <div className="flex flex-col gap-1">
           <div className="flex gap-1 rounded-lg bg-slate-800/50 p-1 w-fit">
             {(
               [
@@ -929,13 +929,13 @@ export function InternalSalesDashboard() {
               </button>
             ))}
           </div>
-          <p className="max-w-xl text-xs text-slate-500">
-            {COUNTING_MODE_HELP[mode]}
-            {mode === "activity"
-              ? " Closes use appointment day (no close-date column yet)."
-              : ""}
-          </p>
         </div>
+        <p className="max-w-2xl text-xs text-slate-500">
+          {COUNTING_MODE_HELP[mode]}
+          {mode === "activity"
+            ? " Closes use appointment day (no close-date column yet)."
+            : ""}
+        </p>
       </div>
 
       {error ? (
