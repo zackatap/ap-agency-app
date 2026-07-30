@@ -131,12 +131,15 @@ export interface AttentionFeedResult {
  *   false, all rows return.
  * @param urgency When set (e.g. 0 for red), only rows whose *performance*
  *   Ads urgency matches are returned. Ignored when no flag filter is active.
+ * @param campaignKey When set, return only that campaign (one-item feed for a
+ *   one-off ClickUp task). Skips the flagged filter so any dashboard row works.
  */
 export async function buildAttentionFeed(opts?: {
   windows?: number[];
   flaggedOnly?: boolean;
   flaggedMode?: "quantity" | "quality" | "either";
   urgency?: number;
+  campaignKey?: string;
   /** Viewer tz so windows align with the KPI table's refresh-date anchor. */
   tz?: string;
 }): Promise<AttentionFeedResult> {
@@ -301,11 +304,16 @@ export async function buildAttentionFeed(opts?: {
   // "quantity" = Ads performance only (Zapier / media-buyer tasks).
   // "either" includes Ads Data leaks so the KPI tab can show them without
   // creating empty ClickUp rows when only a sync gap fires.
-  const mode: "quantity" | "quality" | "either" | null =
-    opts?.flaggedMode ?? (opts?.flaggedOnly ? "quantity" : null);
+  // A one-off campaignKey skips the flagged filter — Zapier still gets `{ rows: [one] }`.
+  const campaignKey = opts?.campaignKey?.trim() || null;
+  const mode: "quantity" | "quality" | "either" | null = campaignKey
+    ? null
+    : opts?.flaggedMode ?? (opts?.flaggedOnly ? "quantity" : null);
 
   let finalRows = rows;
-  if (mode) {
+  if (campaignKey) {
+    finalRows = rows.filter((r) => r.campaign_key === campaignKey);
+  } else if (mode) {
     finalRows = rows
       .filter((r) => {
         const perf = r.flagged === true;

@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { buildAttentionFeed } from "@/lib/attention-feed";
+import { toZapierAttentionItem } from "@/lib/attention-zapier";
 
 export const dynamic = "force-dynamic";
 
@@ -17,6 +18,7 @@ export const dynamic = "force-dynamic";
  * Auth: `Authorization: Bearer <ATTENTION_API_KEY>` or `?token=<key>`.
  * `?flagged=0` returns every campaign instead of only the flagged ones.
  * `?urgency=0` returns only red flags (still requires flagged; use with flagged=1).
+ * `?campaignKey=…` returns that one campaign as `{ rows: [item], count: 1 }`.
  */
 export async function GET(req: Request) {
   const secret = process.env.ATTENTION_API_KEY?.trim();
@@ -35,26 +37,26 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const campaignKey = url.searchParams.get("campaignKey")?.trim() || undefined;
   // Defaults to the flagged-only Attention Dashboard view; ?flagged=0 opts out.
+  // A one-off campaignKey always returns that row whether or not it's flagged.
   const flaggedParam = url.searchParams.get("flagged");
-  const flaggedOnly = !(flaggedParam === "0" || flaggedParam === "false");
+  const flaggedOnly = campaignKey
+    ? false
+    : !(flaggedParam === "0" || flaggedParam === "false");
   const urgencyRaw = url.searchParams.get("urgency");
   const urgency =
-    urgencyRaw != null && urgencyRaw !== "" ? Number.parseInt(urgencyRaw, 10) : undefined;
+    urgencyRaw != null && urgencyRaw !== ""
+      ? Number.parseInt(urgencyRaw, 10)
+      : undefined;
 
   try {
     const feed = await buildAttentionFeed({
       flaggedOnly,
+      campaignKey,
       urgency: Number.isFinite(urgency) ? urgency : undefined,
     });
-    const items = feed.rows.map((r) => ({
-      reason: r.reason ?? "",
-      client: r.client_name ?? "",
-      pipeline: r.pipeline_name ?? "",
-      status: r.attention_code ?? "",
-      urgency: r.urgency ?? null,
-      client_relationship_id: r.clickup_relation_id ?? "",
-    }));
+    const items = feed.rows.map((r) => toZapierAttentionItem(r));
     return NextResponse.json(
       { rows: items, count: items.length },
       {

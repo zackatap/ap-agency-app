@@ -322,6 +322,54 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
   );
   // Campaigns whose per-account Meta retry is in flight.
   const [retryingKeys, setRetryingKeys] = useState<Set<string>>(new Set());
+  // One-off ClickUp task creation (same Zapier path as the bulk workflow).
+  const [zapierAvailable, setZapierAvailable] = useState(false);
+  const [creatingTaskKey, setCreatingTaskKey] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/integrations/attention/trigger", { cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((body: { available?: boolean } | null) => {
+        if (!cancelled) setZapierAvailable(Boolean(body?.available));
+      })
+      .catch(() => {
+        if (!cancelled) setZapierAvailable(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const createOneOffTask = useCallback(
+    async (campaign: ClientCampaignSummary) => {
+      const label = campaign.businessName || "this campaign";
+      if (!confirm(`Create ClickUp task for ${label}?`)) return;
+      setCreatingTaskKey(campaign.campaignKey);
+      setError(null);
+      setMessage(null);
+      try {
+        const res = await fetch(
+          `/api/integrations/attention/trigger?scope=single&campaignKey=${encodeURIComponent(
+            campaign.campaignKey
+          )}`,
+          { method: "POST" }
+        );
+        const body = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          throw new Error(body.error ?? "Failed to create ClickUp task");
+        }
+        setMessage(`ClickUp task started for ${label}.`);
+      } catch (err) {
+        setError(
+          err instanceof Error ? err.message : "Failed to create ClickUp task"
+        );
+      } finally {
+        setCreatingTaskKey(null);
+      }
+    },
+    []
+  );
 
   const load = useCallback(
     async (preset: WindowId, from?: string, to?: string) => {
@@ -896,7 +944,12 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
                         <span className="font-medium text-white">
                           {c.businessName}
                         </span>
-                        <StatusBadge status={c.status} />
+                        <CampaignRowActions
+                          status={c.status}
+                          zapierAvailable={zapierAvailable}
+                          creating={creatingTaskKey === c.campaignKey}
+                          onCreateTask={() => void createOneOffTask(c)}
+                        />
                       </div>
                       {(() => {
                         const subtitle = subtitleFor(c);
@@ -1108,7 +1161,12 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
                         <span className="font-medium text-slate-300">
                           {c.businessName}
                         </span>
-                        <StatusBadge status={c.status} />
+                        <CampaignRowActions
+                          status={c.status}
+                          zapierAvailable={zapierAvailable}
+                          creating={creatingTaskKey === c.campaignKey}
+                          onCreateTask={() => void createOneOffTask(c)}
+                        />
                       </div>
                       {subtitle && (
                         <div className="text-xs text-slate-500">{subtitle}</div>
@@ -1222,17 +1280,76 @@ function UrgencyBadge({ urgency }: { urgency: number }) {
   );
 }
 
-function StatusBadge({ status }: { status: ClientCampaignSummary["status"] }) {
+/**
+ * Where ACTIVE used to sit: a subtle one-off ClickUp task icon. Keep the 2ND
+ * pill for second campaigns; the icon sits next to it.
+ */
+function CampaignRowActions({
+  status,
+  zapierAvailable,
+  creating,
+  onCreateTask,
+}: {
+  status: ClientCampaignSummary["status"];
+  zapierAvailable: boolean;
+  creating: boolean;
+  onCreateTask: () => void;
+}) {
   const is2nd = status === "2ND CMPN";
   return (
-    <span
-      className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
-        is2nd
-          ? "bg-fuchsia-500/15 text-fuchsia-200"
-          : "bg-emerald-500/15 text-emerald-200"
-      }`}
+    <>
+      {is2nd && (
+        <span className="rounded-full bg-fuchsia-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-fuchsia-200">
+          2nd
+        </span>
+      )}
+      {zapierAvailable && (
+        <button
+          type="button"
+          onClick={onCreateTask}
+          disabled={creating}
+          title="Create a one-off ClickUp task for this campaign"
+          aria-label="Create ClickUp task"
+          className="inline-flex h-5 w-5 items-center justify-center rounded text-slate-500 transition-colors hover:bg-white/10 hover:text-slate-200 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {creating ? (
+            <span className="text-[10px] tabular-nums">…</span>
+          ) : (
+            <ClickUpTaskIcon />
+          )}
+        </button>
+      )}
+    </>
+  );
+}
+
+/** Checklist-style mark — reads as “create a task” without a heavy badge. */
+function ClickUpTaskIcon() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      width="14"
+      height="14"
+      fill="none"
+      aria-hidden="true"
+      className="shrink-0"
     >
-      {is2nd ? "2nd" : "Active"}
-    </span>
+      <rect
+        x="2.5"
+        y="2.5"
+        width="11"
+        height="11"
+        rx="2"
+        stroke="currentColor"
+        strokeWidth="1.25"
+      />
+      <path
+        d="M5 8.2l2 2 4-4.2"
+        stroke="currentColor"
+        strokeWidth="1.25"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }
