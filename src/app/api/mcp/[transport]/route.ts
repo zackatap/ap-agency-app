@@ -7,8 +7,9 @@
  * Gleap agent writes the prose using the ticket context and our voice.
  *
  * Transport: Streamable HTTP. Connect Gleap → Add tool → Integrations →
- * Custom MCP with URL `https://app.automatedpractice.com/api/mcp/mcp` and an
+ * Custom MCP with URL `https://my.automatedpractice.com/api/mcp/mcp` and an
  * `Authorization: Bearer <MCP_API_KEY>` header.
+ * Do not use app.automatedpractice.com — that host is GHL/GCS, not this app.
  *
  * Tools:
  *   - find_client                 resolve a name/ID to a client + ad account
@@ -46,8 +47,25 @@ const AD_PRESETS = ["last_7", "last_14", "last_30", "last_60", "last_90"] as con
 /**
  * Standard MCP tool result: a short human summary followed by the full JSON
  * payload, so the agent gets both readable findings and structured numbers.
+ *
+ * Also writes a compact line to Vercel Runtime Logs so you can watch Gleap
+ * traffic without Gleap's UI: tool name, args, status, and the findings summary.
  */
-function toolResult(summary: string, payload: unknown) {
+function toolResult(
+  tool: string,
+  args: Record<string, unknown>,
+  summary: string,
+  payload: unknown
+) {
+  const status =
+    payload && typeof payload === "object" && "status" in payload
+      ? String((payload as { status: unknown }).status)
+      : "ok";
+  // Keep log lines under ~2KB so Vercel doesn't truncate the useful bit.
+  const summaryOneLine = summary.replace(/\s+/g, " ").trim().slice(0, 500);
+  console.log(
+    `[mcp] tool=${tool} status=${status} args=${JSON.stringify(args)} summary=${summaryOneLine}`
+  );
   const text = `${summary}\n\n\`\`\`json\n${JSON.stringify(payload, null, 2)}\n\`\`\``;
   return { content: [{ type: "text" as const, text }] };
 }
@@ -61,25 +79,37 @@ const handler = createMcpHandler(
   (server) => {
     server.tool(
       "find_client",
-      "Resolve a client reference (business name, owner name, GHL location ID, CID, or Meta campaign keyword) to the agency's roster. Use this first when a ticket mentions a client and you're unsure which account it maps to, or to disambiguate between similarly named clients. Returns matches with locationId, ad account IDs, and a confidence score.",
+      "Resolve a client reference to the agency roster. Accepts business name, owner name, GHL location ID, CID, Meta campaign keyword, OWNER EMAIL, CLIENT REPORT EMAIL, or domain. For internal testing, the query may be prefixed with AP_TEST: (e.g. 'AP_TEST: drziayan@tcspinesport.com' or 'AP_TEST: Treasure Coast Spine'). Use this first when a ticket mentions a client and you're unsure which account it maps to. If the message contains an AP_TEST: line, pass that value (including the prefix is fine).",
       {
         query: z
           .string()
           .min(2)
-          .describe("The client name or identifier mentioned in the ticket."),
+          .describe(
+            "Client name, email, or identifier. May include an AP_TEST: prefix for internal tests."
+          ),
       },
       async ({ query }) => {
         const result = await resolveClient(query);
         if (result.status === "not_found") {
-          return toolResult(`No client matched "${query}".`, { status: "not_found", query });
+          return toolResult(
+            "find_client",
+            { query: result.query },
+            `No client matched "${result.query}".`,
+            { status: "not_found", query: result.query }
+          );
         }
         const summary = result.matches
-          .map((m) => `- ${m.businessName} (location ${m.locationId}, score ${m.score})`)
+          .map(
+            (m) =>
+              `- ${m.businessName} (location ${m.locationId}, score ${m.score}, via ${m.matchedOn})`
+          )
           .join("\n");
-        return toolResult(`Found ${result.matches.length} match(es) for "${query}":\n${summary}`, {
-          status: "ok",
-          matches: result.matches,
-        });
+        return toolResult(
+          "find_client",
+          { query: result.query },
+          `Found ${result.matches.length} match(es) for "${result.query}":\n${summary}`,
+          { status: "ok", matches: result.matches }
+        );
       }
     );
 
@@ -97,21 +127,31 @@ const handler = createMcpHandler(
           .describe("Reporting window. Defaults to last_30 (last 30 days)."),
       },
       async ({ client, period }) => {
+        const args = { client, period: period ?? "last_30" };
         const result = await analyzeClientPerformance({
           query: client,
           preset: period as AnalysisPreset | undefined,
         });
         if (result.status === "not_found") {
-          return toolResult(`No client matched "${client}". Try find_client first.`, result);
+          return toolResult(
+            "analyze_client_performance",
+            args,
+            `No client matched "${client}". Try find_client first.`,
+            result
+          );
         }
         if (result.status === "ambiguous") {
           return toolResult(
+            "analyze_client_performance",
+            args,
             `"${client}" matched multiple clients. Ask which one, or pass a locationId.`,
             result
           );
         }
         if (result.status === "no_snapshot") {
           return toolResult(
+            "analyze_client_performance",
+            args,
             "No rollup snapshot is available yet. Run an agency rollup refresh first.",
             result
           );
@@ -120,7 +160,7 @@ const handler = createMcpHandler(
           result.findings,
           "No notable findings."
         )}`;
-        return toolResult(summary, result);
+        return toolResult("analyze_client_performance", args, summary, result);
       }
     );
 
@@ -138,21 +178,37 @@ const handler = createMcpHandler(
           .describe("Trailing window length in days. Defaults to 14."),
       },
       async ({ client, days }) => {
+        const args = { client, days: days ?? 14 };
         const result = await getPipelineStatus({ query: client, days });
         if (result.status === "not_found") {
-          return toolResult(`No client matched "${client}". Try find_client first.`, result);
+          return toolResult(
+            "get_pipeline_status",
+            args,
+            `No client matched "${client}". Try find_client first.`,
+            result
+          );
         }
         if (result.status === "ambiguous") {
-          return toolResult(`"${client}" matched multiple clients. Disambiguate first.`, result);
+          return toolResult(
+            "get_pipeline_status",
+            args,
+            `"${client}" matched multiple clients. Disambiguate first.`,
+            result
+          );
         }
         if (result.status === "no_snapshot") {
-          return toolResult("No rollup snapshot is available yet.", result);
+          return toolResult(
+            "get_pipeline_status",
+            args,
+            "No rollup snapshot is available yet.",
+            result
+          );
         }
         const summary = `${result.client.businessName} — lead flow, last ${result.window.days} days\n${summarizeFindings(
           result.findings,
           "No notable findings."
         )}`;
-        return toolResult(summary, result);
+        return toolResult("get_pipeline_status", args, summary, result);
       }
     );
 
@@ -167,27 +223,48 @@ const handler = createMcpHandler(
           .describe("Reporting window. Defaults to last_30 (last 30 days)."),
       },
       async ({ client, period }) => {
+        const args = { client, period: period ?? "last_30" };
         const result = await getAdPerformance({
           query: client,
           preset: period as AdPreset | undefined,
         });
         if (result.status === "not_found") {
-          return toolResult(`No client matched "${client}". Try find_client first.`, result);
+          return toolResult(
+            "get_ad_performance",
+            args,
+            `No client matched "${client}". Try find_client first.`,
+            result
+          );
         }
         if (result.status === "ambiguous") {
-          return toolResult(`"${client}" matched multiple clients. Disambiguate first.`, result);
+          return toolResult(
+            "get_ad_performance",
+            args,
+            `"${client}" matched multiple clients. Disambiguate first.`,
+            result
+          );
         }
         if (result.status === "no_ad_account") {
-          return toolResult("This client has no Meta ad account on file.", result);
+          return toolResult(
+            "get_ad_performance",
+            args,
+            "This client has no Meta ad account on file.",
+            result
+          );
         }
         if (result.status === "meta_error") {
-          return toolResult(`Meta API error: ${result.message}`, result);
+          return toolResult(
+            "get_ad_performance",
+            args,
+            `Meta API error: ${result.message}`,
+            result
+          );
         }
         const summary = `${result.client.businessName} — ad performance, ${result.window.label}\n${summarizeFindings(
           result.findings,
           "No notable findings."
         )}`;
-        return toolResult(summary, result);
+        return toolResult("get_ad_performance", args, summary, result);
       }
     );
   },
@@ -198,7 +275,19 @@ const handler = createMcpHandler(
     basePath: "/api/mcp",
     maxDuration: 120,
     disableSse: true,
-    verboseLogs: process.env.NODE_ENV !== "production",
+    // Protocol-level events (initialize, tools/list) also land in Vercel logs.
+    verboseLogs: true,
+    onEvent: (event) => {
+      if (event.type === "REQUEST_COMPLETED") {
+        console.log(
+          `[mcp] rpc=${event.method} status=${event.status}${
+            event.duration != null ? ` ${event.duration}ms` : ""
+          }`
+        );
+      } else if (event.type === "ERROR") {
+        console.error(`[mcp] error source=${event.source}:`, event.error);
+      }
+    },
   }
 );
 
@@ -207,8 +296,12 @@ function withBearerAuth(
   inner: (req: Request) => Promise<Response>
 ): (req: Request) => Promise<Response> {
   return async (req: Request) => {
+    const url = new URL(req.url);
+    const logBase = `[mcp] ${req.method} ${url.pathname}`;
+
     const key = process.env.MCP_API_KEY?.trim();
     if (!key) {
+      console.warn(`${logBase} → 503 (MCP_API_KEY not configured)`);
       return new Response(
         JSON.stringify({ error: "MCP_API_KEY is not configured on the server" }),
         { status: 503, headers: { "content-type": "application/json" } }
@@ -220,11 +313,17 @@ function withBearerAuth(
       req.headers.get("x-api-key")?.trim() ||
       "";
     if (provided !== key) {
+      // Never log the secret. Prefix + length are enough to spot a wrong/truncated key.
+      const prefix = provided ? `${provided.slice(0, 6)}…(len=${provided.length})` : "(missing)";
+      console.warn(
+        `${logBase} → 401 (bad auth; got ${prefix}, expected len=${key.length}; hasAuthHeader=${Boolean(authHeader)})`
+      );
       return new Response(JSON.stringify({ error: "Unauthorized" }), {
         status: 401,
         headers: { "content-type": "application/json" },
       });
     }
+    console.log(`${logBase} → auth ok`);
     return inner(req);
   };
 }

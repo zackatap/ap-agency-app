@@ -1,16 +1,20 @@
 /**
  * Resolves a free-text client reference (business name, owner name, GHL
- * location ID, CID, or Meta campaign keyword) to the agency's stored campaign
- * roster. A single client/location can own several campaign rows (ACTIVE +
- * 2ND CMPN, Pain vs Decompression, etc.), so matches are grouped by location.
+ * location ID, CID, Meta campaign keyword, owner email, or report email) to
+ * the agency's stored campaign roster.
  *
- * Reads the roster table (`agency_rollup_campaigns`) via {@link listCampaigns},
- * which is a single fast Neon read — no Google Sheet or external API calls.
- * Used by the Gleap MCP tools to turn a support ticket's client mention into a
- * concrete location + ad account before pulling performance data.
+ * Also supports an `AP_TEST:` prefix for internal Gleap testing, e.g.
+ *   AP_TEST: drziayan@tcspinesport.com
+ *   AP_TEST: Treasure Coast Spine
+ * so you can exercise the agent without waiting on a real client ticket.
+ *
+ * Name/ID matches read the roster table (`agency_rollup_campaigns`). Email /
+ * domain matches also check the Client DB sheet (OWNER EMAIL, CLIENT REPORT
+ * EMAIL, DOMAIN PREFIX) and then join to the roster by location ID.
  */
 
 import { listCampaigns, type AgencyCampaignRecord } from "@/lib/agency-rollup-store";
+import { fetchSheetRows } from "@/lib/google-sheets";
 
 export interface ResolvedClient {
   locationId: string;
@@ -24,11 +28,18 @@ export interface ResolvedClient {
   /** Meta campaign-name keywords (substring filters) for this location. */
   campaignKeywords: string[];
   pipelineNames: string[];
-  /** How confident the match is, 0..100. Exact ID/CID hits score highest. */
+  /** How confident the match is, 0..100. Exact ID/CID/email hits score highest. */
   score: number;
   /** Which field produced the strongest match (for debugging / transparency). */
   matchedOn: string;
 }
+
+const COL_OWNER_EMAIL = 15; // P — OWNER EMAIL
+const COL_REPORT_EMAIL = 16; // Q — CLIENT REPORT EMAIL
+const COL_LOCATION_ID = 40; // AO
+const COL_DOMAIN_PREFIX = 62; // BK — DOMAIN PREFIX
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/i;
 
 function ownerNameOf(r: AgencyCampaignRecord): string | null {
   const name = [r.ownerFirstName, r.ownerLastName].filter(Boolean).join(" ").trim();
@@ -37,6 +48,18 @@ function ownerNameOf(r: AgencyCampaignRecord): string | null {
 
 function norm(s: string | null | undefined): string {
   return (s ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+/**
+ * Strip the internal test prefix and return the usable query.
+ * Accepts: "AP_TEST: foo", "AP_TEST foo", "ap_test:foo".
+ */
+export function stripTestPrefix(raw: string): string {
+  return raw.replace(/^\s*AP_TEST\s*:?\s*/i, "").trim();
+}
+
+function isEmail(q: string): boolean {
+  return EMAIL_RE.test(q);
 }
 
 interface Scored {
@@ -90,9 +113,93 @@ function scoreRecord(record: AgencyCampaignRecord, q: string): Scored {
   return { score: 0, matchedOn: "" };
 }
 
+/**
+ * Look up location IDs from the Client DB sheet by owner/report email or
+ * domain prefix. Returns the best match reason for scoring.
+ */
+async function locationIdsFromSheetEmail(
+  emailOrDomain: string
+): Promise<Array<{ locationId: string; matchedOn: string; score: number }>> {
+  const q = norm(emailOrDomain);
+  if (!q) return [];
+
+  const { rows, error } = await fetchSheetRows({ columnEnd: "BK" });
+  if (error || rows.length < 2) {
+    if (error) console.warn("[mcp/resolve-client] sheet email lookup failed:", error);
+    return [];
+  }
+
+  const email = isEmail(q) ? q : null;
+  const domain = email ? email.split("@")[1]! : q.replace(/^@/, "");
+  const domainPrefix = domain.split(".")[0] ?? domain;
+
+  const hits = new Map<string, { matchedOn: string; score: number }>();
+
+  for (const row of rows.slice(1)) {
+    const locationId = String(row[COL_LOCATION_ID] ?? "").trim();
+    if (!locationId) continue;
+
+    const ownerEmail = norm(row[COL_OWNER_EMAIL]);
+    const reportEmail = norm(row[COL_REPORT_EMAIL]);
+    const prefix = norm(row[COL_DOMAIN_PREFIX]);
+
+    let matchedOn = "";
+    let score = 0;
+    if (email && (ownerEmail === email || reportEmail === email)) {
+      matchedOn = ownerEmail === email ? "ownerEmail" : "reportEmail";
+      score = 98;
+    } else if (prefix && (prefix === domainPrefix || prefix === domain)) {
+      matchedOn = "domainPrefix";
+      score = 80;
+    } else if (
+      !email &&
+      (ownerEmail.includes(q) || reportEmail.includes(q))
+    ) {
+      matchedOn = "ownerEmail";
+      score = 70;
+    }
+
+    if (score <= 0) continue;
+    const existing = hits.get(locationId);
+    if (!existing || score > existing.score) {
+      hits.set(locationId, { matchedOn, score });
+    }
+  }
+
+  return [...hits.entries()].map(([locationId, v]) => ({ locationId, ...v }));
+}
+
+function buildResolved(
+  locationId: string,
+  rows: AgencyCampaignRecord[],
+  best: Scored
+): ResolvedClient {
+  const primary = rows[0]!;
+  return {
+    locationId,
+    businessName: primary.businessName || ownerNameOf(primary) || locationId,
+    ownerName: ownerNameOf(primary),
+    cid: primary.cid,
+    campaignKeys: rows.map((r) => r.campaignKey),
+    adAccountIds: [
+      ...new Set(rows.map((r) => r.adAccountId).filter((v): v is string => !!v)),
+    ],
+    campaignKeywords: [
+      ...new Set(rows.map((r) => r.campaignKeyword).filter((v): v is string => !!v)),
+    ],
+    pipelineNames: [
+      ...new Set(rows.map((r) => r.pipelineName).filter((v): v is string => !!v)),
+    ],
+    score: best.score,
+    matchedOn: best.matchedOn,
+  };
+}
+
 export interface ResolveResult {
   status: "ok" | "not_found";
   matches: ResolvedClient[];
+  /** Original query after stripping AP_TEST: (useful in tool logs). */
+  query: string;
 }
 
 /**
@@ -100,62 +207,63 @@ export interface ResolveResult {
  * `limit` distinct locations. `status` is `not_found` when nothing scored.
  */
 export async function resolveClient(
-  query: string,
+  rawQuery: string,
   limit = 5
 ): Promise<ResolveResult> {
-  const q = norm(query);
-  if (!q) return { status: "not_found", matches: [] };
+  const cleaned = stripTestPrefix(rawQuery);
+  const q = norm(cleaned);
+  if (!q) return { status: "not_found", matches: [], query: cleaned };
 
   const records = await listCampaigns();
-  if (records.length === 0) return { status: "not_found", matches: [] };
-
-  // Best score + match reason per location.
   const byLocation = new Map<
     string,
     { records: AgencyCampaignRecord[]; best: Scored }
   >();
 
-  for (const record of records) {
-    const scored = scoreRecord(record, q);
-    if (scored.score <= 0) continue;
+  const addHit = (record: AgencyCampaignRecord, scored: Scored) => {
+    if (scored.score <= 0) return;
     const existing = byLocation.get(record.locationId);
     if (!existing) {
       byLocation.set(record.locationId, { records: [record], best: scored });
     } else {
-      existing.records.push(record);
+      if (!existing.records.some((r) => r.campaignKey === record.campaignKey)) {
+        existing.records.push(record);
+      }
       if (scored.score > existing.best.score) existing.best = scored;
+    }
+  };
+
+  // Email / domain path: sheet lookup → join to roster by locationId.
+  if (isEmail(q) || q.includes("@") || q.endsWith(".com") || q.endsWith(".net") || q.endsWith(".org")) {
+    const sheetHits = await locationIdsFromSheetEmail(q);
+    const recordByLocation = new Map<string, AgencyCampaignRecord[]>();
+    for (const r of records) {
+      const list = recordByLocation.get(r.locationId) ?? [];
+      list.push(r);
+      recordByLocation.set(r.locationId, list);
+    }
+    for (const hit of sheetHits) {
+      const rows = recordByLocation.get(hit.locationId);
+      if (!rows?.length) continue;
+      for (const row of rows) {
+        addHit(row, { score: hit.score, matchedOn: hit.matchedOn });
+      }
     }
   }
 
+  // Name / ID / keyword path against the roster.
+  for (const record of records) {
+    addHit(record, scoreRecord(record, q));
+  }
+
   const matches: ResolvedClient[] = [...byLocation.entries()]
-    .map(([locationId, { records: rows, best }]) => {
-      const primary = rows[0]!;
-      const adAccountIds = [
-        ...new Set(rows.map((r) => r.adAccountId).filter((v): v is string => !!v)),
-      ];
-      const campaignKeywords = [
-        ...new Set(rows.map((r) => r.campaignKeyword).filter((v): v is string => !!v)),
-      ];
-      const pipelineNames = [
-        ...new Set(rows.map((r) => r.pipelineName).filter((v): v is string => !!v)),
-      ];
-      return {
-        locationId,
-        businessName: primary.businessName || ownerNameOf(primary) || locationId,
-        ownerName: ownerNameOf(primary),
-        cid: primary.cid,
-        campaignKeys: rows.map((r) => r.campaignKey),
-        adAccountIds,
-        campaignKeywords,
-        pipelineNames,
-        score: best.score,
-        matchedOn: best.matchedOn,
-      };
-    })
+    .map(([locationId, { records: rows, best }]) =>
+      buildResolved(locationId, rows, best)
+    )
     .sort((a, b) => b.score - a.score || a.businessName.localeCompare(b.businessName))
     .slice(0, limit);
 
-  return { status: matches.length ? "ok" : "not_found", matches };
+  return { status: matches.length ? "ok" : "not_found", matches, query: cleaned };
 }
 
 /**
