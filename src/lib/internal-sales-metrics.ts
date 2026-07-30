@@ -115,6 +115,22 @@ export function hasAttributionFilters(filters: AttributionFilters): boolean {
   );
 }
 
+/** Min/max appt or creation date across leads (YYYY-MM-DD), if any. */
+export function getLeadDateSpan(
+  leads: InternalSalesLead[]
+): { min: string; max: string } | null {
+  let min: string | null = null;
+  let max: string | null = null;
+  for (const lead of leads) {
+    for (const d of [lead.apptDate, lead.creationDate]) {
+      if (!d) continue;
+      if (!min || d < min) min = d;
+      if (!max || d > max) max = d;
+    }
+  }
+  return min && max ? { min, max } : null;
+}
+
 export function filterLeadsByAttribution(
   leads: InternalSalesLead[],
   filters: AttributionFilters

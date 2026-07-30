@@ -40,6 +40,7 @@ interface SharedMeta {
     sources: string[];
   };
   filterOptions?: AttributionFilterOptions;
+  filterDateSpan?: { min: string; max: string } | null;
   adAccountId?: string;
   metaSpendError?: string;
   warning?: string;
@@ -823,13 +824,40 @@ export function InternalSalesDashboard() {
               {compare && funnel.previousRange
                 ? ` · vs ${funnel.previousRange.startDate} → ${funnel.previousRange.endDate}`
                 : null}
-              {funnel.filteredRowCount != null &&
-              funnel.filteredRowCount !== funnel.rowCount
-                ? ` · ${funnel.filteredRowCount} of ${funnel.rowCount} rows`
-                : funnel.rowCount
-                  ? ` · ${funnel.rowCount} rows in sheet`
-                  : null}
+              {` · ${c.leads} leads in range`}
+              {hasFilters &&
+              funnel.filteredRowCount != null &&
+              funnel.filteredRowCount > c.leads
+                ? ` · ${funnel.filteredRowCount} match filter overall`
+                : null}
+              {funnel.rowCount ? ` · ${funnel.rowCount} total rows` : null}
             </p>
+          ) : null}
+
+          {hasFilters &&
+          c.leads === 0 &&
+          (funnel?.filteredRowCount ?? 0) > 0 ? (
+            <div className="rounded-xl border border-amber-500/30 bg-amber-950/30 px-4 py-3 text-sm text-amber-100">
+              <p>
+                {funnel?.filteredRowCount} row
+                {funnel?.filteredRowCount === 1 ? "" : "s"} match this filter,
+                but none fall in {funnel?.range.label.toLowerCase() ?? "this range"}
+                {funnel?.filterDateSpan
+                  ? ` (matching dates: ${funnel.filterDateSpan.min} → ${funnel.filterDateSpan.max})`
+                  : ""}
+                .
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setPreset("maximum");
+                  void fetchFunnel("maximum", undefined, undefined, compare);
+                }}
+                className="mt-2 rounded-lg bg-amber-500/20 px-3 py-1.5 text-sm font-medium text-amber-50 hover:bg-amber-500/30"
+              >
+                Show all matching
+              </button>
+            </div>
           ) : null}
 
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
@@ -1018,9 +1046,39 @@ export function InternalSalesDashboard() {
           </div>
 
           {sortedAttributionRows.length === 0 ? (
-            <p className="text-sm text-slate-500">
-              No rows for this range and filter.
-            </p>
+            hasFilters && (attribution?.filteredRowCount ?? 0) > 0 ? (
+              <div className="rounded-xl border border-amber-500/30 bg-amber-950/30 px-4 py-3 text-sm text-amber-100">
+                <p>
+                  {attribution?.filteredRowCount} row
+                  {attribution?.filteredRowCount === 1 ? "" : "s"} match this
+                  filter, but none fall in{" "}
+                  {attribution?.range.label.toLowerCase() ?? "this range"}
+                  {attribution?.filterDateSpan
+                    ? ` (matching dates: ${attribution.filterDateSpan.min} → ${attribution.filterDateSpan.max})`
+                    : ""}
+                  .
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPreset("maximum");
+                    void fetchAttribution(
+                      "maximum",
+                      dimension,
+                      undefined,
+                      undefined
+                    );
+                  }}
+                  className="mt-2 rounded-lg bg-amber-500/20 px-3 py-1.5 text-sm font-medium text-amber-50 hover:bg-amber-500/30"
+                >
+                  Show all matching
+                </button>
+              </div>
+            ) : (
+              <p className="text-sm text-slate-500">
+                No rows for this range and filter.
+              </p>
+            )
           ) : (
             <div className="overflow-x-auto rounded-xl border border-white/10">
               <table className="w-full min-w-[900px] text-sm">

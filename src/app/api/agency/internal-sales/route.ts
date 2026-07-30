@@ -11,6 +11,7 @@ import {
   computeMonthlyMetrics,
   computeWithCompare,
   filterLeadsByAttribution,
+  getLeadDateSpan,
   listAttributionOptions,
   type AttributionDimension,
   type AttributionFilters,
@@ -136,6 +137,7 @@ export async function GET(req: Request) {
 
     const leads = filterLeadsByAttribution(allLeads, filters);
     const filterOptions = listAttributionOptions(allLeads, filters);
+    const filterDateSpan = getLeadDateSpan(leads);
     const activeFilters = {
       campaigns: filters.campaigns ?? [],
       adSets: filters.adSets ?? [],
@@ -146,6 +148,7 @@ export async function GET(req: Request) {
     const baseMeta = {
       rowCount: allLeads.length,
       filteredRowCount: leads.length,
+      filterDateSpan,
       fetchedAt,
       fromCache,
       filters: activeFilters,
