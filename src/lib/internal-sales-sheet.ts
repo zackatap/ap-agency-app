@@ -68,7 +68,7 @@ function quoteSheetRef(name: string): string {
 function normalizeHeader(h: string): string {
   return String(h ?? "")
     .toLowerCase()
-    .replace(/[\s_\-./?'!]+/g, "");
+    .replace(/[\s_\-./?'!()[\]{}]+/g, "");
 }
 
 export type QualifiedValue = "yes" | "no" | "unknown";
@@ -113,6 +113,10 @@ export interface InternalSalesLead {
   utmMedium: string;
   utmCampaign: string;
   utmContent: string;
+  /** Meta campaign ID when present (utm_campaign_id). */
+  campaignId: string;
+  /** Meta ad set ID when present (utm_term). */
+  adSetId: string;
 }
 
 type HeaderKey =
@@ -136,7 +140,10 @@ type HeaderKey =
   | "campaignutmcampaign"
   | "utmcampaign"
   | "adutmcontent"
-  | "utmcontent";
+  | "utmcontent"
+  | "utmcampaignid"
+  | "utmtermadsetid"
+  | "utmterm";
 
 const HEADER_ALIASES: Record<string, HeaderKey> = {
   firstname: "firstname",
@@ -160,6 +167,9 @@ const HEADER_ALIASES: Record<string, HeaderKey> = {
   utmcampaign: "utmcampaign",
   adutmcontent: "adutmcontent",
   utmcontent: "utmcontent",
+  utmcampaignid: "utmcampaignid",
+  utmtermadsetid: "utmtermadsetid",
+  utmterm: "utmterm",
 };
 
 function cell(row: string[], idx: number | undefined): string {
@@ -290,6 +300,9 @@ function parseRow(row: string[], cols: Map<HeaderKey, number>): InternalSalesLea
     utmContent:
       cell(row, cols.get("adutmcontent")) ||
       cell(row, cols.get("utmcontent")),
+    campaignId: cell(row, cols.get("utmcampaignid")),
+    adSetId:
+      cell(row, cols.get("utmtermadsetid")) || cell(row, cols.get("utmterm")),
   };
 }
 

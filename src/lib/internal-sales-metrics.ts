@@ -6,6 +6,12 @@
  *   Show    = showed / (showed + no_showed)  — cancel/reschedule excluded
  *   Close   = signed / showed
  *   Qualified = yes / (yes + no)
+ *
+ * Attribution columns (Appointments sheet):
+ *   utmCampaign → Campaign
+ *   utmMedium   → Ad set
+ *   utmContent  → Ad
+ *   utmSource   → Source
  */
 
 import type { DateRange } from "@/lib/date-ranges";
@@ -45,6 +51,172 @@ export interface InternalSalesMonthRow {
   startDate: string;
   endDate: string;
   metrics: InternalSalesMetrics;
+}
+
+/**
+ * Multi-select attribution filters. Empty / missing array = no filter.
+ * Special value __blank__ matches empty cells.
+ */
+export interface AttributionFilters {
+  campaigns?: string[];
+  adSets?: string[];
+  ads?: string[];
+  sources?: string[];
+}
+
+export type AttributionDimension = "campaign" | "adSet" | "ad" | "source";
+
+export interface AttributionBreakdownRow {
+  key: string;
+  label: string;
+  metrics: InternalSalesMetrics;
+}
+
+export interface AttributionFilterOptions {
+  campaigns: string[];
+  adSets: string[];
+  ads: string[];
+  sources: string[];
+}
+
+export const BLANK_ATTR = "__blank__";
+
+function attrValue(raw: string): string {
+  return raw.trim();
+}
+
+function attrKey(raw: string): string {
+  const v = attrValue(raw);
+  return v || BLANK_ATTR;
+}
+
+function matchesAttrToken(raw: string, filter: string): boolean {
+  if (filter === BLANK_ATTR) return !attrValue(raw);
+  return attrValue(raw) === filter;
+}
+
+/** True if any candidate field matches any selected token (OR within dimension). */
+function matchesAnyAttr(
+  candidates: string[],
+  selected: string[] | undefined
+): boolean {
+  if (!selected?.length) return true;
+  return selected.some((token) =>
+    candidates.some((c) => matchesAttrToken(c, token))
+  );
+}
+
+export function hasAttributionFilters(filters: AttributionFilters): boolean {
+  return !!(
+    filters.campaigns?.length ||
+    filters.adSets?.length ||
+    filters.ads?.length ||
+    filters.sources?.length
+  );
+}
+
+export function filterLeadsByAttribution(
+  leads: InternalSalesLead[],
+  filters: AttributionFilters
+): InternalSalesLead[] {
+  return leads.filter(
+    (l) =>
+      matchesAnyAttr([l.utmCampaign, l.campaignId], filters.campaigns) &&
+      matchesAnyAttr([l.utmMedium, l.adSetId], filters.adSets) &&
+      matchesAnyAttr([l.utmContent], filters.ads) &&
+      matchesAnyAttr([l.utmSource], filters.sources)
+  );
+}
+
+function uniqueSorted(values: string[]): string[] {
+  const set = new Set<string>();
+  let hasBlank = false;
+  for (const v of values) {
+    const t = attrValue(v);
+    if (!t) hasBlank = true;
+    else set.add(t);
+  }
+  const list = [...set].sort((a, b) =>
+    a.localeCompare(b, undefined, { sensitivity: "base" })
+  );
+  if (hasBlank) list.push(BLANK_ATTR);
+  return list;
+}
+
+/** Dropdown options. When a parent filter is set, child lists narrow to matching rows. */
+export function listAttributionOptions(
+  leads: InternalSalesLead[],
+  filters: AttributionFilters = {}
+): AttributionFilterOptions {
+  const forCampaigns = leads;
+  const forAdSets = filters.campaigns?.length
+    ? filterLeadsByAttribution(leads, { campaigns: filters.campaigns })
+    : leads;
+  const forAds = filterLeadsByAttribution(leads, {
+    campaigns: filters.campaigns,
+    adSets: filters.adSets,
+  });
+
+  return {
+    campaigns: uniqueSorted(forCampaigns.map((l) => l.utmCampaign)),
+    adSets: uniqueSorted(forAdSets.map((l) => l.utmMedium)),
+    ads: uniqueSorted(forAds.map((l) => l.utmContent)),
+    sources: uniqueSorted(leads.map((l) => l.utmSource)),
+  };
+}
+
+function dimensionRaw(
+  lead: InternalSalesLead,
+  dimension: AttributionDimension
+): string {
+  switch (dimension) {
+    case "campaign":
+      return lead.utmCampaign;
+    case "adSet":
+      return lead.utmMedium;
+    case "ad":
+      return lead.utmContent;
+    case "source":
+      return lead.utmSource;
+  }
+}
+
+/**
+ * Group leads in range by an attribution dimension.
+ * Sorted by signed desc, then leads desc.
+ */
+export function computeAttributionBreakdown(
+  leads: InternalSalesLead[],
+  range: DateRange,
+  dimension: AttributionDimension
+): AttributionBreakdownRow[] {
+  const groups = new Map<string, InternalSalesLead[]>();
+  for (const lead of leads) {
+    if (!isLeadInRange(lead, range)) continue;
+    const key = attrKey(dimensionRaw(lead, dimension));
+    const list = groups.get(key);
+    if (list) list.push(lead);
+    else groups.set(key, [lead]);
+  }
+
+  const rows: AttributionBreakdownRow[] = [];
+  for (const [key, group] of groups) {
+    rows.push({
+      key,
+      label: key === BLANK_ATTR ? "(none)" : key,
+      metrics: computeInternalSalesMetrics(group, range),
+    });
+  }
+
+  rows.sort((a, b) => {
+    const signedDiff = b.metrics.counts.signed - a.metrics.counts.signed;
+    if (signedDiff !== 0) return signedDiff;
+    const showDiff = b.metrics.counts.showed - a.metrics.counts.showed;
+    if (showDiff !== 0) return showDiff;
+    return b.metrics.counts.leads - a.metrics.counts.leads;
+  });
+
+  return rows;
 }
 
 function pct(num: number, den: number): number | null {
