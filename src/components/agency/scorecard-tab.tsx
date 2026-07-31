@@ -325,6 +325,10 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
   // One-off ClickUp task creation (same Zapier path as the bulk workflow).
   const [zapierAvailable, setZapierAvailable] = useState(false);
   const [creatingTaskKey, setCreatingTaskKey] = useState<string | null>(null);
+  const [taskConfirm, setTaskConfirm] = useState<{
+    campaign: ClientCampaignSummary;
+    postToSlack: boolean;
+  } | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -342,24 +346,31 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
   }, []);
 
   const createOneOffTask = useCallback(
-    async (campaign: ClientCampaignSummary) => {
+    async (campaign: ClientCampaignSummary, postToSlack: boolean) => {
       const label = campaign.businessName || "this campaign";
-      if (!confirm(`Create ClickUp task for ${label}?`)) return;
       setCreatingTaskKey(campaign.campaignKey);
       setError(null);
       setMessage(null);
       try {
-        const res = await fetch(
-          `/api/integrations/attention/trigger?scope=single&campaignKey=${encodeURIComponent(
-            campaign.campaignKey
-          )}`,
-          { method: "POST" }
-        );
+        const res = await fetch("/api/integrations/attention/trigger", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            scope: "single",
+            campaignKey: campaign.campaignKey,
+            postToSlack,
+          }),
+        });
         const body = await res.json().catch(() => ({}));
         if (!res.ok) {
           throw new Error(body.error ?? "Failed to create ClickUp task");
         }
-        setMessage(`ClickUp task started for ${label}.`);
+        setMessage(
+          postToSlack
+            ? `ClickUp task started for ${label} (Slack requested).`
+            : `ClickUp task started for ${label}.`
+        );
+        setTaskConfirm(null);
       } catch (err) {
         setError(
           err instanceof Error ? err.message : "Failed to create ClickUp task"
@@ -948,7 +959,9 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
                           status={c.status}
                           zapierAvailable={zapierAvailable}
                           creating={creatingTaskKey === c.campaignKey}
-                          onCreateTask={() => void createOneOffTask(c)}
+                          onCreateTask={() =>
+                            setTaskConfirm({ campaign: c, postToSlack: false })
+                          }
                         />
                       </div>
                       {(() => {
@@ -1165,7 +1178,9 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
                           status={c.status}
                           zapierAvailable={zapierAvailable}
                           creating={creatingTaskKey === c.campaignKey}
-                          onCreateTask={() => void createOneOffTask(c)}
+                          onCreateTask={() =>
+                            setTaskConfirm({ campaign: c, postToSlack: false })
+                          }
                         />
                       </div>
                       {subtitle && (
@@ -1221,6 +1236,80 @@ export function ScorecardTab({ reloadKey = 0 }: { reloadKey?: number }) {
           {showQuantity || showQuality
             ? "Nothing flagged for that filter right now. Every active campaign is within thresholds."
             : "No campaigns with data in this window."}
+        </div>
+      )}
+
+      {taskConfirm && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="create-clickup-task-title"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+          onClick={() => {
+            if (!creatingTaskKey) setTaskConfirm(null);
+          }}
+        >
+          <div
+            className="w-full max-w-sm rounded-2xl border border-white/10 bg-slate-900 p-5 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2
+              id="create-clickup-task-title"
+              className="text-base font-semibold text-white"
+            >
+              Create ClickUp task?
+            </h2>
+            <p className="mt-1.5 text-sm text-slate-300">
+              {taskConfirm.campaign.businessName}
+              {(() => {
+                const sub = subtitleFor(taskConfirm.campaign);
+                return sub ? ` · ${sub}` : "";
+              })()}
+            </p>
+            <label className="mt-4 flex cursor-pointer items-start gap-2.5 rounded-lg bg-white/5 px-3 py-2.5 ring-1 ring-white/10">
+              <input
+                type="checkbox"
+                checked={taskConfirm.postToSlack}
+                onChange={(e) =>
+                  setTaskConfirm((prev) =>
+                    prev ? { ...prev, postToSlack: e.target.checked } : prev
+                  )
+                }
+                className="mt-0.5 h-4 w-4 rounded border-white/20 bg-slate-800 text-indigo-500 focus:ring-indigo-400/40"
+              />
+              <span>
+                <span className="block text-sm font-medium text-slate-100">
+                  Send to Slack
+                </span>
+                <span className="block text-xs text-slate-400">
+                  Also post this task to #media-buying after it’s created.
+                </span>
+              </span>
+            </label>
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                type="button"
+                disabled={Boolean(creatingTaskKey)}
+                onClick={() => setTaskConfirm(null)}
+                className="rounded-lg px-3 py-1.5 text-sm text-slate-300 transition-colors hover:bg-white/5 disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={Boolean(creatingTaskKey)}
+                onClick={() =>
+                  void createOneOffTask(
+                    taskConfirm.campaign,
+                    taskConfirm.postToSlack
+                  )
+                }
+                className="rounded-lg bg-white px-3 py-1.5 text-sm font-medium text-slate-900 transition-colors hover:bg-slate-100 disabled:opacity-50"
+              >
+                {creatingTaskKey ? "Creating…" : "Create task"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>
